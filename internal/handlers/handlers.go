@@ -8,7 +8,9 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -30,7 +32,141 @@ import (
 var (
 	bossHpCache   = make(map[int64]map[string]int)
 	bossHpCacheMu sync.RWMutex
+	storyValueCache   = make(map[int64]map[uint32]uint32)
+	storyValueCacheMu sync.RWMutex
 )
+
+// PetKing / 大师杯 匹配队列（简单版本）：FIFO 排队，两两配对后直接进入 PvP
+type petKingQueueEntry struct {
+	UserID int64
+	Mode   uint32 // 前端传入的模式参数（如 6/11），目前仅用于日志
+	Type   uint32 // 前端 fightType 参数
+}
+
+// petWarQueueEntry 精灵大乱斗匹配队列条目
+type petWarQueueEntry struct {
+	UserID int64
+	Mode   uint32
+	Type   uint32
+}
+
+var (
+	petKingQueue   []petKingQueueEntry
+	petKingQueueMu sync.Mutex
+	// 精灵大乱斗匹配队列
+	petWarQueue   []petWarQueueEntry
+	petWarQueueMu sync.Mutex
+)
+
+var tracedStubCommands = map[int32]struct{}{
+	5003: {},
+	1011: {},
+	1016: {},
+	4148: {},
+}
+
+func traceStubCommand(ctx *gameserver.HandlerContext) {
+	if ctx == nil {
+		return
+	}
+	if _, ok := tracedStubCommands[ctx.CmdID]; !ok {
+		return
+	}
+	bodyLen := len(ctx.Body)
+	previewLen := bodyLen
+	if previewLen > 16 {
+		previewLen = 16
+	}
+	preview := ""
+	for i := 0; i < previewLen; i++ {
+		preview += fmt.Sprintf("%02X", ctx.Body[i])
+		if i+1 < previewLen {
+			preview += " "
+		}
+	}
+	logger.Info(fmt.Sprintf("[TRACE_STUB] cmd=%d uid=%d seq=%d bodyLen=%d preview=%s", ctx.CmdID, ctx.UserID, ctx.SeqID, bodyLen, preview))
+}
+
+func choosePetWarIndexes(user *userdb.GameData) []int {
+	if user == nil || len(user.Pets) == 0 {
+		return nil
+	}
+	indexes := make([]int, len(user.Pets))
+	for i := range user.Pets {
+		indexes[i] = i
+	}
+	rand.Shuffle(len(indexes), func(i, j int) {
+		indexes[i], indexes[j] = indexes[j], indexes[i]
+	})
+	if len(indexes) > 3 {
+		indexes = indexes[:3]
+	}
+	sort.Ints(indexes)
+	return indexes
+}
+
+func getPetWarPetList(user *userdb.GameData, indexes []int) []userdb.Pet {
+	if user == nil || len(user.Pets) == 0 {
+		return nil
+	}
+	if len(indexes) == 0 {
+		copied := make([]userdb.Pet, len(user.Pets))
+		copy(copied, user.Pets)
+		return copied
+	}
+	result := make([]userdb.Pet, 0, len(indexes))
+	for _, index := range indexes {
+		if index >= 0 && index < len(user.Pets) {
+			result = append(result, user.Pets[index])
+		}
+	}
+	return result
+}
+
+func getPetWarBattleIndexes(gs *gameserver.GameServer, uid int64) []int {
+	gs.BattleMu.RLock()
+	battle := gs.BattleStates[uid]
+	gs.BattleMu.RUnlock()
+	if battle == nil || len(battle.AllowedPetIndexes) == 0 {
+		return nil
+	}
+	indexes := make([]int, len(battle.AllowedPetIndexes))
+	copy(indexes, battle.AllowedPetIndexes)
+	return indexes
+}
+
+func getPetWarBattlePets(gs *gameserver.GameServer, uid int64) []userdb.Pet {
+	user := gs.GetOrCreateUser(uid)
+	return getPetWarPetList(user, getPetWarBattleIndexes(gs, uid))
+}
+
+// 社交邀请缓存（2158/2159）：inviteeID -> inviterID -> 邀请信息
+// 仅用于在线期内校验与提供默认 mapID/mapName；不做持久化（原版邀请主要依赖在线通知）
+type requestOutInvite struct {
+	MapID     uint32
+	MapName   string
+	CreatedAt time.Time
+}
+
+var (
+	requestOutInvites   = make(map[int64]map[int64]requestOutInvite)
+	requestOutInvitesMu sync.RWMutex
+)
+
+const requestOutInviteTTL = 10 * time.Minute
+
+func buildInformInfoBody(typ uint32, fromUserID int64, fromNick string, accept uint32, serverID uint32, mapType uint32, mapID uint32, mapName string) []byte {
+	body := make([]byte, 104)
+	binary.BigEndian.PutUint32(body[0:4], typ)
+	binary.BigEndian.PutUint32(body[4:8], uint32(fromUserID))
+	putFixedString(body, 8, fromNick, 16)
+	binary.BigEndian.PutUint32(body[24:28], accept)
+	binary.BigEndian.PutUint32(body[28:32], serverID)
+	binary.BigEndian.PutUint32(body[32:36], mapType)
+	binary.BigEndian.PutUint32(body[36:40], mapID)
+	putFixedString(body, 40, mapName, 64)
+	return body
+}
 
 // resourceBaseURL 资源服根地址（如 http://127.0.0.1:32400），用于在 1001 尾追加 set_user URL，供同机多开时按米米号识别超能 NONO 形态
 var resourceBaseURL string
@@ -73,11 +209,73 @@ var bossHPOverrides = map[int]int{
 }
 
 // applyBossHPOverride 若为地图 BOSS，则返回指定的固定血量，否则返回原始值
-func applyBossHPOverride(petID int, original int) int {
+// battle 可为 nil；谱尼封印/真身(514+region1~8) 使用 PuniSealHP(region)，
+// 玄武/青龙空间与异能王封印/终极试炼使用各自专用配置，其余走 bossHPOverrides。
+func applyBossHPOverride(petID int, original int, battle *gameserver.BattleState) int {
+	// 谱尼封印/真身：按门号映射固定血量
+	if battle != nil && sptboss.IsPuniSealBoss(battle.BattleMapID, battle.BossRegion) && petID == sptboss.PetIDPuni {
+		if hp := sptboss.PuniSealHP(battle.BossRegion); hp > 0 {
+			return hp
+		}
+	}
+
+	// 玄武空间：六守护兽固定 5000 血，真身 50000 血
+	if battle != nil && battle.BattleMapID == sptboss.MapIDXuanWuSpace {
+		if sptboss.IsXuanWuGuardianBoss(battle.BattleMapID, battle.BossRegion) {
+			return sptboss.XuanWuGuardianHP
+		}
+		if petID == 501 && battle.BossRegion == 6 {
+			return 50000
+		}
+	}
+
+	// 青龙空间：四守护兽固定 10000 血，朵拉格真身 50000 血
+	if battle != nil && battle.BattleMapID == sptboss.MapIDQingLongSpace {
+		if sptboss.IsQingLongGuardianBoss(battle.BattleMapID, battle.BossRegion) {
+			return sptboss.QingLongGuardianHP
+		}
+		if petID == sptboss.PetIDDuoLaGe && battle.BossRegion == 4 {
+			return sptboss.QingLongBossHP
+		}
+	}
+
+	// 异能王：六重封印固定血量，终极试炼第一命 2000 血
+	if battle != nil && battle.BattleMapID == sptboss.MapIDYiNengWang && petID == 1000 {
+		if sptboss.IsYiNengSealBoss(battle.BattleMapID, battle.BossRegion) {
+			if hp := sptboss.YiNengSealHP(battle.BossRegion); hp > 0 {
+				return hp
+			}
+		}
+		if sptboss.IsYiNengUltimateBoss(battle.BattleMapID, battle.BossRegion) {
+			return sptboss.YiNengUltimateLifeMaxHP(1)
+		}
+	}
+
+	// 其他地图 BOSS：使用静态覆盖表
 	if hp, ok := bossHPOverrides[petID]; ok && hp > 0 {
 		return hp
 	}
 	return original
+}
+
+// completeTaskIfNeeded 若指定任务未标记完成，则将其状态置为 "3" 并记录完成时间
+// 这里只在服务端内部补齐任务状态，不负责下发 2202 协议。
+func completeTaskIfNeeded(user *userdb.GameData, taskID int) {
+	if user == nil {
+		return
+	}
+	if user.Tasks == nil {
+		user.Tasks = make(map[string]userdb.Task)
+	}
+	key := strconv.Itoa(taskID)
+	t := user.Tasks[key]
+	if t.Status == "3" {
+		// 已完成则不重复写入
+		return
+	}
+	t.Status = "3"
+	t.CompleteTime = time.Now().Unix()
+	user.Tasks[key] = t
 }
 
 // getEnemySkillsForPet 返回敌方精灵的技能列表，若有覆盖则优先覆盖
@@ -180,6 +378,43 @@ func RegisterHandlers(gs *gameserver.GameServer) {
 
 	// 客户端断线时向同地图其他玩家广播更新后的 2003 列表
 	gs.OnClientDisconnect = func(cd *gameserver.ClientData, mapID int) {
+		if cd != nil && cd.UserID > 0 {
+			petKingQueueMu.Lock()
+			if len(petKingQueue) > 0 {
+				newQ := petKingQueue[:0]
+				for _, entry := range petKingQueue {
+					if entry.UserID != cd.UserID {
+						newQ = append(newQ, entry)
+					}
+				}
+				petKingQueue = newQ
+			}
+			petKingQueueMu.Unlock()
+			petWarQueueMu.Lock()
+			if len(petWarQueue) > 0 {
+				newQ := petWarQueue[:0]
+				for _, entry := range petWarQueue {
+					if entry.UserID != cd.UserID {
+						newQ = append(newQ, entry)
+					}
+				}
+				petWarQueue = newQ
+			}
+			petWarQueueMu.Unlock()
+		}
+		if cd != nil && cd.UserID > 0 {
+			gs.BattleMu.Lock()
+			if battle, ok := gs.BattleStates[cd.UserID]; ok && battle != nil && battle.IsActive && battle.OpponentUserID != 0 {
+				opponentUID := battle.OpponentUserID
+				delete(gs.BattleStates, cd.UserID)
+				delete(gs.BattleStates, opponentUID)
+				if otherClient := gs.GetClientByUserID(opponentUID); otherClient != nil {
+					overBody := buildFightOverInfo(0, uint32(opponentUID))
+					gs.SendResponse(otherClient, 2506, opponentUID, 0, overBody)
+				}
+			}
+			gs.BattleMu.Unlock()
+		}
 		body := buildMapPlayerListForMap(gs, mapID)
 		gs.BroadcastToMap(mapID, 0, 2003, body)
 		logger.Info(fmt.Sprintf("[2003] 用户离开地图后广播: MapID=%d", mapID))
@@ -194,20 +429,35 @@ func registerCoreHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(1001, handleLogin)
 	gs.RegisterCommandHandler(1002, handleSystemTime)
 	// 登录后初始化阶段常见请求（对齐 Lua 服，避免客户端 Bean/模块卡死）
-	gs.RegisterCommandHandler(2150, handleGetRelationList)  // 好友/黑名单
-	gs.RegisterCommandHandler(2151, handleFriendAdd)        // 添加好友
-	gs.RegisterCommandHandler(2152, handleFriendAnswer)     // 好友请求回复
-	gs.RegisterCommandHandler(2153, handleFriendRemove)     // 删除好友
-	gs.RegisterCommandHandler(2154, handleBlackAdd)         // 添加黑名单
-	gs.RegisterCommandHandler(2155, handleBlackRemove)      // 移除黑名单
-	gs.RegisterCommandHandler(2157, handleSeeOnline)        // 查看在线状态
-	gs.RegisterCommandHandler(2158, handleRequestOut)       // 发送请求
-	gs.RegisterCommandHandler(2159, handleRequestAnswer)    // 请求回复
-	gs.RegisterCommandHandler(2751, handleMailGetList)      // 邮件列表
-	gs.RegisterCommandHandler(2757, handleMailGetUnread)    // 未读邮件
-	gs.RegisterCommandHandler(50004, handleXinCheck)        // 客户端上报
-	gs.RegisterCommandHandler(50008, handleXinGetQuadTime)  // 四倍经验时间
-	gs.RegisterCommandHandler(70001, handleGetExchangeInfo) // 荣誉/交换
+	gs.RegisterCommandHandler(2150, handleGetRelationList)         // 好友/黑名单
+	gs.RegisterCommandHandler(2151, handleFriendAdd)               // 添加好友
+	gs.RegisterCommandHandler(2152, handleFriendAnswer)            // 好友请求回复
+	gs.RegisterCommandHandler(2153, handleFriendRemove)            // 删除好友
+	gs.RegisterCommandHandler(2154, handleBlackAdd)                // 添加黑名单
+	gs.RegisterCommandHandler(2155, handleBlackRemove)             // 移除黑名单
+	gs.RegisterCommandHandler(2157, handleSeeOnline)               // 查看在线状态
+	gs.RegisterCommandHandler(2158, handleRequestOut)              // 发送请求
+	gs.RegisterCommandHandler(2159, handleRequestAnswer)           // 请求回复
+	gs.RegisterCommandHandler(7001, handleComplainUser)            // 举报用户
+	gs.RegisterCommandHandler(7002, handleUserContribute)          // 用户建议
+	gs.RegisterCommandHandler(7003, handleUserIndagate)            // 用户调查投票
+	gs.RegisterCommandHandler(7501, handleInviteJoinGroup)         // 邀请加入群组
+	gs.RegisterCommandHandler(7502, handleReplyJoinGroup)          // 回复加入群组
+	gs.RegisterCommandHandler(2751, handleMailGetList)             // 邮件列表
+	gs.RegisterCommandHandler(2757, handleMailGetUnread)           // 未读邮件
+	gs.RegisterCommandHandler(50004, handleXinCheck)               // 客户端上报
+	gs.RegisterCommandHandler(50008, handleXinGetQuadTime)         // 四倍经验时间
+	gs.RegisterCommandHandler(70001, handleGetExchangeInfo)        // 荣誉/交换
+	gs.RegisterCommandHandler(70000, handlePetGeneRecast)          // 精灵基因重铸
+	gs.RegisterCommandHandler(70002, handleExchangeItem)           // 兑换道具
+	gs.RegisterCommandHandler(70003, handleGetHonorValue)            // 荣誉值
+	gs.RegisterCommandHandler(70004, handleExchangeGoldNieoBean)     // 金豆兑换
+	gs.RegisterCommandHandler(70005, handleGetAchieveTitle)          // 成就称号（服务端可推送）
+	gs.RegisterCommandHandler(80003, handleActiveAchieve)            // 激活成就
+	gs.RegisterCommandHandler(80004, handleAchieveList80004)         // 成就列表（80004）
+	gs.RegisterCommandHandler(80005, handleAchieveCurrent)           // 当前成就
+	gs.RegisterCommandHandler(80006, handleAchieveInfo)              // 成就详情
+	gs.RegisterCommandHandler(80007, handleGetCurrentGoldNieoBean) // 获取优惠兑换所需赛尔豆
 	gs.RegisterCommandHandler(1106, handleGoldOnlineCheckRemain)
 	gs.RegisterCommandHandler(1104, handleGoldBuyProduct)   // 金豆购买商品
 	gs.RegisterCommandHandler(1101, handleMoneyCheckPsw)    // 米币支付密码检查（返回1则客户端继续购买流程）
@@ -215,11 +465,63 @@ func registerCoreHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(80008, handleHeartbeat)
 	gs.RegisterCommandHandler(2701, handleTalkCount)       // 对话计数（物品领取）
 	gs.RegisterCommandHandler(2702, handleTalkCate)        // 对话分类（发放领取物品）
+	gs.RegisterCommandHandler(10004, handleBuyFitment)     // 购买家具（基地）
+	gs.RegisterCommandHandler(10001, handleRoomLogin)      // 房间登录
+	gs.RegisterCommandHandler(10002, handleGetRoomAddress) // 获取房间地址
+	gs.RegisterCommandHandler(10003, handleLeaveRoom)      // 离开房间
+	gs.RegisterCommandHandler(10005, handleBetrayFitment)  // 出售家具
 	gs.RegisterCommandHandler(10006, handleFitmentUsering) // 正在使用的家具（基地）
+	gs.RegisterCommandHandler(10007, handleFitmentAll)     // 全部家具
+	gs.RegisterCommandHandler(10008, handleSetFitment)     // 设置家具
+	gs.RegisterCommandHandler(10009, handleAddEnergy)      // 增加能量
+	gs.RegisterCommandHandler(2910, handleTeamCreate)
+	gs.RegisterCommandHandler(2911, handleTeamAdd)
+	gs.RegisterCommandHandler(2912, handleTeamAnswer)
+	gs.RegisterCommandHandler(2914, handleTeamQuit)
+	gs.RegisterCommandHandler(2913, handleTeamInform)
+	gs.RegisterCommandHandler(2917, handleTeamGetInfo)
+	gs.RegisterCommandHandler(2918, handleTeamGetMemberList)
+	gs.RegisterCommandHandler(2928, handleTeamGetLogoInfo)
+	gs.RegisterCommandHandler(2929, handleTeamChat)
+	gs.RegisterCommandHandler(2962, handleArmUpWork)
+	gs.RegisterCommandHandler(2963, handleArmUpWorkLog)
+	gs.RegisterCommandHandler(4001, handleTeamPKSign)
+	gs.RegisterCommandHandler(4002, handleTeamPKRegister)
+	gs.RegisterCommandHandler(4003, handleTeamPKJoin)
+	gs.RegisterCommandHandler(4004, handleTeamPKShot)
+	gs.RegisterCommandHandler(4005, handleTeamPKShotResult)
+	gs.RegisterCommandHandler(4007, handleTeamPKNote)
+	gs.RegisterCommandHandler(4006, handleTeamPKWin)
+	gs.RegisterCommandHandler(4008, handleTeamPKFreeze)
+	gs.RegisterCommandHandler(4009, handleTeamPKState)
+	gs.RegisterCommandHandler(4010, handleTeamPKScore)
+	gs.RegisterCommandHandler(4011, handleTeamPKRound)
+	gs.RegisterCommandHandler(4012, handleTeamPKReward)
+	gs.RegisterCommandHandler(4013, handleTeamPKMatch)
+	gs.RegisterCommandHandler(4014, handleTeamPKResult)
+	gs.RegisterCommandHandler(4017, handleTeamPKMemberState)
+	gs.RegisterCommandHandler(4018, handleTeamPKBattleInfo)
+	gs.RegisterCommandHandler(4019, handleTeamPKBattleStart)
+	gs.RegisterCommandHandler(4020, handleTeamPKBattleEnd)
+	gs.RegisterCommandHandler(4022, handleTeamPKReport)
+	gs.RegisterCommandHandler(4023, handleTeamPKHistory)
+	gs.RegisterCommandHandler(4024, handleTeamPKSeason)
+	gs.RegisterCommandHandler(4025, handleTeamPKRewardList)
+	gs.RegisterCommandHandler(4101, handleTeamPKTeamCharts)
+	gs.RegisterCommandHandler(4102, handleTeamPKMemberCharts)
+	gs.RegisterCommandHandler(2481, handleTeamPKPetFight)
+	gs.RegisterCommandHandler(5001, handleJoinGame)        // 加入小游戏
+	gs.RegisterCommandHandler(5002, handleGameOver)        // 小游戏结束
+	gs.RegisterCommandHandler(5003, handleLeaveGame)       // 离开小游戏
+	gs.RegisterCommandHandler(5052, handleFbGameOver)      // 副本游戏结束
+	gs.RegisterCommandHandler(6001, handleWorkConnection)  // 工作连接
+	gs.RegisterCommandHandler(6003, handleAllConnection)   // 全部连接
 	// 系统/支付 完整协议
 	gs.RegisterCommandHandler(1005, handleGetImageAddress)
 	gs.RegisterCommandHandler(1102, handleMoneyBuyProduct)
 	gs.RegisterCommandHandler(1105, handleGoldCheckRemain)
+	// 地图/活动统计日志（1020）：进入特定地图、点击活动按钮时发送 eventId
+	gs.RegisterCommandHandler(1020, handleMapStatLog)
 	// 协议层/校验 完整协议
 	gs.RegisterCommandHandler(1022, handleCheckFightCode)
 	gs.RegisterCommandHandler(8002, handleSystemMessage)
@@ -240,8 +542,14 @@ func registerCoreHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(4475, handleItemListAlt)
 	gs.RegisterCommandHandler(8001, handleInform)
 	gs.RegisterCommandHandler(8004, handleGetBossMonster)
-	// 成就/称号 协议（3403 ACHIEVETITLELIST 等，3404 SETTITLE 单独实现）
+	// 成就/称号 协议（按解包命令名补齐最小完整协议）
+	gs.RegisterCommandHandler(3401, handleAchieveList)
+	gs.RegisterCommandHandler(3402, handleAchieveInfo3402)
+	gs.RegisterCommandHandler(3403, handleAchieveTitleList)
 	gs.RegisterCommandHandler(3404, handleSetTitle)
+	gs.RegisterCommandHandler(3405, handleAchieveTitleEmptyExt)
+	gs.RegisterCommandHandler(3406, handleConferAchievement)
+	gs.RegisterCommandHandler(3407, handleAchieveAndTitle)
 
 	// 注册NONO系统命令处理器
 	registerNonoHandlers(gs)
@@ -256,17 +564,29 @@ func registerGameHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(1004, handleMapHot) // 地图热点（宇宙地图热点数据）
 	gs.RegisterCommandHandler(2004, handleMapOgreList)
 	gs.RegisterCommandHandler(2401, handleInviteToFight)     // 邀请玩家对战（转发 2501 给被邀请方）
+	gs.RegisterCommandHandler(2402, handleInviteFightCancel) // 取消邀请/匹配（精灵王/巅峰/大师杯等）
 	gs.RegisterCommandHandler(2403, handleHandleFightInvite) // 接受/拒绝对战邀请（转发 2502 给邀请方）
 	gs.RegisterCommandHandler(2408, handleFightNpcMonster)   // 地图野怪战斗
 	gs.RegisterCommandHandler(2412, handleAttackBoss)        // 攻击 SPT BOSS（破除防护罩）
+	gs.RegisterCommandHandler(2441, handleFightLoadPercent)  // 战斗加载进度
 	gs.RegisterCommandHandler(2051, handleGetSimUserInfo)    // 获取简单用户信息
 	gs.RegisterCommandHandler(2052, handleGetMoreUserInfo)   // 获取详细用户信息
+	gs.RegisterCommandHandler(2053, handleRequestCount)      // 请求计数（邀请人数）
+	gs.RegisterCommandHandler(2054, handleGpGhaziMaxLevel)   // GP/擂台最大层数
+	gs.RegisterCommandHandler(2055, handleUserPartyImageName) // 用户头像/涂鸦资源名
 	gs.RegisterCommandHandler(2101, handlePeopleWalk)        // 人物移动
 	gs.RegisterCommandHandler(2102, handleChat)              // 聊天
 	gs.RegisterCommandHandler(2104, handleAimat)             // 射击/瞄准（AIMAT）
 	gs.RegisterCommandHandler(2107, handleTransformUser)     // 射击命中后变身（TRANSFORM_USER），广播 2108 给同图
+	gs.RegisterCommandHandler(2105, handleHitStone)          // 敲石头奖励
+	gs.RegisterCommandHandler(2106, handlePrizeOfAtresia)    // 阿瑞斯空间奖励
+	gs.RegisterCommandHandler(2109, handleAttackBailuen)     // 攻击白伦
+	gs.RegisterCommandHandler(2110, handleGetTimePoke)       // 获取时光胶囊
+	gs.RegisterCommandHandler(2113, handleRemoveCoins)       // 移除赛尔豆
+	gs.RegisterCommandHandler(2393, handleLeiyiTrainStatus)  // 雷伊训练状态
 	// 地图/玩家 完整协议
 	gs.RegisterCommandHandler(2061, handleChangeNickName)
+	gs.RegisterCommandHandler(2062, handleChangeDoodle) // 涂鸦/头像
 	gs.RegisterCommandHandler(2063, handleChangeColor)
 	gs.RegisterCommandHandler(2103, handleDanceAction)
 	gs.RegisterCommandHandler(2111, handlePeopleTransform)
@@ -276,21 +596,48 @@ func registerGameHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2301, handleGetPetInfo)
 	// 2302 = MODIFY_PET_NAME（修改精灵名字），由 stub 处理；2308 = PET_DEFAULT（设为首发）
 	gs.RegisterCommandHandler(2303, handleGetPetList) // 获取精灵列表（切换精灵时需要）
+	gs.RegisterCommandHandler(2328, handleSkillSort)
 
 	// 任务 / 新手奖励相关（2201/2202/2203）、每日任务（2231/2232/2233）、魂珠列表（2354）
 	gs.RegisterCommandHandler(2201, handleAcceptTask)
 	gs.RegisterCommandHandler(2202, handleCompleteTask)
 	gs.RegisterCommandHandler(2203, handleGetTaskBuf)        // 获取任务进度（GET_TASK_BUF），地图装置等依赖此接口
+	gs.RegisterCommandHandler(2192, handleTaskActivityValue)
+	gs.RegisterCommandHandler(2196, handleTaskActivityValue)
+	gs.RegisterCommandHandler(2289, handleTaskActivityValue)
+	gs.RegisterCommandHandler(2361, handlePetExtraValue)
+	gs.RegisterCommandHandler(45512, handleActivityExtValue)
+	gs.RegisterCommandHandler(45524, handleActivityExtValue)
+	gs.RegisterCommandHandler(45773, handleActivityExtValue)
+	gs.RegisterCommandHandler(45793, handleActivityExtValue)
+	gs.RegisterCommandHandler(45798, handleActivityExtValue)
+	gs.RegisterCommandHandler(45824, handleActivityExtValue)
+	gs.RegisterCommandHandler(47309, handleActivityExtValue)
+	gs.RegisterCommandHandler(4359, handleActivityExtValue)
+	gs.RegisterCommandHandler(4364, handleActivityExtValue)
+	gs.RegisterCommandHandler(4501, handleActivityExtValue)
+	gs.RegisterCommandHandler(5005, handleActivityExtValue)
+	gs.RegisterCommandHandler(45071, handleActivityExtValue)
+	gs.RegisterCommandHandler(9112, handleActivityExtValue)
+	gs.RegisterCommandHandler(9677, handleActivityExtValue)
+	gs.RegisterCommandHandler(41006, handleActivityExtValue)
+	gs.RegisterCommandHandler(41249, handleActivityExtValue)
+	gs.RegisterCommandHandler(41253, handleActivityExtValue)
+	gs.RegisterCommandHandler(43706, handleActivityExtValue)
+	gs.RegisterCommandHandler(4178, handleActivityExtValue)
+	gs.RegisterCommandHandler(4181, handleActivityExtValue)
+	gs.RegisterCommandHandler(40006, handleActivityExtValue)
+	gs.RegisterCommandHandler(40007, handleActivityExtValue)
 	gs.RegisterCommandHandler(2231, handleAcceptDailyTask)   // 接受每日任务
 	gs.RegisterCommandHandler(2232, handleDeleteDailyTask)   // 放弃每日任务
 	gs.RegisterCommandHandler(2233, handleCompleteDailyTask) // 完成每日任务（响应格式同 2202 NoviceFinishInfo）
-	gs.RegisterCommandHandler(2351, handlePetFusion)   // 精灵融合 PET_FUSION
+	gs.RegisterCommandHandler(2351, handlePetFusion)         // 精灵融合 PET_FUSION
 	gs.RegisterCommandHandler(2354, handleGetSoulBeadList)
-	gs.RegisterCommandHandler(2352, handleGetSoulBeadBuf) // 元神赋形：魂珠能量吸收进度（需到对应地区吸取）
-	gs.RegisterCommandHandler(2353, handleSetSoulBeadBuf)   // 设置魂珠能量吸收进度（客户端在地区吸取后上报）
-	gs.RegisterCommandHandler(2356, handleGetSoulBeadStatus)    // 元神珠赋形状态（剩余孵化时间）
-	gs.RegisterCommandHandler(2357, handleTransformSoulBead)    // 元神赋形（放入转化仪）
-	gs.RegisterCommandHandler(2358, handleSoulBeadToPet)        // 元神珠孵化完成领取精灵
+	gs.RegisterCommandHandler(2352, handleGetSoulBeadBuf)         // 元神赋形：魂珠能量吸收进度（需到对应地区吸取）
+	gs.RegisterCommandHandler(2353, handleSetSoulBeadBuf)         // 设置魂珠能量吸收进度（客户端在地区吸取后上报）
+	gs.RegisterCommandHandler(2356, handleGetSoulBeadStatus)      // 元神珠赋形状态（剩余孵化时间）
+	gs.RegisterCommandHandler(2357, handleTransformSoulBead)      // 元神赋形（放入转化仪）
+	gs.RegisterCommandHandler(2358, handleSoulBeadToPet)          // 元神珠孵化完成领取精灵
 	gs.RegisterCommandHandler(2315, handlePetHatchPutIn)          // 分子转化仪：放入精元孵化 PET_HATCH
 	gs.RegisterCommandHandler(2316, handleNonoMolecularTransform) // 分子转化仪：查询/打开面板 PET_HATCH_GET
 	gs.RegisterCommandHandler(2204, handleAddTaskBuf)
@@ -350,12 +697,20 @@ func registerPetHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2313, handleIsCollect)    // 精灵收集奖励检测
 	gs.RegisterCommandHandler(2314, handlePetEvolvtion) // 精灵进化（基础线性进化）
 
-	// 经验池 / 技能
-	gs.RegisterCommandHandler(2319, handlePetGetExp) // 获取经验池经验
-	gs.RegisterCommandHandler(2318, handlePetSetExp) // 从经验池分配经验给精灵
+	// 经验池 / 技能 / 师徒系统
+	gs.RegisterCommandHandler(2319, handlePetGetExp)                    // 获取经验池经验
+	gs.RegisterCommandHandler(2318, handlePetSetExp)                    // 从经验池分配经验给精灵
 	gs.RegisterCommandHandler(3007, handleExperienceSharedComplete)     // 发明室经验接收器：领取并平均分配给背包精灵
 	gs.RegisterCommandHandler(3009, handleMyExperiencePondComplete)     // 发明室经验接收器：查询教官积累经验值
 	gs.RegisterCommandHandler(3011, handleGetMyExperienceComplete)      // 发明室经验接收器：教官查看未领取经验
+	gs.RegisterCommandHandler(3001, handleRequestAddTeacher)            // 请求拜师
+	gs.RegisterCommandHandler(3002, handleAnswerAddTeacher)             // 应答拜师
+	gs.RegisterCommandHandler(3003, handleRequestAddStudent)            // 请求收徒
+	gs.RegisterCommandHandler(3004, handleAnswerAddStudent)             // 应答收徒
+	gs.RegisterCommandHandler(3005, handleDeleteTeacher)                // 删除师父
+	gs.RegisterCommandHandler(3006, handleDeleteStudent)                // 删除徒弟
+	gs.RegisterCommandHandler(3008, handleTeacherRewardComplete)        // 教官奖励查询
+	gs.RegisterCommandHandler(3010, handleSevenNoLoginComplete)         // 七天未登录状态查询
 	gs.RegisterCommandHandler(2325, handlePetRoomInfo)                  // 精灵房间信息（简略面板）
 	gs.RegisterCommandHandler(2312, handlePetSkillSwitch)               // 精灵技能切换（技能唤醒仪替换技能）
 	gs.RegisterCommandHandler(2336, handleGetPetSkill)                  // 获取精灵技能（技能唤醒仪）
@@ -370,12 +725,12 @@ func registerPetHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2324, handleRoomPetList)    // 获取房间展示精灵
 
 	// Buff / 自动战斗 / 学习力道具
-	gs.RegisterCommandHandler(2327, handleUseSpeedupItem)     // 经验加速道具（2/3倍）
-	gs.RegisterCommandHandler(2329, handleUseAutoFightItem)   // 自动战斗道具
-	gs.RegisterCommandHandler(2330, handleOnOffAutoFight)     // 开关自动战斗
-	gs.RegisterCommandHandler(2331, handleUseEnergyXishou)    // 体力吸收道具
-	gs.RegisterCommandHandler(2332, handleUseStudyItem)       // 学习力双倍道具
-	gs.RegisterCommandHandler(2343, handlePetResetNature)     // 重置性格
+	gs.RegisterCommandHandler(2327, handleUseSpeedupItem)   // 经验加速道具（2/3倍）
+	gs.RegisterCommandHandler(2329, handleUseAutoFightItem) // 自动战斗道具
+	gs.RegisterCommandHandler(2330, handleOnOffAutoFight)   // 开关自动战斗
+	gs.RegisterCommandHandler(2331, handleUseEnergyXishou)  // 体力吸收道具
+	gs.RegisterCommandHandler(2332, handleUseStudyItem)     // 学习力双倍道具
+	gs.RegisterCommandHandler(2343, handlePetResetNature)   // 重置性格
 }
 
 // registerBattleHandlers 注册战斗相关命令处理器
@@ -385,23 +740,25 @@ func registerBattleHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2407, handleChangePet)    // 切换精灵
 	gs.RegisterCommandHandler(2409, handleCatchMonster) // 捕捉精灵
 	gs.RegisterCommandHandler(2410, handleEscapeFight)  // 逃跑
+	gs.RegisterCommandHandler(2413, handlePetKingJoin)  // 精灵大师杯参与/匹配
+	gs.RegisterCommandHandler(2431, handleStartPetWar)  // 开始精灵大乱斗
 }
 
 // DarkPortalDoorBosses 暗黑武斗场各门对应 Boss 配置
 // 结构：门索引 -> 子关卡索引 -> Boss精灵ID
 // 例如：门3有3-1(巴弗洛177)和3-2(其他boss)
 var darkPortalDoorBosses = map[uint32][]uint32{
-	0:  {171},                    // 第一门：魔牙鲨
-	1:  {174},                    // 第二门：贝鲁基德
-	2:  {177, 178, 179},          // 第三门：巴弗洛、3-2、3-3
-	3:  {192, 193, 194},          // 第四门：克林卡修、4-2、4-3
-	4:  {222, 223, 224},          // 第五门：卡库、5-2、5-3
-	5:  {356, 357, 358},          // 第六门：斯加尔卡、6-2、6-3
-	6:  {438, 439, 440},          // 第七门：魔花使者、7-2、7-3
-	7:  {656, 657, 658},          // 第八门：帕多尼、8-2、8-3
-	8:  {779, 780, 781},          // 第九门：迪普利德、9-2、9-3
-	9:  {1180, 1181, 1182},       // 第十门：10-1、10-2、10-3
-	10: {1183, 1184, 1185},       // 第十一门：11-1、11-2、11-3
+	0:  {171},              // 第一门：魔牙鲨
+	1:  {174},              // 第二门：贝鲁基德
+	2:  {177, 178, 179},    // 第三门：巴弗洛、3-2、3-3
+	3:  {192, 193, 194},    // 第四门：克林卡修、4-2、4-3
+	4:  {222, 223, 224},    // 第五门：卡库、5-2、5-3
+	5:  {356, 357, 358},    // 第六门：斯加尔卡、6-2、6-3
+	6:  {438, 439, 440},    // 第七门：魔花使者、7-2、7-3
+	7:  {656, 657, 658},    // 第八门：帕多尼、8-2、8-3
+	8:  {779, 780, 781},    // 第九门：迪普利德、9-2、9-3
+	9:  {1180, 1181, 1182}, // 第十门：10-1、10-2、10-3
+	10: {1183, 1184, 1185}, // 第十一门：11-1、11-2、11-3
 }
 
 // darkPortalBossIDs 暗黑武斗场各门对应 Boss 精灵 ID（兼容旧代码，取第一子关卡）
@@ -508,7 +865,7 @@ func handleOpenDarkPortal(ctx *gameserver.HandlerContext) {
 	if len(ctx.Body) >= 8 {
 		subIndex = binary.BigEndian.Uint32(ctx.Body[4:8])
 	}
-	
+
 	var bossID uint32 = 171 // 默认第一门魔牙鲨
 	// 优先使用数据库配置
 	if entry, ok := GetDarkPortalBossEntry(doorIndex, subIndex); ok {
@@ -524,7 +881,7 @@ func handleOpenDarkPortal(ctx *gameserver.HandlerContext) {
 		// 兼容旧代码：如果门配置不存在，使用旧数组
 		bossID = darkPortalBossIDs[doorIndex]
 	}
-	
+
 	// 保存用户当前打开的门索引和子关卡索引，供 2425 战斗时使用
 	ctx.GameServer.DarkPortalDoorsMu.Lock()
 	ctx.GameServer.DarkPortalDoors[ctx.UserID] = gameserver.DarkPortalDoorInfo{
@@ -542,6 +899,13 @@ func handleOpenDarkPortal(ctx *gameserver.HandlerContext) {
 // 请求体：空；返回体：空。客户端收到后启动战斗（PetFightModel.mode = MULTI_MODE，走 2404/2405 等战斗流程）
 func handleFightDarkPortal(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	allowedIndexes := getPetWarBattleIndexes(ctx.GameServer, ctx.UserID)
+	allowedCatchTimes := make(map[uint32]struct{}, len(allowedIndexes))
+	for _, index := range allowedIndexes {
+		if index >= 0 && index < len(user.Pets) {
+			allowedCatchTimes[uint32(user.Pets[index].CatchTime)] = struct{}{}
+		}
+	}
 	if user == nil {
 		ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, []byte{})
 		return
@@ -556,7 +920,7 @@ func handleFightDarkPortal(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.DarkPortalDoorsMu.RUnlock()
 
 	var bossID uint32 = 171 // 默认第一门魔牙鲨
-	enemyLevel := 50         // 暗黑武斗场boss默认等级
+	enemyLevel := 50        // 暗黑武斗场boss默认等级
 	if hasDoor {
 		// 优先使用数据库配置
 		if entry, ok := GetDarkPortalBossEntry(doorInfo.DoorIndex, doorInfo.SubIndex); ok {
@@ -978,7 +1342,7 @@ func handleLeaveFightLevel(ctx *gameserver.HandlerContext) {
 		ctx.GameServer.BroadcastToMap(oldMapID, 0, 2003, oldListBody)
 		ctx.GameServer.AddUserToMap(mapIDSpaceStationFlank, ctx.UserID, ctx.ClientData)
 		ctx.GameServer.SetOgreEnterMapTime(ctx.UserID)
-		body2001 := buildPeopleInfo(ctx.UserID, user, time.Now().Unix(), user.PosX, user.PosY, true)
+		body2001 := buildPeopleInfo(ctx.UserID, user, time.Now().Unix(), user.PosX, user.PosY)
 		ctx.GameServer.SendResponse(ctx.ClientData, 2001, ctx.UserID, 0, body2001)
 		listBody := buildMapPlayerListForMap(ctx.GameServer, mapIDSpaceStationFlank)
 		ctx.GameServer.SendResponse(ctx.ClientData, 2003, ctx.UserID, 0, listBody)
@@ -998,30 +1362,68 @@ func handleLeaveFightLevel(ctx *gameserver.HandlerContext) {
 
 // registerStubHandlers 注册尚未实现完整协议的 CMD：按 Lua 响应格式区分 4 字节 0 / 8 字节 0 / 空包
 func registerStubHandlers(gs *gameserver.GameServer) {
+	gs.RegisterCommandHandler(2309, handlePetBargeList)
+	gs.RegisterCommandHandler(2430, handleFreshLeaveFightLevel)
+	gs.RegisterCommandHandler(2442, handleMLFightBoss)
+	gs.RegisterCommandHandler(2444, handleMLBossState)
+	gs.RegisterCommandHandler(2445, handleMLStepPos)
+	gs.RegisterCommandHandler(2446, handleMLGetPrize)
+	gs.RegisterCommandHandler(9331, handleGetNoNoPartyReward)
+	gs.RegisterCommandHandler(41129, handleMap41129Action)
+	gs.RegisterCommandHandler(41254, handleMap1202Pickup)
+	gs.RegisterCommandHandler(41259, handleMap1189Click)
+	gs.RegisterCommandHandler(41582, handleMap10806Reward)
+	gs.RegisterCommandHandler(41900, handleMap1717Action)
+	gs.RegisterCommandHandler(42215, handleWheelStoryAction)
+	gs.RegisterCommandHandler(42240, handleMap11180Action)
+	gs.RegisterCommandHandler(42306, handleMap42306Action)
+	gs.RegisterCommandHandler(42374, handleMap42374Action)
+	gs.RegisterCommandHandler(42383, handleMap42383Action)
+	gs.RegisterCommandHandler(43192, handleMap43192Action)
+	gs.RegisterCommandHandler(43202, handleMap43202Action)
+	gs.RegisterCommandHandler(43298, handleMap11685Action)
+	gs.RegisterCommandHandler(43299, handleMap11689Action)
+	gs.RegisterCommandHandler(43300, handleChristmasActivityAction)
+	gs.RegisterCommandHandler(43305, handleChristmasActivityAction)
+	gs.RegisterCommandHandler(43306, handleChristmasActivityAction)
+	gs.RegisterCommandHandler(43587, handleChangeHistoryChoice)
+	gs.RegisterCommandHandler(43711, handleMap11488Action)
+	gs.RegisterCommandHandler(45508, handleMap45508Action)
+	gs.RegisterCommandHandler(45627, handleMap11171FightTrigger)
+	gs.RegisterCommandHandler(45628, handleMap11171DiamondAction)
+	gs.RegisterCommandHandler(45641, handleMap45641Action)
+	gs.RegisterCommandHandler(45674, handleMap45674Action)
+	gs.RegisterCommandHandler(45677, handleMap45677Action)
+	gs.RegisterCommandHandler(45693, handleZLWSStoryAction)
+	gs.RegisterCommandHandler(45743, handleMap45743Action)
+	gs.RegisterCommandHandler(45745, handleMap45745Action)
+	gs.RegisterCommandHandler(45850, handleMap1708Action)
+	gs.RegisterCommandHandler(46216, handleMap46216Action)
+	gs.RegisterCommandHandler(47007, handleMap10314Reward)
+	gs.RegisterCommandHandler(47284, handleMap47284Action)
+	gs.RegisterCommandHandler(47288, handleMap47288Action)
 	// 扭蛋机：3201 精灵扭蛋机、9757 梦幻扭蛋机 已单独实现
 	gs.RegisterCommandHandler(3201, handleGacha)
 	gs.RegisterCommandHandler(9757, handleGacha)
 	// Lua 返回 writeUInt32BE(0) 的 CMD，响应 4 字节 0
 	stub4Zero := []int32{
-		5001, 5002, 2442, 2444, 2445, 2446,
-		// 用户信息相关 (2051/2052 已实现)：2053 REQUEST_COUNT, 2054 GP_GHAZI_MAX_LEVEL, 2055 USER_PARTY_GET_USER_IMAGE_NAME
-		2053, 2054, 2055,
+		// 2442/2445/2446 ML 相关协议已实现最小完整协议
+		// 用户信息相关：2053 已完整实现并注册；2054/2055 也已按最小完整协议实现
 		// 2302, 2306, 2307, 2309, 2310, 2311, 2313, 2314,
 		// 2320, 2321, 2322, 2323, 2324, 2327, 2329, 2330, 2331, 2332, 2343
 		// 上述精灵相关 CMD 已在 registerPetHandlers 中注册为完整实现，这里不再使用 stub4Zero。
-		2328, 2393, // Skill_Sort 与 LEIYI_TRAIN_GET_STATUS 暂仍按 4 字节 0 占位
+		// 2328 Skill_Sort 已实现最小完整协议
 		// 成就/称号 (ACHIEVELIST/ACHIEVEINFO/ACHIEVETITLELIST/SETTITLE/CONFERACHIEVEMENT/ACHIEVE_AND_TITLE)，3404 单独实现，3405 在 stubEmpty
-		3401, 3402, 3403, 3406, 3407,
+		// 成就/称号：3401/3402/3403/3404/3406/3407 已实现最小完整协议
 		// 2411/2421 已在 registerGameHandlers 中注册为 handleChallengeBoss（SPT/盖亚挑战），此处不再 stub
 		// 2417-2423 擂台相关由 handleArena* 实现，不在 stub4Zero
 		// 2424/2425/2426 暗黑武斗场由 handleDarkPortal* 实现
 		// 2428/2429/2430 试炼之塔相关由专用处理器实现，不在 stub4Zero
 		// 2414/2415/2416 勇者之塔由 handleChoiceFightLevel / handleStartFightLevel / handleLeaveFightLevel 实现
-		2910, 2911, 2912, 2913, 2914, 2917, 2918, 2928, 2929, 2962, 2963,
-		3001, 3002, 3003, 3004, 3005, 3006, 3008, 3010,
-		4001, 4002, 4003, 4004, 4005, 4006, 4007, 4008, 4009, 4010, 4011, 4012, 4013, 4014,
-		4017, 4018, 4019, 4020, 4022, 4023, 4024, 4025, 4101, 4102, 2481,
-		10001, 10002, 10003, 10004, 10005, 10007, 10008, 10009,
+		// 3001–3006 师徒相关、3008/3010 教官奖励/七天未登录，均已实现完整协议，这里不再使用 stub4Zero
+		// 2913/2928/2962/2963 战队扩展协议已实现最小完整协议
+		// 4013/4014/4017/4018/4019/4020/4022/4023/4024/4025 战队PK尾批协议已实现最小完整协议
+		// 10001/10002/10003/10005/10007/10008/10009 房间/基地协议已实现最小完整协议
 		// 2151-2159 好友协议已实现完整处理，不再使用 stub4Zero
 	}
 	for _, cmd := range stub4Zero {
@@ -1032,10 +1434,9 @@ func registerStubHandlers(gs *gameserver.GameServer) {
 	// Lua 返回空或客户端不依赖包体的 CMD（含 gamepktprotocol.lua emptyCmds 中未单独实现的 CMD，9003/2354 已实现故不在此列）
 	stubEmpty := []int32{
 		5003, // LEAVE_GAME
-		1011, 1016, 2289, 2192, 2196, 2361, 3405, 4359, 4364, 4501, 5005,
-		9112, 9677, 41006, 41249, 41253, 4148, 4178, 4181, 43706, 45512, 45524,
-		45773, 45793, 45798, 45824, 47309, 45071,
-		40006, 40007,
+		1011, 1016,
+		4148,
+		// 40006/40007 已实现最小完整协议
 	}
 	// 注：2313 已在 stub4Zero（精灵 IS_COLLECT），9003/2354 已有完整实现，故不放入 stubEmpty
 	for _, cmd := range stubEmpty {
@@ -1054,11 +1455,13 @@ func handleSystemTime(ctx *gameserver.HandlerContext) {
 
 // handleStubEmpty 未实现命令的空响应（返回 result=0 空包，避免客户端报“未实现的命令”）
 func handleStubEmpty(ctx *gameserver.HandlerContext) {
+	traceStubCommand(ctx)
 	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, []byte{})
 }
 
 // handleStub4Zero 返回 4 字节 0 的协议体（对齐 Lua writeUInt32BE(0)）
 func handleStub4Zero(ctx *gameserver.HandlerContext) {
+	traceStubCommand(ctx)
 	body := make([]byte, 4)
 	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, body)
 }
@@ -1091,6 +1494,227 @@ func handleGetImageAddress(ctx *gameserver.HandlerContext) {
 	binary.BigEndian.PutUint16(body[16:18], 80)
 	putFixedString(body, 18, "", 16)
 	ctx.GameServer.SendResponse(ctx.ClientData, 1005, ctx.UserID, ctx.SeqID, body)
+}
+
+// 1020 事件编号：根据解包脚本约定的含义（便于日志与 GM 查询）
+const (
+	eventIDMap698Enter         = 47  // 进入 698 名人练习室地图
+	eventIDMap698ClickVideo    = 48  // 698 点击学习视频按钮
+	eventIDMap698ClickExchange = 49  // 698 点击达人勋章兑换机
+
+	eventIDMap10012StartGetNono = 127 // 10012 开始领取 Nono
+	eventIDMap10012NonoAnimEnd  = 128 // 10012 Nono 动画播放结束
+	eventIDMap10012TaskDone     = 129 // 10012 完成领取 Nono 任务
+
+	eventIDMap10013DoctorIntro      = 130 // 10013 博士讲解精灵概念
+	eventIDMap10013GetDex           = 131 // 10013 获得精灵图鉴
+	eventIDMap10013SeeDexAnim       = 132 // 10013 图鉴动画播放完毕
+	eventIDMap10013OpenDrugBuyTips  = 133 // 10013 打开精灵道具购买引导
+	eventIDMap10013ClickCapsuleShop = 134 // 10013 点击精灵胶囊商店
+	eventIDMap10013GuideFinished    = 135 // 10013 新手购买胶囊引导结束
+	eventIDMap10013TaskDone         = 136 // 10013 任务完成，前往船长室
+
+	eventIDMap10014ShipPraise   = 137 // 10014 船长表扬剧情
+	eventIDMap10014GetClothAnim = 138 // 10014 领取服装动画
+	eventIDMap10014TaskDone     = 139 // 10014 完成任务，打开职业选择面板
+)
+
+// handleMapStatLog CMD 1020 地图/活动行为打点
+// 客户端在进入特定地图、点击活动按钮（如达人勋章兑换机、视频面板等）时发送一条 1020(eventId) 供后台统计。
+// 原版行为为“只做统计、协议返回成功码”，前端不监听回包。
+// 这里：
+//   - 解析 eventId，并写入 GameData.MapEvents[eventId] 计数；
+//   - 针对已知地图/任务事件，额外记录具名日志，便于 GM 查询与后续扩展；
+//   - 返回 4 字节 retCode=0（成功），既不是空包，也不会回显 eventId。
+func handleMapStatLog(ctx *gameserver.HandlerContext) {
+	var eventID uint32
+	if len(ctx.Body) >= 4 {
+		eventID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	// 更新玩家 1020 行为统计
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user != nil {
+		if user.MapEvents == nil {
+			user.MapEvents = make(map[int]int)
+		}
+		user.MapEvents[int(eventID)]++
+	}
+
+	// 针对已知事件编号，写更具语义的日志，便于分析
+	action := "unknown"
+	switch eventID {
+	case eventIDMap698Enter:
+		action = "map698_enter"
+	case eventIDMap698ClickVideo:
+		action = "map698_click_video"
+	case eventIDMap698ClickExchange:
+		action = "map698_click_exchange"
+	case eventIDMap10012StartGetNono:
+		action = "map10012_start_get_nono"
+	case eventIDMap10012NonoAnimEnd:
+		action = "map10012_nono_anim_end"
+	case eventIDMap10012TaskDone:
+		action = "map10012_task_done"
+	case eventIDMap10013DoctorIntro:
+		action = "map10013_doctor_intro"
+	case eventIDMap10013GetDex:
+		action = "map10013_get_dex"
+	case eventIDMap10013SeeDexAnim:
+		action = "map10013_see_dex_anim"
+	case eventIDMap10013OpenDrugBuyTips:
+		action = "map10013_open_drug_buy_tips"
+	case eventIDMap10013ClickCapsuleShop:
+		action = "map10013_click_capsule_shop"
+	case eventIDMap10013GuideFinished:
+		action = "map10013_guide_finished"
+	case eventIDMap10013TaskDone:
+		action = "map10013_task_done"
+	case eventIDMap10014ShipPraise:
+		action = "map10014_ship_praise"
+	case eventIDMap10014GetClothAnim:
+		action = "map10014_get_cloth_anim"
+	case eventIDMap10014TaskDone:
+		action = "map10014_task_done"
+	}
+
+	logger.Info(fmt.Sprintf("[1020] 地图行为打点: uid=%d eventID=%d action=%s count=%d",
+		ctx.UserID, eventID, action,
+		func() int {
+			if user != nil && user.MapEvents != nil {
+				return user.MapEvents[int(eventID)]
+			}
+			return 0
+		}(),
+	))
+
+	// 根据具体 eventId 设计玩法效果（一次性新手奖励/统计用），只在服务端内部生效，不影响前端流程
+	if user != nil {
+		changed := false
+		// 为防止重复发奖励，只在首次达到某条件时发放（通过 MapEvents 次数判断）
+		switch eventID {
+		// 698 名人练习室
+		case eventIDMap698Enter:
+			// 第一次进入 698 地图：发放少量赛尔豆作为引导奖励
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 100
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次进入698名人练习室，赠送100赛尔豆 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap698ClickVideo:
+			// 第一次完整观看学习视频：奖励一些经验池
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 200
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次点击698学习视频，经验池+200 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap698ClickExchange:
+			// 第一次使用达人勋章兑换机：奖励少量赛尔豆
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 200
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次点击达人勋章兑换机，赠送200赛尔豆 uid=%d", ctx.UserID))
+				changed = true
+			}
+
+		// 10012 领取 NoNo
+		case eventIDMap10012StartGetNono:
+			// 第一次进入 NoNo 领取流程：给予少量经验
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 100
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次开始领取NoNo，引导经验+100 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10012NonoAnimEnd:
+			// 第一次完整看完 NoNo 演出：再给一点经验
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 100
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次完成NoNo动画，经验+100 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10012TaskDone:
+			// 完成 NoNo 引导任务：一次性发放赛尔豆
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 300
+				logger.Info(fmt.Sprintf("[1020] 奖励: 完成NoNo领取任务，赠送300赛尔豆 uid=%d", ctx.UserID))
+				changed = true
+			}
+
+		// 10013 博士图鉴 + 胶囊引导
+		case eventIDMap10013DoctorIntro:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 150
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次听博士讲解精灵概念，经验+150 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10013GetDex:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 150
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次获得精灵图鉴，经验+150 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10013SeeDexAnim:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 100
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次完整观看图鉴动画，经验+100 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10013OpenDrugBuyTips:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 100
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次打开精灵道具购买引导，赛尔豆+100 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10013ClickCapsuleShop:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 100
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次点击精灵胶囊商店，赛尔豆+100 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10013GuideFinished:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 150
+				user.ExpPool += 150
+				logger.Info(fmt.Sprintf("[1020] 奖励: 完成购买胶囊全流程，新手奖励 赛尔豆+150 经验+150 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10013TaskDone:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 300
+				user.ExpPool += 300
+				logger.Info(fmt.Sprintf("[1020] 奖励: 完成博士图鉴任务，赛尔豆+300 经验+300 uid=%d", ctx.UserID))
+				changed = true
+			}
+
+		// 10014 船长表扬 + 职业选择
+		case eventIDMap10014ShipPraise:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 200
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次完成船长表扬剧情，经验+200 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10014GetClothAnim:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.ExpPool += 150
+				logger.Info(fmt.Sprintf("[1020] 奖励: 首次观看领取服装动画，经验+150 uid=%d", ctx.UserID))
+				changed = true
+			}
+		case eventIDMap10014TaskDone:
+			if user.MapEvents[int(eventID)] == 1 {
+				user.Coins += 400
+				user.ExpPool += 400
+				logger.Info(fmt.Sprintf("[1020] 奖励: 完成船长室主线并打开职业选择，新手大礼包 赛尔豆+400 经验+400 uid=%d", ctx.UserID))
+				changed = true
+			}
+		}
+
+		if changed && ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+
+	body := make([]byte, 4)
+	// retCode=0 表示成功（与大量 writeUInt32BE(0) 协议风格一致）
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 1020, ctx.UserID, ctx.SeqID, body)
 }
 
 // handleMoneyBuyProduct CMD 1102 MONEY_BUY_PRODUCT
@@ -1207,15 +1831,17 @@ func handleGetMultiForever(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(ctx.ClientData, 46046, ctx.UserID, ctx.SeqID, body)
 }
 
-// handleGetSuperValue CMD 40001 响应: count(4)=0
+// handleGetSuperValue CMD 40001 单值查询。
+// 响应: count(4) + N * [key(4) + value(4)]
 func handleGetSuperValue(ctx *gameserver.HandlerContext) {
-	body := make([]byte, 4)
+	body := buildValuePairsBody(ctx)
 	ctx.GameServer.SendResponse(ctx.ClientData, 40001, ctx.UserID, ctx.SeqID, body)
 }
 
-// handleGetSuperValueByIds CMD 40002 响应: count(4)=0
+// handleGetSuperValueByIds CMD 40002 按 ID 批量查询。
+// 响应: count(4) + N * [key(4) + value(4)]
 func handleGetSuperValueByIds(ctx *gameserver.HandlerContext) {
-	body := make([]byte, 4)
+	body := buildValuePairsBody(ctx)
 	ctx.GameServer.SendResponse(ctx.ClientData, 40002, ctx.UserID, ctx.SeqID, body)
 }
 
@@ -1231,9 +1857,10 @@ func handleGetMultiForeverByDb(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(ctx.ClientData, 46057, ctx.UserID, ctx.SeqID, body)
 }
 
-// handleGetForeverValue CMD 41080 响应: 4 字节 0
+// handleGetForeverValue CMD 41080 永久值查询。
+// 响应: count(4) + N * [key(4) + value(4)]
 func handleGetForeverValue(ctx *gameserver.HandlerContext) {
-	body := make([]byte, 4)
+	body := buildValuePairsBody(ctx)
 	ctx.GameServer.SendResponse(ctx.ClientData, 41080, ctx.UserID, ctx.SeqID, body)
 }
 
@@ -1330,6 +1957,33 @@ func handleChangeColor(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(ctx.ClientData, 2063, ctx.UserID, ctx.SeqID, body)
 }
 
+// handleChangeDoodle CMD 2062 涂鸦/头像更换
+// AS: FigureAction 发送: send(CHANGE_DOODLE, doodleId)
+// 回包在 ChangeDoodleCmdListener 中作为 DoodleInfo 读取:
+//
+//	userID(4) + color(4) + texture(4) + coins(4)
+func handleChangeDoodle(ctx *gameserver.HandlerContext) {
+	var doodleID uint32
+	if len(ctx.Body) >= 4 {
+		doodleID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if doodleID > 0 {
+		user.Texture = int(doodleID)
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+
+	body := make([]byte, 16)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(user.Color))
+	binary.BigEndian.PutUint32(body[8:12], uint32(user.Texture))
+	binary.BigEndian.PutUint32(body[12:16], uint32(user.Coins))
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2062, ctx.UserID, ctx.SeqID, body)
+}
+
 // handleDanceAction CMD 2103 跳舞动作
 // 请求: aid(4)+atype(4)。响应: userId(4)+aid(4)+atype(4)，对齐 Lua
 func handleDanceAction(ctx *gameserver.HandlerContext) {
@@ -1355,8 +2009,14 @@ func handlePeopleTransform(ctx *gameserver.HandlerContext) {
 	body := make([]byte, 8)
 	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
 	binary.BigEndian.PutUint32(body[4:8], transId)
-	ctx.GameServer.SendResponse(ctx.ClientData, 2111, ctx.UserID, ctx.SeqID, body)
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user != nil {
+		user.TransformID = int(transId)
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 2111, ctx.UserID, ctx.SeqID, body)
 	if user.MapID > 0 {
 		ctx.GameServer.BroadcastToMap(user.MapID, ctx.UserID, 2111, body)
 	}
@@ -1377,7 +2037,7 @@ func handleOnOrOffFlying(ctx *gameserver.HandlerContext) {
 	}
 	body := make([]byte, 8)
 	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID)) // 包体前 4 字节：谁在飞
-	binary.BigEndian.PutUint32(body[4:8], flyMode)             // 包体后 4 字节：0=落地 非0=飞行
+	binary.BigEndian.PutUint32(body[4:8], flyMode)            // 包体后 4 字节：0=落地 非0=飞行
 	ctx.GameServer.SendResponse(ctx.ClientData, 2112, ctx.UserID, ctx.SeqID, body)
 	if user.MapID > 0 {
 		// 1. 先广播 2003，让同图玩家先拿到含 actionType 的列表
@@ -1489,8 +2149,919 @@ func handleInform(ctx *gameserver.HandlerContext) {
 
 // handleGetBossMonster CMD 8004 获取 BOSS 怪物，响应: bonusID(4)+petID(4)+captureTm(4)+itemCount(4)=16 字节
 func handleGetBossMonster(ctx *gameserver.HandlerContext) {
+	// 简化版：bonusID=0, petID=0, captureTm=0, itemCount=0
 	body := make([]byte, 16)
+	binary.BigEndian.PutUint32(body[0:4], 0) // bonusID
+	binary.BigEndian.PutUint32(body[4:8], 0) // petID
+	binary.BigEndian.PutUint32(body[8:12], 0)
+	binary.BigEndian.PutUint32(body[12:16], 0) // itemCount
 	ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleHitStone CMD 2105 敲石头（返回 BossMonsterInfo 奖励结构）
+// BossMonsterInfo: bonusID(4) + petID(4) + captureTm(4) + itemCount(4) + [itemID(4)+itemCnt(4)]*itemCount
+func handleHitStone(ctx *gameserver.HandlerContext) {
+	var hitType uint32
+	if len(ctx.Body) >= 4 {
+		hitType = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+
+	// 读取 GM 敲石头奖励配置
+	cfg := DefaultRewardConfigUnpacked()
+	if ctx.GameServer.UserDB != nil {
+		if data, err := ctx.GameServer.UserDB.LoadRewardConfig(); err == nil && len(data) > 0 {
+			_ = json.Unmarshal(data, &cfg)
+		}
+	}
+	rewardItems := cfg.HitStone.Normal
+	if hitType == 1 && len(cfg.HitStone.Super) > 0 {
+		rewardItems = cfg.HitStone.Super
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	type drop struct {
+		itemID uint32
+		count  uint32
+	}
+	var drops []drop
+
+	// 简单实现：按权重从配置中抽若干条（这里只抽 1 条，以免爆仓）
+	if len(rewardItems) > 0 {
+		totalW := 0
+		for _, it := range rewardItems {
+			if it.Weight > 0 {
+				totalW += it.Weight
+			}
+		}
+		if totalW > 0 {
+			r := rand.Intn(totalW)
+			acc := 0
+			for _, it := range rewardItems {
+				if it.Weight <= 0 {
+					continue
+				}
+				acc += it.Weight
+				if r < acc {
+					min := it.Min
+					max := it.Max
+					if max < min {
+						max = min
+					}
+					n := min
+					if max > min {
+						n = min + rand.Intn(max-min+1)
+					}
+					if n > 0 {
+						if it.ItemID == 1 {
+							user.Coins += n
+						} else {
+							if user.Items == nil {
+								user.Items = make(map[string]userdb.Item)
+							}
+							key := strconv.FormatUint(uint64(it.ItemID), 10)
+							item := user.Items[key]
+							item.Count += n
+							user.Items[key] = item
+						}
+						drops = append(drops, drop{itemID: it.ItemID, count: uint32(n)})
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	// 组装 BossMonsterInfo
+	body := make([]byte, 16+len(drops)*8)
+	// bonusID 可以固定为 6001，供前端区分来源
+	binary.BigEndian.PutUint32(body[0:4], 6001)
+	binary.BigEndian.PutUint32(body[4:8], 0) // petID
+	now := uint32(time.Now().Unix())
+	binary.BigEndian.PutUint32(body[8:12], now)                 // captureTm（不用宠物时仅作占位）
+	binary.BigEndian.PutUint32(body[12:16], uint32(len(drops))) // itemCount
+	off := 16
+	for _, d := range drops {
+		binary.BigEndian.PutUint32(body[off:off+4], d.itemID)
+		binary.BigEndian.PutUint32(body[off+4:off+8], d.count)
+		off += 8
+	}
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2105, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2105] 敲石头奖励: UID=%d type=%d drops=%d", ctx.UserID, hitType, len(drops)))
+}
+
+// handlePrizeOfAtresia CMD 2106 阿瑞斯空间奖励
+// AresiaSpacePrize: bonusID(4) + petID(4) + captureTm(4) + itemCount(4) + [itemID(4)+itemCnt(4)]*itemCount
+func handlePrizeOfAtresia(ctx *gameserver.HandlerContext) {
+	var prizeType uint32
+	if len(ctx.Body) >= 4 {
+		prizeType = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+
+	cfg := DefaultRewardConfigUnpacked()
+	if ctx.GameServer.UserDB != nil {
+		if data, err := ctx.GameServer.UserDB.LoadRewardConfig(); err == nil && len(data) > 0 {
+			_ = json.Unmarshal(data, &cfg)
+		}
+	}
+
+	key := strconv.FormatUint(uint64(prizeType), 10)
+	prizeCfg, ok := cfg.Atresia[key]
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	type drop struct {
+		itemID uint32
+		count  uint32
+	}
+	var drops []drop
+	var petID uint32
+	var captureTm uint32
+
+	if ok {
+		// 固定道具奖励
+		for _, it := range prizeCfg.Items {
+			if it.Min <= 0 || it.Max <= 0 {
+				continue
+			}
+			n := it.Min
+			if it.Max > it.Min {
+				n = it.Min + rand.Intn(it.Max-it.Min+1)
+			}
+			if n <= 0 {
+				continue
+			}
+			if it.ItemID == 1 {
+				user.Coins += n
+			} else {
+				if user.Items == nil {
+					user.Items = make(map[string]userdb.Item)
+				}
+				itemKey := strconv.FormatUint(uint64(it.ItemID), 10)
+				item := user.Items[itemKey]
+				item.Count += n
+				user.Items[itemKey] = item
+			}
+			drops = append(drops, drop{itemID: it.ItemID, count: uint32(n)})
+		}
+
+		// 宠物奖励（按概率）
+		if prizeCfg.Pet.PetID > 0 && prizeCfg.Pet.Rate > 0 {
+			if rand.Float64() < prizeCfg.Pet.Rate {
+				petID = prizeCfg.Pet.PetID
+				ct := uint32(time.Now().Unix() & 0xFFFFFFFF)
+				if ct == 0 {
+					ct = 1
+				}
+				captureTm = ct
+				newPet := userdb.Pet{
+					ID:        int(petID),
+					CatchTime: int(ct),
+					Level:     1,
+					DV:        31,
+					Nature:    0,
+					Exp:       0,
+					Name:      "",
+					Trait:     0,
+				}
+				// 放入背包或仓库
+				if len(user.Pets) < 6 {
+					user.Pets = append(user.Pets, newPet)
+				} else {
+					user.StoragePets = append(user.StoragePets, newPet)
+				}
+			}
+		}
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	// 组装 AresiaSpacePrize
+	body := make([]byte, 16+len(drops)*8)
+	bonusID := uint32(0)
+	if ok {
+		bonusID = prizeCfg.BonusID
+	}
+	binary.BigEndian.PutUint32(body[0:4], bonusID)
+	binary.BigEndian.PutUint32(body[4:8], petID)
+	if captureTm == 0 {
+		captureTm = uint32(time.Now().Unix())
+	}
+	binary.BigEndian.PutUint32(body[8:12], captureTm)
+	binary.BigEndian.PutUint32(body[12:16], uint32(len(drops)))
+	off := 16
+	for _, d := range drops {
+		binary.BigEndian.PutUint32(body[off:off+4], d.itemID)
+		binary.BigEndian.PutUint32(body[off+4:off+8], d.count)
+		off += 8
+	}
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2106, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2106] 阿瑞斯空间奖励: UID=%d type=%d drops=%d petID=%d", ctx.UserID, prizeType, len(drops), petID))
+}
+
+// handleAttackBailuen CMD 2109 攻击白伦
+// 原服用于触发白伦剧情/奖励，这里先回 4 字节 0 作为占位
+func handleAttackBailuen(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2109, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2109] 攻击白伦: UID=%d", ctx.UserID))
+}
+
+// handleGetTimePoke CMD 2110 获取时光胶囊
+// 使用 GM 奖励配置中的 timePoke 段，支持每日限次与随机奖励
+// 当前前端未对包体做字段读取，仅作为成功/失败信号，这里返回 1 表示本次发放成功，0 表示达到上限或无配置
+func handleGetTimePoke(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+
+	// 读取 GM 配置
+	cfg := DefaultRewardConfigUnpacked()
+	if ctx.GameServer.UserDB != nil {
+		if data, err := ctx.GameServer.UserDB.LoadRewardConfig(); err == nil && len(data) > 0 {
+			_ = json.Unmarshal(data, &cfg)
+		}
+	}
+
+	limit := cfg.TimePoke.DailyLimit
+	if limit <= 0 {
+		limit = 1
+	}
+
+	// 按日期重置每日计数
+	today := int(time.Now().Unix() / 86400)
+	if user.TimePokeLastDay != today {
+		user.TimePokeLastDay = today
+		user.TimePokeUsed = 0
+	}
+
+	success := uint32(0)
+	if user.TimePokeUsed < limit && len(cfg.TimePoke.Rewards) > 0 {
+		// 按权重抽一个奖励
+		totalW := 0
+		for _, it := range cfg.TimePoke.Rewards {
+			if it.Weight > 0 {
+				totalW += it.Weight
+			}
+		}
+		if totalW > 0 {
+			r := rand.Intn(totalW)
+			acc := 0
+			for _, it := range cfg.TimePoke.Rewards {
+				if it.Weight <= 0 {
+					continue
+				}
+				acc += it.Weight
+				if r < acc {
+					min := it.Min
+					max := it.Max
+					if max < min {
+						max = min
+					}
+					n := min
+					if max > min {
+						n = min + rand.Intn(max-min+1)
+					}
+					if n > 0 {
+						if it.ItemID == 1 {
+							user.Coins += n
+						} else {
+							if user.Items == nil {
+								user.Items = make(map[string]userdb.Item)
+							}
+							key := strconv.FormatUint(uint64(it.ItemID), 10)
+							item := user.Items[key]
+							item.Count += n
+							user.Items[key] = item
+						}
+						user.TimePokeUsed++
+						success = 1
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], success)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2110, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2110] 获取时光胶囊: UID=%d success=%d used=%d/%d", ctx.UserID, success, user.TimePokeUsed, limit))
+}
+
+// handleLeiyiTrainStatus CMD 2393 雷伊训练状态
+// 响应: 6 组 today(4) + current(4) + total(4)，共 72 字节
+func handleLeiyiTrainStatus(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+
+	// 读取 GM 配置（用于上限）
+	cfg := DefaultRewardConfigUnpacked()
+	if ctx.GameServer.UserDB != nil {
+		if data, err := ctx.GameServer.UserDB.LoadRewardConfig(); err == nil && len(data) > 0 {
+			_ = json.Unmarshal(data, &cfg)
+		}
+	}
+
+	today := int(time.Now().Unix() / 86400)
+	if user.LeiyiLastDay != today {
+		user.LeiyiLastDay = today
+		for i := 0; i < 6; i++ {
+			user.LeiyiToday[i] = 0
+		}
+	}
+
+	// 夹紧 current/total 到 GM 配置上限
+	for i := 0; i < 6; i++ {
+		max := cfg.LeiyiTrain.MaxPerAttr[i]
+		if max <= 0 {
+			max = 10
+		}
+		if user.LeiyiCurrent[i] > max {
+			user.LeiyiCurrent[i] = max
+		}
+		if user.LeiyiTotal[i] > max {
+			user.LeiyiTotal[i] = max
+		}
+		if user.LeiyiToday[i] > max {
+			user.LeiyiToday[i] = max
+		}
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	body := make([]byte, 6*3*4)
+	off := 0
+	for i := 0; i < 6; i++ {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(user.LeiyiToday[i]))
+		off += 4
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(user.LeiyiCurrent[i]))
+		off += 4
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(user.LeiyiTotal[i]))
+		off += 4
+	}
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2393, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2393] 雷伊训练状态: UID=%d today=%v current=%v total=%v", ctx.UserID, user.LeiyiToday, user.LeiyiCurrent, user.LeiyiTotal))
+}
+
+// ==================== 师徒系统 (3001–3006, 3008, 3009, 3010, 3011) ====================
+//
+// 请求拜师：REQUEST_ADD_TEACHER(3001)，请求收徒：REQUEST_ADD_STUDENT(3003)
+// - 请求方只关心本地弹窗“申请已发送”；对方通过 8001 INFORM + InformInfo.type=3001/3003 收到弹窗
+// - 回复：ANSWER_ADD_TEACHER(3002) / ANSWER_ADD_STUDENT(3004)
+//   - 回复方本地通过 3002/3004 ACK 更新自身 teacherID/studentID
+//   - 请求方通过 8001 INFORM + type=3002/3004 收到结果，更新自身 teacherID/studentID
+// 删除师徒关系：DELETE_TEACHER(3005) / DELETE_STUDENT(3006)
+//   - 主动解除一方本地收到 3005/3006，另一方通过 8001 INFORM + type=3005/3006 得知被解除
+
+// handleRequestAddTeacher CMD 3001 请求拜师（我想让对方做我的教官）
+// body: targetUserID(4)
+func handleRequestAddTeacher(ctx *gameserver.HandlerContext) {
+	var targetID int64
+	if len(ctx.Body) >= 4 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	if targetID <= 0 || targetID == ctx.UserID {
+		ack := make([]byte, 4)
+		ctx.GameServer.SendResponse(ctx.ClientData, 3001, ctx.UserID, ctx.SeqID, ack)
+		return
+	}
+
+	fromUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	fromNick := fromUser.Nick
+	if fromNick == "" {
+		fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+	}
+	mapID := fromUser.MapID
+	if mapID <= 0 {
+		mapID = 1
+	}
+	mapName := fmt.Sprintf("地图%d", mapID)
+
+	// 推送 8001 INFORM 给对方：type=REQUEST_ADD_TEACHER
+	if targetClient := ctx.GameServer.GetClientByUserID(targetID); targetClient != nil && targetClient.LoggedIn {
+		informBody := buildInformInfoBody(3001, ctx.UserID, fromNick, 0, 1, 0, uint32(mapID), mapName)
+		ctx.GameServer.SendResponse(targetClient, 8001, targetID, 0, informBody)
+		logger.Info(fmt.Sprintf("[3001] 请求拜师: from=%d to=%d", ctx.UserID, targetID))
+	}
+
+	// 给请求方一个简单 ACK（4 字节 0），客户端不读取包体
+	ack := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 3001, ctx.UserID, ctx.SeqID, ack)
+}
+
+// handleRequestAddStudent CMD 3003 请求收徒（我想让对方做我的学员）
+// body: targetUserID(4)
+func handleRequestAddStudent(ctx *gameserver.HandlerContext) {
+	var targetID int64
+	if len(ctx.Body) >= 4 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	if targetID <= 0 || targetID == ctx.UserID {
+		ack := make([]byte, 4)
+		ctx.GameServer.SendResponse(ctx.ClientData, 3003, ctx.UserID, ctx.SeqID, ack)
+		return
+	}
+
+	fromUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	fromNick := fromUser.Nick
+	if fromNick == "" {
+		fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+	}
+	mapID := fromUser.MapID
+	if mapID <= 0 {
+		mapID = 1
+	}
+	mapName := fmt.Sprintf("地图%d", mapID)
+
+	// 推送 8001 INFORM 给对方：type=REQUEST_ADD_STUDENT
+	if targetClient := ctx.GameServer.GetClientByUserID(targetID); targetClient != nil && targetClient.LoggedIn {
+		informBody := buildInformInfoBody(3003, ctx.UserID, fromNick, 0, 1, 0, uint32(mapID), mapName)
+		ctx.GameServer.SendResponse(targetClient, 8001, targetID, 0, informBody)
+		logger.Info(fmt.Sprintf("[3003] 请求收徒: from=%d to=%d", ctx.UserID, targetID))
+	}
+
+	// 给请求方一个简单 ACK（4 字节 0）
+	ack := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 3003, ctx.UserID, ctx.SeqID, ack)
+}
+
+// handleAnswerAddTeacher CMD 3002 应答拜师
+// body: requesterUserID(4) + result(4)  result:1=同意 0=拒绝
+func handleAnswerAddTeacher(ctx *gameserver.HandlerContext) {
+	var requesterID int64
+	var result uint32
+	if len(ctx.Body) >= 8 {
+		requesterID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+		result = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+
+	// 本地 ACK：TeacherCmdListener.onAnswerTeacher 只读取一个 U32 作为结果
+	ack := make([]byte, 4)
+	binary.BigEndian.PutUint32(ack[0:4], result)
+	ctx.GameServer.SendResponse(ctx.ClientData, 3002, ctx.UserID, ctx.SeqID, ack)
+
+	if requesterID <= 0 || requesterID == ctx.UserID {
+		return
+	}
+
+	// 若同意，则建立师徒关系：当前用户为教官，对方为学员
+	if result == 1 {
+		teacher := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+		student := ctx.GameServer.GetOrCreateUser(requesterID)
+		if teacher != nil && student != nil {
+			teacher.StudentID = requesterID
+			student.TeacherID = ctx.UserID
+			if ctx.GameServer.UserDB != nil {
+				ctx.GameServer.UserDB.SaveGameData(ctx.UserID, teacher)
+				ctx.GameServer.UserDB.SaveGameData(requesterID, student)
+			}
+		}
+	}
+
+	// 通知请求方：8001 INFORM type=ANSWER_ADD_TEACHER
+	if requesterClient := ctx.GameServer.GetClientByUserID(requesterID); requesterClient != nil && requesterClient.LoggedIn {
+		fromUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+		fromNick := fromUser.Nick
+		if fromNick == "" {
+			fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+		}
+		mapID := fromUser.MapID
+		if mapID <= 0 {
+			mapID = 1
+		}
+		mapName := fmt.Sprintf("地图%d", mapID)
+		informBody := buildInformInfoBody(3002, ctx.UserID, fromNick, result, 1, 0, uint32(mapID), mapName)
+		ctx.GameServer.SendResponse(requesterClient, 8001, requesterID, 0, informBody)
+		logger.Info(fmt.Sprintf("[3002] 应答拜师: from=%d to=%d result=%d", ctx.UserID, requesterID, result))
+	}
+}
+
+// handleAnswerAddStudent CMD 3004 应答收徒
+// body: requesterUserID(4) + result(4)  result:1=同意 0=拒绝
+func handleAnswerAddStudent(ctx *gameserver.HandlerContext) {
+	var requesterID int64
+	var result uint32
+	if len(ctx.Body) >= 8 {
+		requesterID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+		result = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+
+	// 本地 ACK：TeacherCmdListener.onAnswerStudent 只读取一个 U32 作为结果
+	ack := make([]byte, 4)
+	binary.BigEndian.PutUint32(ack[0:4], result)
+	ctx.GameServer.SendResponse(ctx.ClientData, 3004, ctx.UserID, ctx.SeqID, ack)
+
+	if requesterID <= 0 || requesterID == ctx.UserID {
+		return
+	}
+
+	// 若同意，则建立师徒关系：请求方为教官，当前用户为学员
+	if result == 1 {
+		teacher := ctx.GameServer.GetOrCreateUser(requesterID)
+		student := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+		if teacher != nil && student != nil {
+			teacher.StudentID = ctx.UserID
+			student.TeacherID = requesterID
+			if ctx.GameServer.UserDB != nil {
+				ctx.GameServer.UserDB.SaveGameData(requesterID, teacher)
+				ctx.GameServer.UserDB.SaveGameData(ctx.UserID, student)
+			}
+		}
+	}
+
+	// 通知请求方：8001 INFORM type=ANSWER_ADD_STUDENT
+	if requesterClient := ctx.GameServer.GetClientByUserID(requesterID); requesterClient != nil && requesterClient.LoggedIn {
+		fromUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+		fromNick := fromUser.Nick
+		if fromNick == "" {
+			fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+		}
+		mapID := fromUser.MapID
+		if mapID <= 0 {
+			mapID = 1
+		}
+		mapName := fmt.Sprintf("地图%d", mapID)
+		informBody := buildInformInfoBody(3004, ctx.UserID, fromNick, result, 1, 0, uint32(mapID), mapName)
+		ctx.GameServer.SendResponse(requesterClient, 8001, requesterID, 0, informBody)
+		logger.Info(fmt.Sprintf("[3004] 应答收徒: from=%d to=%d result=%d", ctx.UserID, requesterID, result))
+	}
+}
+
+// handleDeleteTeacher CMD 3005 删除师父（学生主动解除师徒）
+// body: 空
+func handleDeleteTeacher(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user == nil {
+		ctx.GameServer.SendResponse(ctx.ClientData, 3005, ctx.UserID, ctx.SeqID, []byte{})
+		return
+	}
+	teacherID := user.TeacherID
+	if teacherID != 0 {
+		user.TeacherID = 0
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+		if t := ctx.GameServer.GetOrCreateUser(teacherID); t != nil {
+			if t.StudentID == ctx.UserID {
+				t.StudentID = 0
+				if ctx.GameServer.UserDB != nil {
+					ctx.GameServer.UserDB.SaveGameData(teacherID, t)
+				}
+			}
+		}
+		// 通知教官：8001 INFORM type=DELETE_TEACHER accept=2（学员单方面解除）
+		if teacherClient := ctx.GameServer.GetClientByUserID(teacherID); teacherClient != nil && teacherClient.LoggedIn {
+			fromNick := user.Nick
+			if fromNick == "" {
+				fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+			}
+			mapID := user.MapID
+			if mapID <= 0 {
+				mapID = 1
+			}
+			mapName := fmt.Sprintf("地图%d", mapID)
+			informBody := buildInformInfoBody(3005, ctx.UserID, fromNick, 2, 1, 0, uint32(mapID), mapName)
+			ctx.GameServer.SendResponse(teacherClient, 8001, teacherID, 0, informBody)
+		}
+	}
+	// 本地 ACK（TeacherCmdListener.onDelTeacher 仅需要收到一条 3005 即可）
+	ctx.GameServer.SendResponse(ctx.ClientData, 3005, ctx.UserID, ctx.SeqID, []byte{})
+	logger.Info(fmt.Sprintf("[3005] 删除师父: UID=%d teacherID(old)=%d", ctx.UserID, teacherID))
+}
+
+// handleDeleteStudent CMD 3006 删除徒弟（教官主动解除或毕业解除）
+// body: 空（是否毕业由 SevenNoLoginComplete/前端文案区分，这里统一按解除处理）
+func handleDeleteStudent(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user == nil {
+		ctx.GameServer.SendResponse(ctx.ClientData, 3006, ctx.UserID, ctx.SeqID, []byte{})
+		return
+	}
+	studentID := user.StudentID
+	if studentID != 0 {
+		user.StudentID = 0
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+		if s := ctx.GameServer.GetOrCreateUser(studentID); s != nil {
+			if s.TeacherID == ctx.UserID {
+				s.TeacherID = 0
+				if ctx.GameServer.UserDB != nil {
+					ctx.GameServer.UserDB.SaveGameData(studentID, s)
+				}
+			}
+		}
+		// 通知学员：8001 INFORM type=DELETE_STUDENT accept=2（被教官解除）
+		if studentClient := ctx.GameServer.GetClientByUserID(studentID); studentClient != nil && studentClient.LoggedIn {
+			fromNick := user.Nick
+			if fromNick == "" {
+				fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+			}
+			mapID := user.MapID
+			if mapID <= 0 {
+				mapID = 1
+			}
+			mapName := fmt.Sprintf("地图%d", mapID)
+			informBody := buildInformInfoBody(3006, ctx.UserID, fromNick, 2, 1, 0, uint32(mapID), mapName)
+			ctx.GameServer.SendResponse(studentClient, 8001, studentID, 0, informBody)
+		}
+	}
+	// 本地 ACK（TeacherCmdListener.onDelStudent 仅需要收到一条 3006 即可）
+	ctx.GameServer.SendResponse(ctx.ClientData, 3006, ctx.UserID, ctx.SeqID, []byte{})
+	logger.Info(fmt.Sprintf("[3006] 删除徒弟: UID=%d studentID(old)=%d", ctx.UserID, studentID))
+}
+
+// handleTeacherRewardComplete CMD 3008 师父奖励完成（TeacherAwardInfo）
+// 前端 TeacherAwardInfo 结构：
+// - graduationCount(4): 已毕业学员数量
+// - rewardCount(4): 可领取奖励道具数量
+// - [itemId(4)]*rewardCount
+//
+// 此处先实现最小可用版本：
+// - 按 user.GraduationCount 返回毕业人数
+// - 不下发具体奖励道具（rewardCount=0），前端会根据毕业人数给出相应提示
+func handleTeacherRewardComplete(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	grad := uint32(0)
+	if user != nil && user.GraduationCount > 0 {
+		grad = uint32(user.GraduationCount)
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], grad)
+	binary.BigEndian.PutUint32(body[4:8], 0) // rewardCount=0，暂不发具体奖励
+	ctx.GameServer.SendResponse(ctx.ClientData, 3008, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[3008] 教官奖励查询: UID=%d GraduationCount=%d", ctx.UserID, grad))
+}
+
+// handleSevenNoLoginComplete CMD 3010 七天未登录完成（SevenNoLoginInfo）
+// 前端 SevenNoLoginInfo:
+// - isLogin(4): 0=允许解除师徒关系（视为满足七天条件），1=不允许
+//
+// 这里为了方便玩家随时解除关系，统一返回 0（可解除），不再做真实“七天未登录”校验。
+func handleSevenNoLoginComplete(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], 0) // 0=可解除
+	ctx.GameServer.SendResponse(ctx.ClientData, 3010, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[3010] 七天未登录检查: UID=%d status=0(允许解除)", ctx.UserID))
+}
+
+// ==================== 小游戏 / 副本游戏 (5001–5003, 5052, 6001, 6003) ====================
+//
+// JOIN_GAME(5001): param 列表各不相同（不同地图小游戏传不同参数），Lua 服只做参数校验与排队控制，通常返回 4 字节 0 或简单标志。
+// GAME_OVER(5002): 所有小游戏统一发 per(4)+score(4)，由服务端按 per 发赛尔豆/经验等奖励；这里先实现最小可用版本，仅发一条 5002 ACK 触发 GameOverCmdListener，不真正发奖。
+// LEAVE_GAME(5003): 用于部分多人小游戏退出占位，目前客户端仅监听是否有回包，体为空即可。
+// FB_GAME_OVER(5052): 副本 BOSS 战结束后推送 FBGameOverInfo：count(4)+[GameOverUserInfo(id(4)+x(4)+y(4))]*count。
+// WORK_CONNECTION(6001)/ALL_CONNECTION(6003): 用于内网统计/链接上报，客户端不依赖具体字段，这里回 4 字节 0。
+
+// handleJoinGame CMD 5001 加入小游戏
+// 请求参数各小游戏自定义，目前 Go 服不做排队/限制，统一返回 4 字节 0 作为“允许开始游戏”的标记。
+func handleJoinGame(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 5001, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[5001] 加入小游戏: UID=%d len=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleGameOver CMD 5002 小游戏结束
+// 前端所有小游戏统一发送: per(4) + score(4)
+// 奖励结算：按 GM 奖励配置（RewardConfig.MiniGames）中 per/score 区间给赛尔豆、经验池经验与可选物品，并持久化到数据库。
+func handleGameOver(ctx *gameserver.HandlerContext) {
+	var per, score uint32
+	if len(ctx.Body) >= 4 {
+		per = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	if len(ctx.Body) >= 8 {
+		score = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+
+	// 读取 GM 小游戏奖励配置
+	cfg := DefaultRewardConfigUnpacked()
+	if ctx.GameServer.UserDB != nil {
+		if data, err := ctx.GameServer.UserDB.LoadRewardConfig(); err == nil && len(data) > 0 {
+			_ = json.Unmarshal(data, &cfg)
+		}
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user != nil && len(cfg.MiniGames) > 0 {
+		p := int(per)
+		s := int(score)
+		var matched *struct {
+			Name     string       `json:"name"`
+			MinPer   int          `json:"minPer"`
+			MaxPer   int          `json:"maxPer"`
+			MinScore int          `json:"minScore"`
+			MaxScore int          `json:"maxScore"`
+			Coins    int          `json:"coins"`
+			Exp      int          `json:"exp"`
+			Items    []RewardItem `json:"items"`
+		}
+		for i := range cfg.MiniGames {
+			r := &cfg.MiniGames[i]
+			if p < r.MinPer {
+				continue
+			}
+			if r.MaxPer > 0 && p > r.MaxPer {
+				continue
+			}
+			if r.MinScore > 0 && s < r.MinScore {
+				continue
+			}
+			if r.MaxScore > 0 && s > r.MaxScore {
+				continue
+			}
+			matched = r
+			break
+		}
+		if matched != nil {
+			// 固定赛尔豆奖励
+			if matched.Coins != 0 {
+				user.Coins += matched.Coins
+				if user.Coins < 0 {
+					user.Coins = 0
+				}
+			}
+			// 固定经验池经验奖励
+			if matched.Exp != 0 {
+				if user.ExpPool < 0 {
+					user.ExpPool = 0
+				}
+				user.ExpPool += matched.Exp
+			}
+			// 可选物品掉落（按权重随机 1 条，结构与敲石头一致）
+			if len(matched.Items) > 0 {
+				totalW := 0
+				for _, it := range matched.Items {
+					if it.Weight > 0 {
+						totalW += it.Weight
+					}
+				}
+				if totalW > 0 {
+					rnd := rand.Intn(totalW)
+					acc := 0
+					for _, it := range matched.Items {
+						if it.Weight <= 0 {
+							continue
+						}
+						acc += it.Weight
+						if rnd < acc {
+							min := it.Min
+							max := it.Max
+							if max < min {
+								max = min
+							}
+							n := min
+							if max > min {
+								n = min + rand.Intn(max-min+1)
+							}
+							if n > 0 {
+								if it.ItemID == 1 {
+									user.Coins += n
+									if user.Coins < 0 {
+										user.Coins = 0
+									}
+								} else {
+									if user.Items == nil {
+										user.Items = make(map[string]userdb.Item)
+									}
+									key := strconv.FormatUint(uint64(it.ItemID), 10)
+									item := user.Items[key]
+									item.Count += n
+									user.Items[key] = item
+								}
+							}
+							break
+						}
+					}
+				}
+			}
+			if ctx.GameServer.UserDB != nil {
+				ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+			}
+			logger.Info(fmt.Sprintf("[5002] 小游戏结束发奖: UID=%d per=%d score=%d coinsDelta=%d expDelta=%d", ctx.UserID, per, score, matched.Coins, matched.Exp))
+		}
+	}
+
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], per)
+	binary.BigEndian.PutUint32(body[4:8], score)
+	ctx.GameServer.SendResponse(ctx.ClientData, 5002, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[5002] 小游戏结束: UID=%d per=%d score=%d", ctx.UserID, per, score))
+}
+
+// handleLeaveGame CMD 5003 离开小游戏
+// 部分多人副本用：请求参数可能为 [flag]，前端只关心是否有回包。
+func handleLeaveGame(ctx *gameserver.HandlerContext) {
+	ctx.GameServer.SendResponse(ctx.ClientData, 5003, ctx.UserID, ctx.SeqID, []byte{})
+	logger.Info(fmt.Sprintf("[5003] 离开小游戏: UID=%d len=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleFbGameOver CMD 5052 副本游戏结束（FBGameOverInfo）
+// 当前仅在 MapProcess_502 中使用，用于多玩家副本战斗结束时播放通用结算动画：
+// - body: userCount(4) + [id(4)+x(4)+y(4)]*userCount
+// 这里简单返回 1 个玩家（自己），pos 置为 (0,0)。
+func handleFbGameOver(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	_ = user
+
+	body := make([]byte, 4+12)
+	// userCount = 1
+	binary.BigEndian.PutUint32(body[0:4], 1)
+	// GameOverUserInfo for self: id + x + y
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], 0)  // x
+	binary.BigEndian.PutUint32(body[12:16], 0) // y
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 5052, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[5052] 副本游戏结束: UID=%d", ctx.UserID))
+}
+
+// handleWorkConnection CMD 6001 工作连接
+// 原服用于服务器监控/运营统计，这里按 Lua 约定回 4 字节 0。
+func handleWorkConnection(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 6001, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAllConnection CMD 6003 全部连接
+// 同上，用于全服连接统计，这里回 4 字节 0 占位。
+func handleAllConnection(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 6003, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleFightLoadPercent CMD 2441 战斗加载进度（LOAD_PERCENT）
+// 前端:
+// - 资产加载时不断 SocketConnection.send(CommandID.LOAD_PERCENT, percent)
+// - FightLoadPercentInfo 解析: id(4) + percent(4)
+// - PetFightEntry.onPercent 只在 _loc2_.id != MainManager.actorID 时更新“对方加载进度条”
+//
+// 行为：
+// - 解析客户端上传的 percent（0~100），记录发起者 UID
+// - 向自己回包（可选，前端会直接忽略自身 id）
+// - 若当前 BattleState.OpponentUserID != 0，则同时转发给对手，用于显示对手加载进度
+func handleFightLoadPercent(ctx *gameserver.HandlerContext) {
+	var percent uint32
+	if len(ctx.Body) >= 4 {
+		percent = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+
+	uid := ctx.UserID
+
+	// 构造 FightLoadPercentInfo: id(4) + percent(4)
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(uid))
+	binary.BigEndian.PutUint32(body[4:8], percent)
+
+	// 回给自己（前端 onPercent 会因为 id==自己而忽略）
+	ctx.GameServer.SendResponse(ctx.ClientData, 2441, uid, ctx.SeqID, body)
+
+	// 若为 PvP，则同步给对手用于显示对手加载进度
+	ctx.GameServer.BattleMu.RLock()
+	if bs, ok := ctx.GameServer.BattleStates[uid]; ok && bs.IsActive && bs.OpponentUserID != 0 {
+		if otherClient := ctx.GameServer.GetClientByUserID(bs.OpponentUserID); otherClient != nil {
+			ctx.GameServer.SendResponse(otherClient, 2441, uid, 0, body)
+		}
+	}
+	ctx.GameServer.BattleMu.RUnlock()
+}
+
+// handleRemoveCoins CMD 2113 移除赛尔豆
+// 请求: amount(4)。响应: userId(4)+remainCoins(4)，对齐常见扣钱协议
+func handleRemoveCoins(ctx *gameserver.HandlerContext) {
+	var amount uint32
+	if len(ctx.Body) >= 4 {
+		amount = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if amount > 0 {
+		if uint32(user.Coins) > amount {
+			user.Coins -= int(amount)
+		} else {
+			user.Coins = 0
+		}
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(user.Coins))
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2113, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2113] 移除赛尔豆: UID=%d amount=%d remain=%d", ctx.UserID, amount, user.Coins))
 }
 
 // handleSetTitle CMD 3404 SETTITLE 设置当前称号
@@ -1509,6 +3080,163 @@ func handleSetTitle(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(ctx.ClientData, 3404, ctx.UserID, ctx.SeqID, body)
 }
 
+// handleAchieveList CMD 3401 ACHIEVELIST 成就列表
+// 最小完整协议：total(4) + rank(4) + count(4) + [achievementId(4)]*count
+func handleAchieveList(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	list := user.Achievements.List
+	body := make([]byte, 12+len(list)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(user.Achievements.Total))
+	binary.BigEndian.PutUint32(body[4:8], uint32(user.Achievements.Rank))
+	binary.BigEndian.PutUint32(body[8:12], uint32(len(list)))
+	off := 12
+	for _, achievementID := range list {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(achievementID))
+		off += 4
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 3401, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAchieveInfo CMD 3402 ACHIEVEINFO 成就详情
+// 请求: achievementId(4，可选)
+// 最小完整协议：achievementId(4) + owned(4) + total(4) + rank(4)
+func handleAchieveInfo3402(ctx *gameserver.HandlerContext) {
+	achievementID := uint32(0)
+	if len(ctx.Body) >= 4 {
+		achievementID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	owned := uint32(0)
+	for _, id := range user.Achievements.List {
+		if uint32(id) == achievementID {
+			owned = 1
+			break
+		}
+	}
+	body := make([]byte, 16)
+	binary.BigEndian.PutUint32(body[0:4], achievementID)
+	binary.BigEndian.PutUint32(body[4:8], owned)
+	binary.BigEndian.PutUint32(body[8:12], uint32(user.Achievements.Total))
+	binary.BigEndian.PutUint32(body[12:16], uint32(user.Achievements.Rank))
+	ctx.GameServer.SendResponse(ctx.ClientData, 3402, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAchieveTitleList CMD 3403 ACHIEVETITLELIST 称号列表
+// 最小完整协议：curTitle(4) + count(4) + [titleId(4)]*count
+func handleAchieveTitleList(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	titleSet := map[int]struct{}{}
+	if user.CurTitle > 0 {
+		titleSet[user.CurTitle] = struct{}{}
+	}
+	for _, achievementID := range user.Achievements.List {
+		if achievementID > 0 {
+			titleSet[achievementID] = struct{}{}
+		}
+	}
+	titles := make([]int, 0, len(titleSet))
+	for titleID := range titleSet {
+		titles = append(titles, titleID)
+	}
+	sort.Ints(titles)
+	body := make([]byte, 8+len(titles)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(user.CurTitle))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(titles)))
+	off := 8
+	for _, titleID := range titles {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(titleID))
+		off += 4
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 3403, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleConferAchievement CMD 3406 CONFERACHIEVEMENT 授予成就
+// 请求: achievementId(4)
+// 响应: ret(4) + achievementId(4)
+func handleConferAchievement(ctx *gameserver.HandlerContext) {
+	achievementID := 0
+	if len(ctx.Body) >= 4 {
+		achievementID = int(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if achievementID > 0 {
+		exists := false
+		for _, id := range user.Achievements.List {
+			if id == achievementID {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			user.Achievements.List = append(user.Achievements.List, achievementID)
+		}
+		user.Achievements.Total = len(user.Achievements.List)
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[4:8], uint32(achievementID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 3406, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAchieveAndTitle CMD 3407 ACHIEVE_AND_TITLE 查询成就与当前称号
+// 最小完整协议：total(4) + rank(4) + curTitle(4) + count(4) + [achievementId(4)]*count
+func handleAchieveAndTitle(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	list := user.Achievements.List
+	body := make([]byte, 16+len(list)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(user.Achievements.Total))
+	binary.BigEndian.PutUint32(body[4:8], uint32(user.Achievements.Rank))
+	binary.BigEndian.PutUint32(body[8:12], uint32(user.CurTitle))
+	binary.BigEndian.PutUint32(body[12:16], uint32(len(list)))
+	off := 16
+	for _, achievementID := range list {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(achievementID))
+		off += 4
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 3407, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAchieveTitleEmptyExt CMD 3405 成就/称号扩展占位协议
+// 最小完整协议：ret(4) + count(4)
+func handleAchieveTitleEmptyExt(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 8)
+	ctx.GameServer.SendResponse(ctx.ClientData, 3405, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGpGhaziMaxLevel CMD 2054 GP_GHAZI_MAX_LEVEL
+// 最小完整协议：userId(4) + maxArenaWins(4) + maxStage(4)
+func handleGpGhaziMaxLevel(ctx *gameserver.HandlerContext) {
+	targetID := ctx.UserID
+	if len(ctx.Body) >= 4 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	user := ctx.GameServer.GetOrCreateUser(targetID)
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(targetID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(user.MaxArenaWins))
+	binary.BigEndian.PutUint32(body[8:12], uint32(user.MaxStage))
+	ctx.GameServer.SendResponse(ctx.ClientData, 2054, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleUserPartyImageName CMD 2055 USER_PARTY_GET_USER_IMAGE_NAME
+// 最小完整协议：userId(4) + imageNameLen(4) + imageName(N)
+func handleUserPartyImageName(ctx *gameserver.HandlerContext) {
+	targetID := ctx.UserID
+	if len(ctx.Body) >= 4 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	user := ctx.GameServer.GetOrCreateUser(targetID)
+	imageName := strconv.Itoa(user.Texture)
+	nameBytes := []byte(imageName)
+	body := make([]byte, 8+len(nameBytes))
+	binary.BigEndian.PutUint32(body[0:4], uint32(targetID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(nameBytes)))
+	copy(body[8:], nameBytes)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2055, ctx.UserID, ctx.SeqID, body)
+}
+
 // handleMailGetList CMD 2751 获取邮件列表（空列表）
 // 对齐 Lua: mail_handlers.handleMailGetList
 func handleMailGetList(ctx *gameserver.HandlerContext) {
@@ -1524,6 +3252,714 @@ func handleMailGetUnread(ctx *gameserver.HandlerContext) {
 	// unread=0
 	ctx.GameServer.SendResponse(ctx.ClientData, 2757, ctx.UserID, ctx.SeqID, body)
 }
+
+// handleRoomLogin CMD 10001 房间登录
+// 最小完整协议：userID(4) + roomID(4)
+func handleRoomLogin(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 10001, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGetRoomAddress CMD 10002 获取房间地址
+// 最小完整协议：roomID(4) + ipLen(4) + ip(N) + port(4)
+func handleGetRoomAddress(ctx *gameserver.HandlerContext) {
+	roomID := uint32(ctx.UserID)
+	if len(ctx.Body) >= 4 {
+		roomID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	ip := []byte("127.0.0.1")
+	body := make([]byte, 12+len(ip))
+	binary.BigEndian.PutUint32(body[0:4], roomID)
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(ip)))
+	copy(body[8:8+len(ip)], ip)
+	binary.BigEndian.PutUint32(body[8+len(ip):12+len(ip)], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 10002, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleLeaveRoom CMD 10003 离开房间
+// 最小完整协议：ret(4)
+func handleLeaveRoom(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 10003, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleBetrayFitment CMD 10005 出售家具
+// 请求: itemID(4) + count(4)
+// 最小完整协议：coins(4) + itemID(4) + count(4)
+func handleBetrayFitment(ctx *gameserver.HandlerContext) {
+	itemID := uint32(0)
+	count := uint32(1)
+	if len(ctx.Body) >= 4 {
+		itemID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	if len(ctx.Body) >= 8 {
+		count = binary.BigEndian.Uint32(ctx.Body[4:8])
+		if count == 0 {
+			count = 1
+		}
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	removed := uint32(0)
+	if itemID > 0 && len(user.AllFitments) > 0 {
+		newList := make([]userdb.Fitment, 0, len(user.AllFitments))
+		need := int(count)
+		for _, fitment := range user.AllFitments {
+			if fitment.ID == int(itemID) && need > 0 {
+				need--
+				removed++
+				continue
+			}
+			newList = append(newList, fitment)
+		}
+		user.AllFitments = newList
+		user.Coins += int(removed) * 10
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(user.Coins))
+	binary.BigEndian.PutUint32(body[4:8], itemID)
+	binary.BigEndian.PutUint32(body[8:12], removed)
+	ctx.GameServer.SendResponse(ctx.ClientData, 10005, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleFitmentAll CMD 10007 全部家具
+// 最小完整协议：count(4) + [id(4)]*count
+func handleFitmentAll(ctx *gameserver.HandlerContext) {
+	targetUserID := ctx.UserID
+	if len(ctx.Body) >= 4 {
+		targetUserID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	user := ctx.GameServer.GetOrCreateUser(targetUserID)
+	body := make([]byte, 4+len(user.AllFitments)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(user.AllFitments)))
+	off := 4
+	for _, fitment := range user.AllFitments {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(fitment.ID))
+		off += 4
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 10007, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleSetFitment CMD 10008 设置家具
+// 请求: itemID(4) + x(4) + y(4) + dir(4) + status(4)
+// 最小完整协议：ret(4) + itemID(4)
+func handleSetFitment(ctx *gameserver.HandlerContext) {
+	itemID := 0
+	fitment := userdb.Fitment{}
+	if len(ctx.Body) >= 4 {
+		itemID = int(binary.BigEndian.Uint32(ctx.Body[0:4]))
+		fitment.ID = itemID
+	}
+	if len(ctx.Body) >= 8 {
+		fitment.X = int(binary.BigEndian.Uint32(ctx.Body[4:8]))
+	}
+	if len(ctx.Body) >= 12 {
+		fitment.Y = int(binary.BigEndian.Uint32(ctx.Body[8:12]))
+	}
+	if len(ctx.Body) >= 16 {
+		fitment.Dir = int(binary.BigEndian.Uint32(ctx.Body[12:16]))
+	}
+	if len(ctx.Body) >= 20 {
+		fitment.Status = int(binary.BigEndian.Uint32(ctx.Body[16:20]))
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if itemID > 0 {
+		replaced := false
+		for index, current := range user.Fitments {
+			if current.ID == itemID {
+				user.Fitments[index] = fitment
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			user.Fitments = append(user.Fitments, fitment)
+		}
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[4:8], uint32(itemID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 10008, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAddEnergy CMD 10009 增加能量
+// 请求: value(4，可选)
+// 最小完整协议：userID(4) + energy(4)
+func handleAddEnergy(ctx *gameserver.HandlerContext) {
+	add := 10
+	if len(ctx.Body) >= 4 {
+		if value := int(binary.BigEndian.Uint32(ctx.Body[0:4])); value > 0 {
+			add = value
+		}
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	user.Energy += add
+	if user.Energy > 1000 {
+		user.Energy = 1000
+	}
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(user.Energy))
+	ctx.GameServer.SendResponse(ctx.ClientData, 10009, ctx.UserID, ctx.SeqID, body)
+}
+
+func buildTeamNick(gs *gameserver.GameServer, userID int64) string {
+	user := gs.GetOrCreateUser(userID)
+	if user != nil && user.Nick != "" {
+		return user.Nick
+	}
+	return fmt.Sprintf("Seer%d", userID)
+}
+
+// handleTeamCreate CMD 2910 创建战队
+func handleTeamCreate(ctx *gameserver.HandlerContext) {
+	name := fmt.Sprintf("Team%d", ctx.UserID)
+	logo := 0
+	if len(ctx.Body) >= 16 {
+		trimmed := bytes.TrimRight(ctx.Body[:16], "\x00")
+		if len(trimmed) > 0 {
+			name = string(trimmed)
+		}
+	}
+	if len(ctx.Body) >= 20 {
+		logo = int(binary.BigEndian.Uint32(ctx.Body[16:20]))
+	}
+	if ctx.GameServer.UserDB == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2910, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	if team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID); team != nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2910, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	team := ctx.GameServer.UserDB.CreateTeam(ctx.UserID, name, logo)
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(team.Logo))
+	ctx.GameServer.SendResponse(ctx.ClientData, 2910, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamAdd CMD 2911 申请加入战队
+func handleTeamAdd(ctx *gameserver.HandlerContext) {
+	teamID := int64(0)
+	if len(ctx.Body) >= 4 {
+		teamID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	team := ctx.GameServer.UserDB.GetTeam(teamID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2911, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	for _, applicant := range team.Applicants {
+		if applicant == ctx.UserID {
+			body := make([]byte, 8)
+			binary.BigEndian.PutUint32(body[0:4], uint32(teamID))
+			binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+			ctx.GameServer.SendResponse(ctx.ClientData, 2911, ctx.UserID, ctx.SeqID, body)
+			return
+		}
+	}
+	team.Applicants = append(team.Applicants, ctx.UserID)
+	ctx.GameServer.UserDB.SaveTeam(team)
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(teamID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 2911, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamAnswer CMD 2912 审批加入战队
+func handleTeamAnswer(ctx *gameserver.HandlerContext) {
+	teamID := int64(0)
+	targetID := int64(0)
+	accept := uint32(1)
+	if len(ctx.Body) >= 4 {
+		teamID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	if len(ctx.Body) >= 8 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[4:8]))
+	}
+	if len(ctx.Body) >= 12 {
+		accept = binary.BigEndian.Uint32(ctx.Body[8:12])
+	}
+	team := ctx.GameServer.UserDB.GetTeam(teamID)
+	if team == nil || team.LeaderID != ctx.UserID {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2912, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	newApplicants := make([]int64, 0, len(team.Applicants))
+	for _, applicant := range team.Applicants {
+		if applicant != targetID {
+			newApplicants = append(newApplicants, applicant)
+		}
+	}
+	team.Applicants = newApplicants
+	if accept != 0 && targetID > 0 {
+		alreadyMember := false
+		for _, member := range team.Members {
+			if member.UserID == targetID {
+				alreadyMember = true
+				break
+			}
+		}
+		if !alreadyMember {
+			team.Members = append(team.Members, userdb.TeamMember{
+				UserID:   targetID,
+				Nick:     buildTeamNick(ctx.GameServer, targetID),
+				Role:     0,
+				JoinTime: time.Now().Unix(),
+			})
+		}
+	}
+	ctx.GameServer.UserDB.SaveTeam(team)
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(teamID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(targetID))
+	binary.BigEndian.PutUint32(body[8:12], accept)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2912, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamQuit CMD 2914 退出战队
+func handleTeamQuit(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2914, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	newMembers := make([]userdb.TeamMember, 0, len(team.Members))
+	for _, member := range team.Members {
+		if member.UserID != ctx.UserID {
+			newMembers = append(newMembers, member)
+		}
+	}
+	team.Members = newMembers
+	if team.LeaderID == ctx.UserID && len(team.Members) > 0 {
+		team.LeaderID = team.Members[0].UserID
+		team.Members[0].Role = 1
+	}
+	ctx.GameServer.UserDB.SaveTeam(team)
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 2914, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamInform CMD 2913 战队通知/公告
+func handleTeamInform(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2913, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	if len(ctx.Body) > 0 && team.LeaderID == ctx.UserID {
+		team.Notice = string(bytes.TrimRight(ctx.Body, "\x00"))
+		ctx.GameServer.UserDB.SaveTeam(team)
+	}
+	noticeBytes := []byte(team.Notice)
+	body := make([]byte, 8+len(noticeBytes))
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(noticeBytes)))
+	copy(body[8:], noticeBytes)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2913, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamGetInfo CMD 2917 获取战队信息
+func handleTeamGetInfo(ctx *gameserver.HandlerContext) {
+	teamID := int64(0)
+	if len(ctx.Body) >= 4 {
+		teamID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	if teamID == 0 {
+		if team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID); team != nil {
+			teamID = team.ID
+		}
+	}
+	team := ctx.GameServer.UserDB.GetTeam(teamID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2917, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	nameBytes := []byte(team.Name)
+	noticeBytes := []byte(team.Notice)
+	body := make([]byte, 24+len(nameBytes)+len(noticeBytes))
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(team.LeaderID))
+	binary.BigEndian.PutUint32(body[8:12], uint32(team.Logo))
+	binary.BigEndian.PutUint32(body[12:16], uint32(len(team.Members)))
+	binary.BigEndian.PutUint32(body[16:20], uint32(len(nameBytes)))
+	copy(body[20:20+len(nameBytes)], nameBytes)
+	off := 20 + len(nameBytes)
+	binary.BigEndian.PutUint32(body[off:off+4], uint32(len(noticeBytes)))
+	off += 4
+	copy(body[off:], noticeBytes)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2917, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamGetMemberList CMD 2918 战队成员列表
+func handleTeamGetMemberList(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2918, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(team.Members)))
+	for _, member := range team.Members {
+		entry := make([]byte, 28)
+		binary.BigEndian.PutUint32(entry[0:4], uint32(member.UserID))
+		copy(entry[4:20], []byte(member.Nick))
+		binary.BigEndian.PutUint32(entry[20:24], uint32(member.Role))
+		binary.BigEndian.PutUint32(entry[24:28], uint32(ctx.GameServer.UserDB.GetUserServer(member.UserID)))
+		body = append(body, entry...)
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 2918, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamGetLogoInfo CMD 2928 战队队徽信息
+func handleTeamGetLogoInfo(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2928, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(team.Logo))
+	binary.BigEndian.PutUint32(body[8:12], uint32(len(team.Members)))
+	ctx.GameServer.SendResponse(ctx.ClientData, 2928, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamChat CMD 2929 战队聊天
+func handleTeamChat(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2929, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	msg := string(bytes.TrimRight(ctx.Body, "\x00"))
+	chat := userdb.TeamChatMessage{UserID: ctx.UserID, Nick: buildTeamNick(ctx.GameServer, ctx.UserID), Text: msg, Time: time.Now().Unix()}
+	team.ChatHistory = append(team.ChatHistory, chat)
+	if len(team.ChatHistory) > 20 {
+		team.ChatHistory = team.ChatHistory[len(team.ChatHistory)-20:]
+	}
+	ctx.GameServer.UserDB.SaveTeam(team)
+	textBytes := []byte(msg)
+	body := make([]byte, 16+len(textBytes))
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], uint32(len(textBytes)))
+	copy(body[12:12+len(textBytes)], textBytes)
+	binary.BigEndian.PutUint32(body[12+len(textBytes):16+len(textBytes)], uint32(chat.Time))
+	ctx.GameServer.SendResponse(ctx.ClientData, 2929, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleArmUpWork CMD 2962 武装升级工作
+// 最小完整协议：teamID(4) + workState(4)
+func handleArmUpWork(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2962, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2962, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleArmUpWorkLog CMD 2963 武装升级工作日志
+// 最小完整协议：teamID(4) + count(4)
+func handleArmUpWorkLog(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2963, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2963, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKSign CMD 4001 战队PK签到
+func handleTeamPKSign(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4001, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], 1)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4001, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKRegister CMD 4002 战队PK报名
+func handleTeamPKRegister(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4002, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(team.Members)))
+	ctx.GameServer.SendResponse(ctx.ClientData, 4002, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKJoin CMD 4003 战队PK加入
+func handleTeamPKJoin(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4003, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], 1)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4003, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKNote CMD 4007 战队PK通知
+func handleTeamPKNote(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4007, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4007, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKTeamCharts CMD 4101 战队排行榜
+func handleTeamPKTeamCharts(ctx *gameserver.HandlerContext) {
+	if ctx.GameServer.UserDB == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4101, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	teams := make([]*userdb.Team, 0)
+	for _, gameData := range ctx.GameServer.UserDB.GetAllGameData() {
+		if gameData == nil {
+			continue
+		}
+	}
+	seen := map[int64]struct{}{}
+	for _, data := range ctx.GameServer.UserDB.GetAllGameData() {
+		_ = data
+	}
+	for _, candidateID := range []int64{ctx.UserID} {
+		if team := ctx.GameServer.UserDB.FindTeamByUserID(candidateID); team != nil {
+			if _, ok := seen[team.ID]; !ok {
+				seen[team.ID] = struct{}{}
+				teams = append(teams, team)
+			}
+		}
+	}
+	currentTeam := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if currentTeam != nil {
+		teams = []*userdb.Team{currentTeam}
+	}
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(teams)))
+	for index, team := range teams {
+		entry := make([]byte, 32)
+		binary.BigEndian.PutUint32(entry[0:4], uint32(index+1))
+		binary.BigEndian.PutUint32(entry[4:8], uint32(team.ID))
+		copy(entry[8:24], []byte(team.Name))
+		binary.BigEndian.PutUint32(entry[24:28], uint32(len(team.Members)))
+		binary.BigEndian.PutUint32(entry[28:32], uint32(team.Logo))
+		body = append(body, entry...)
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 4101, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKShot CMD 4004 战队PK射击
+func handleTeamPKShot(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4004, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	var targetID uint32
+	if len(ctx.Body) >= 4 {
+		targetID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], targetID)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4004, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKWin CMD 4006 战队PK胜利
+func handleTeamPKWin(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4006, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 4006, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKFreeze CMD 4008 战队PK冻结
+func handleTeamPKFreeze(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4008, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	var freezeState uint32
+	if len(ctx.Body) >= 4 {
+		freezeState = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], freezeState)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4008, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKMemberCharts CMD 4102 战队成员排行榜
+func handleTeamPKMemberCharts(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4102, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(team.Members)))
+	for index, member := range team.Members {
+		entry := make([]byte, 28)
+		binary.BigEndian.PutUint32(entry[0:4], uint32(index+1))
+		binary.BigEndian.PutUint32(entry[4:8], uint32(member.UserID))
+		copy(entry[8:24], []byte(member.Nick))
+		binary.BigEndian.PutUint32(entry[24:28], uint32(member.Role))
+		body = append(body, entry...)
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 4102, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKPetFight CMD 2481 战队PK精灵战
+func handleTeamPKPetFight(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2481, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], 1)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2481, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKShotResult CMD 4005 战队PK射击结果
+func handleTeamPKShotResult(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4005, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], 1)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4005, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKState CMD 4009 战队PK状态
+func handleTeamPKState(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4009, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4009, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKScore CMD 4010 战队PK积分
+func handleTeamPKScore(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4010, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(team.Members)))
+	ctx.GameServer.SendResponse(ctx.ClientData, 4010, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKRound CMD 4011 战队PK回合信息
+func handleTeamPKRound(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4011, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], 1)
+	binary.BigEndian.PutUint32(body[8:12], uint32(time.Now().Unix()))
+	ctx.GameServer.SendResponse(ctx.ClientData, 4011, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleTeamPKReward CMD 4012 战队PK奖励
+func handleTeamPKReward(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 4012, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 4012, ctx.UserID, ctx.SeqID, body)
+}
+
+func simpleTeamPKBody(ctx *gameserver.HandlerContext, cmd int32, extra uint32) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, cmd, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(team.ID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[8:12], extra)
+	ctx.GameServer.SendResponse(ctx.ClientData, cmd, ctx.UserID, ctx.SeqID, body)
+}
+
+func handleTeamPKMatch(ctx *gameserver.HandlerContext)      { simpleTeamPKBody(ctx, 4013, 0) }
+func handleTeamPKResult(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4014, 0) }
+func handleTeamPKMemberState(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4017, 0) }
+func handleTeamPKBattleInfo(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4018, 0) }
+func handleTeamPKBattleStart(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4019, 1) }
+func handleTeamPKBattleEnd(ctx *gameserver.HandlerContext)  { simpleTeamPKBody(ctx, 4020, 1) }
+func handleTeamPKReport(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4022, 0) }
+func handleTeamPKHistory(ctx *gameserver.HandlerContext)    { simpleTeamPKBody(ctx, 4023, 0) }
+func handleTeamPKSeason(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4024, 0) }
+func handleTeamPKRewardList(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4025, 0) }
 
 // handleGetRelationList CMD 2150 获取好友/黑名单列表
 // 对齐 Lua: friend_handlers.handleGetRelationList
@@ -1762,13 +4198,14 @@ func handleFriendRemove(ctx *gameserver.HandlerContext) {
 
 // handleBlackAdd CMD 2154 添加黑名单
 // 请求: targetID(4)
-// 响应: 空
+// 响应: userID(4) - 被加入黑名单的用户ID（前端只读这一项）
 func handleBlackAdd(ctx *gameserver.HandlerContext) {
 	var targetID int64
 	if len(ctx.Body) >= 4 {
 		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
 	}
 
+	var success bool
 	if targetID > 0 && ctx.GameServer.UserDB != nil {
 		success, msg := ctx.GameServer.UserDB.AddBlacklist(ctx.UserID, targetID)
 		if success {
@@ -1776,13 +4213,20 @@ func handleBlackAdd(ctx *gameserver.HandlerContext) {
 			// 更新内存中的用户数据
 			user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 			user.Blacklist = ctx.GameServer.UserDB.GetBlacklist(ctx.UserID)
+			// 按前端 RelationManager 逻辑，拉黑会从好友列表中移除该用户
+			_ = ctx.GameServer.UserDB.RemoveFriend(ctx.UserID, targetID)
+			user.Friends = ctx.GameServer.UserDB.GetFriends(ctx.UserID)
 		} else {
 			logger.Info(fmt.Sprintf("[2154] 添加黑名单失败: UID=%d TargetID=%d Reason=%s", ctx.UserID, targetID, msg))
 		}
 	}
 
-	// 响应：空（与 Lua 版本一致）
-	ctx.GameServer.SendResponse(ctx.ClientData, 2154, ctx.UserID, ctx.SeqID, []byte{})
+	// 响应：返回被拉黑的用户ID，供前端 RelationManager.addBlack 的回包解析
+	body := make([]byte, 4)
+	if success {
+		binary.BigEndian.PutUint32(body, uint32(targetID))
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 2154, ctx.UserID, ctx.SeqID, body)
 }
 
 // handleBlackRemove CMD 2155 移除黑名单
@@ -1887,23 +4331,658 @@ func handleSeeOnline(ctx *gameserver.HandlerContext) {
 // handleRequestOut CMD 2158 发送请求
 // 响应: 空
 func handleRequestOut(ctx *gameserver.HandlerContext) {
-	// 响应：空（与 Lua 版本一致）
+	// 请求: targetID(4)
+	var targetID int64
+	if len(ctx.Body) >= 4 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+
+	if targetID <= 0 || targetID == ctx.UserID {
+		return
+	}
+
+	// 若对方把我拉黑，则不推送邀请（与“黑名单屏蔽社交消息”一致）
+	if ctx.GameServer.UserDB != nil && ctx.GameServer.UserDB.IsBlacklisted(targetID, ctx.UserID) {
+		logger.Info(fmt.Sprintf("[2158] 邀请被黑名单拦截: from=%d to=%d", ctx.UserID, targetID))
+		// 友好提示：对方在我的黑名单中，沿用 103102 提示文案
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2158, ctx.UserID, ctx.SeqID, 103102)
+		return
+	}
+
+	targetClient := ctx.GameServer.GetClientByUserID(targetID)
+	if targetClient == nil || !targetClient.LoggedIn {
+		// 对方不在线：返回标准错误码 10006，让 ParseSocketError 弹出“对方不在线”
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2158, ctx.UserID, ctx.SeqID, 10006)
+		logger.Info(fmt.Sprintf("[2158] 对方不在线: from=%d to=%d", ctx.UserID, targetID))
+		return
+	}
+
+	fromUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	fromNick := fromUser.Nick
+	if fromNick == "" {
+		fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+	}
+
+	mapID := fromUser.MapID
+	if mapID <= 0 {
+		mapID = 1
+	}
+	// 客户端收到 REQUEST_OUT 后展示 mapName（基地场景会忽略 mapName）
+	mapName := fmt.Sprintf("地图%d", mapID)
+
+	// 记录邀请（用于后续 2159 校验/取回 mapID）
+	requestOutInvitesMu.Lock()
+	m, ok := requestOutInvites[targetID]
+	if !ok {
+		m = make(map[int64]requestOutInvite)
+		requestOutInvites[targetID] = m
+	}
+	m[ctx.UserID] = requestOutInvite{
+		MapID:     uint32(mapID),
+		MapName:   mapName,
+		CreatedAt: time.Now(),
+	}
+	requestOutInvitesMu.Unlock()
+
+	// 推送 8001 INFORM 给被邀请方：type=2158(REQUEST_OUT)
+	informBody := buildInformInfoBody(2158, ctx.UserID, fromNick, 0, 1, 0, uint32(mapID), mapName)
+	ctx.GameServer.SendResponse(targetClient, 8001, targetID, 0, informBody)
+	logger.Info(fmt.Sprintf("[2158] 邀请前往地图: from=%d to=%d mapID=%d", ctx.UserID, targetID, mapID))
+
+	// 成功场景下给发起方一个空 ACK（原版 2158 没有定义包体结构，客户端也不解析）
 	ctx.GameServer.SendResponse(ctx.ClientData, 2158, ctx.UserID, ctx.SeqID, []byte{})
 }
 
 // handleRequestAnswer CMD 2159 请求回复
 // 响应: 空
 func handleRequestAnswer(ctx *gameserver.HandlerContext) {
-	// 响应：空（与 Lua 版本一致）
+	// 请求: inviterID(4) + accept(4)  accept: 1=接受, 0=拒绝
+	var inviterID int64
+	var accept uint32
+	if len(ctx.Body) >= 8 {
+		inviterID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+		accept = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+
+	// 回包：前端只用它作为“已收到 ACK”的信号（不读取包体）
+	// 这里返回空包即可触发 addCmdListener 回调
 	ctx.GameServer.SendResponse(ctx.ClientData, 2159, ctx.UserID, ctx.SeqID, []byte{})
+
+	if inviterID <= 0 || inviterID == ctx.UserID {
+		return
+	}
+
+	// 清理/读取邀请缓存（若存在）
+	var invitedMapID uint32
+	var invitedMapName string
+	requestOutInvitesMu.Lock()
+	if m, ok := requestOutInvites[ctx.UserID]; ok {
+		if entry, ok2 := m[inviterID]; ok2 {
+			// 过期则当作无效邀请
+			if time.Since(entry.CreatedAt) <= requestOutInviteTTL {
+				invitedMapID = entry.MapID
+				invitedMapName = entry.MapName
+			}
+			delete(m, inviterID)
+		}
+		if len(m) == 0 {
+			delete(requestOutInvites, ctx.UserID)
+		}
+	}
+	requestOutInvitesMu.Unlock()
+
+	// 推送 8001 INFORM 给邀请方：type=2159(REQUEST_ANSWER)，from=应答者
+	fromUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	fromNick := fromUser.Nick
+	if fromNick == "" {
+		fromNick = fmt.Sprintf("Seer%d", ctx.UserID)
+	}
+	fromMapID := fromUser.MapID
+	if fromMapID <= 0 {
+		fromMapID = 1
+	}
+	fromMapName := fmt.Sprintf("地图%d", fromMapID)
+
+	if inviterClient := ctx.GameServer.GetClientByUserID(inviterID); inviterClient != nil && inviterClient.LoggedIn {
+		informBody := buildInformInfoBody(2159, ctx.UserID, fromNick, accept, 1, 0, uint32(fromMapID), fromMapName)
+		ctx.GameServer.SendResponse(inviterClient, 8001, inviterID, 0, informBody)
+		logger.Info(fmt.Sprintf("[2159] 邀请应答推送: from=%d to=%d accept=%d invitedMapID=%d", ctx.UserID, inviterID, accept, invitedMapID))
+	} else {
+		logger.Info(fmt.Sprintf("[2159] 邀请方不在线，无法推送应答: from=%d to=%d accept=%d invitedMapID=%d invitedMapName=%s", ctx.UserID, inviterID, accept, invitedMapID, invitedMapName))
+	}
 }
 
-// handleGetExchangeInfo CMD 70001 获取交换/荣誉信息（当前返回 0）
-// 对齐 Lua: misc_handlers.handleGetExchangeInfo
-func handleGetExchangeInfo(ctx *gameserver.HandlerContext) {
+// handleGetRequestAward CMD 2064 请求联络官奖励
+// AS: CopyRegisterCodePanel 仅监听是否有回包，不读取任何字段，收到后直接弹出提示
+// 这里按 Lua 约定返回 4 字节 0，表示领取成功（奖励发放逻辑由 GM/后续版本补充）
+func handleGetRequestAward(ctx *gameserver.HandlerContext) {
 	body := make([]byte, 4)
-	// honorValue=0
+	ctx.GameServer.SendResponse(ctx.ClientData, 2064, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGetExchangeInfo CMD 70001 获取兑换信息
+// 响应: count(4) + [exchangeID(4)+exchangeNum(4)]*count
+// 对齐前端 TaskMain.getExchangeInfo + ExchangeInfo(IDataInput)
+func handleGetExchangeInfo(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user.ExchangeInfo == nil {
+		user.ExchangeInfo = map[int]int{}
+	}
+	// 输出稳定顺序，避免前端列表抖动
+	ids := make([]int, 0, len(user.ExchangeInfo))
+	for id := range user.ExchangeInfo {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	body := make([]byte, 4+len(ids)*8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(ids)))
+	off := 4
+	for _, id := range ids {
+		num := user.ExchangeInfo[id]
+		if num < 0 {
+			num = 0
+		}
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(id))
+		binary.BigEndian.PutUint32(body[off+4:off+8], uint32(num))
+		off += 8
+	}
 	ctx.GameServer.SendResponse(ctx.ClientData, 70001, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleComplainUser CMD 7001 举报用户
+// 请求体格式较复杂（文本等），这里按 Lua 服处理：仅记录日志并返回空包，避免客户端卡死。
+func handleComplainUser(ctx *gameserver.HandlerContext) {
+	logger.Info(fmt.Sprintf("[7001] 用户举报: UID=%d BodyLen=%d Hex=% X", ctx.UserID, len(ctx.Body), ctx.Body))
+	ctx.GameServer.SendResponse(ctx.ClientData, 7001, ctx.UserID, ctx.SeqID, []byte{})
+}
+
+// handleUserContribute CMD 7002 用户贡献（建议/反馈邮件）
+// 前端 Service.contribute 发送: type(4) + len(4) + title[120] + content[可变]。
+// 这里仅记录到日志，返回空包，并由前端弹出“邮件已发送成功！”。
+func handleUserContribute(ctx *gameserver.HandlerContext) {
+	logger.Info(fmt.Sprintf("[7002] 用户建议: UID=%d BodyLen=%d Hex(head64)=% X", ctx.UserID, len(ctx.Body), ctx.Body[:min(64, len(ctx.Body))]))
+	ctx.GameServer.SendResponse(ctx.ClientData, 7002, ctx.UserID, ctx.SeqID, []byte{})
+}
+
+// handleUserIndagate CMD 7003 用户调查投票
+// 前端 VoteManager.sendVote 发送: type(4)=1 + voteID(4) + bitMask(4)。
+// 这里简单记录一次投票并返回空包。
+func handleUserIndagate(ctx *gameserver.HandlerContext) {
+	logger.Info(fmt.Sprintf("[7003] 用户投票: UID=%d BodyLen=%d Hex=% X", ctx.UserID, len(ctx.Body), ctx.Body))
+	ctx.GameServer.SendResponse(ctx.ClientData, 7003, ctx.UserID, ctx.SeqID, []byte{})
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// syncActivePetHPFromBattle 将当前战斗中的出战精灵体力回写到背包数据，保证战斗结束后背包显示的血量与实际一致。
+// - 若 CurHP 为 0 或未设置，视为满血；>0 且不超过 MaxHP 时表示战后剩余体力。
+func syncActivePetHPFromBattle(ctx *gameserver.HandlerContext, battle *gameserver.BattleState, user *userdb.GameData) {
+	if ctx == nil || battle == nil || user == nil {
+		return
+	}
+	if len(user.Pets) == 0 {
+		return
+	}
+	activeIdx := 0
+	if battle.ActivePetIndex > 0 && battle.ActivePetIndex < len(user.Pets) {
+		activeIdx = battle.ActivePetIndex
+	}
+	if activeIdx < 0 || activeIdx >= len(user.Pets) {
+		return
+	}
+	activePet := &user.Pets[activeIdx]
+	petMgr := gamepets.GetInstance()
+	ev := gamepets.ClampAndCapEV(activePet.GetEVStats())
+	stats := petMgr.GetStats(activePet.ID, activePet.Level, activePet.DV, ev, activePet.Nature)
+
+	hpAfter := int(battle.PlayerHP)
+	if hpAfter < 0 {
+		hpAfter = 0
+	}
+	if hpAfter > stats.MaxHP {
+		hpAfter = stats.MaxHP
+	}
+	activePet.CurHP = hpAfter
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+}
+
+// handleInviteJoinGroup CMD 7501 邀请加入群组
+// 简化实现：仅 ACK，不做真正群组逻辑，避免前端流程卡死。
+func handleInviteJoinGroup(ctx *gameserver.HandlerContext) {
+	ctx.GameServer.SendResponse(ctx.ClientData, 7501, ctx.UserID, ctx.SeqID, []byte{})
+}
+
+// handleReplyJoinGroup CMD 7502 回复加入群组
+// 简化实现：仅 ACK。
+func handleReplyJoinGroup(ctx *gameserver.HandlerContext) {
+	ctx.GameServer.SendResponse(ctx.ClientData, 7502, ctx.UserID, ctx.SeqID, []byte{})
+}
+
+// handleGetHonorValue CMD 70003 荣誉值
+// 响应: honor(4)
+func handleGetHonorValue(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	honor := user.HonorValue
+	if honor < 0 {
+		honor = 0
+	}
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(honor))
+	ctx.GameServer.SendResponse(ctx.ClientData, 70003, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleExchangeItem CMD 70002 兑换道具（荣誉兑换）
+// 请求：exchangeID(4) + [count(4)]（部分前端可能只发 4 字节）
+// 响应：success(4)（1=成功 0=失败）。兑换明细由前端自行刷新 70001/70003 或通过 ALERT 提示。
+func handleExchangeItem(ctx *gameserver.HandlerContext) {
+	var exchangeID uint32
+	var count uint32 = 1
+	if len(ctx.Body) >= 4 {
+		exchangeID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	if len(ctx.Body) >= 8 {
+		count = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+	if count == 0 {
+		count = 1
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user.ExchangeInfo == nil {
+		user.ExchangeInfo = map[int]int{}
+	}
+
+	// 简化规则：
+	// - exchangeID 直接当作“目标道具 itemID”
+	// - 单次固定消耗 10 荣誉、发放 1 个道具（count 表示重复次数）
+	const honorCostPer = 10
+	success := uint32(0)
+	if exchangeID > 0 && honorCostPer > 0 {
+		totalCost := int(count) * honorCostPer
+		if totalCost < 0 {
+			totalCost = 0
+		}
+		if user.HonorValue < 0 {
+			user.HonorValue = 0
+		}
+		if user.HonorValue >= totalCost {
+			user.HonorValue -= totalCost
+			itemID := int(exchangeID)
+			if user.Items == nil {
+				user.Items = make(map[string]userdb.Item)
+			}
+			key := strconv.Itoa(itemID)
+			it := user.Items[key]
+			it.Count += int(count)
+			user.Items[key] = it
+			addClothIfNeeded(user, itemID)
+			user.ExchangeInfo[int(exchangeID)] += int(count)
+			success = 1
+
+			// 提示弹窗（ALERT 80002）：按 AlertInfo 格式 msgLen(4)+msgBytes
+			msg := fmt.Sprintf("兑换成功：%s x%d（消耗荣誉 %d）", GetItemName(itemID), count, totalCost)
+			msgBytes := []byte(msg)
+			notify := make([]byte, 4+len(msgBytes))
+			binary.BigEndian.PutUint32(notify[0:4], uint32(len(msgBytes)))
+			copy(notify[4:], msgBytes)
+			ctx.GameServer.SendResponse(ctx.ClientData, 80002, ctx.UserID, 0, notify)
+
+			if ctx.GameServer.UserDB != nil {
+				ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+			}
+		} else {
+			msg := "荣誉不足，无法兑换"
+			msgBytes := []byte(msg)
+			notify := make([]byte, 4+len(msgBytes))
+			binary.BigEndian.PutUint32(notify[0:4], uint32(len(msgBytes)))
+			copy(notify[4:], msgBytes)
+			ctx.GameServer.SendResponse(ctx.ClientData, 80002, ctx.UserID, 0, notify)
+		}
+	}
+
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], success)
+	ctx.GameServer.SendResponse(ctx.ClientData, 70002, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGetCurrentGoldNieoBean CMD 80007 获取优惠兑换所需赛尔豆
+// 响应：needCoins(4)
+func handleGetCurrentGoldNieoBean(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	// 优惠兑换：第1/2/3次分别 20000/40000/60000，之后固定 60000
+	times := user.GoldDiscountExchangeTimes
+	if times < 0 {
+		times = 0
+	}
+	cost := 20000 * (times + 1)
+	if cost > 60000 {
+		cost = 60000
+	}
+	if cost < 0 {
+		cost = 0
+	}
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(cost))
+	ctx.GameServer.SendResponse(ctx.ClientData, 80007, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleExchangeGoldNieoBean CMD 70004 金豆兑换（用于 NPC 罗开）
+// 请求：amount(4)：
+// - 0=优惠兑换：消耗赛尔豆（随次数递增），固定获得 30 金豆
+// - 1/5/10=直接兑换：分别消耗 1万/5万/10万 赛尔豆，获得对应数量金豆
+// 响应：type(4)+gold(4)。前端 ItemCmdListener.onExchangeGold 按此解析。
+func handleExchangeGoldNieoBean(ctx *gameserver.HandlerContext) {
+	var req uint32
+	if len(ctx.Body) >= 4 {
+		req = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+
+	typeFlag := uint32(0)
+	goldAdd := uint32(0)
+	needCoins := 0
+
+	if user.Coins < 0 {
+		user.Coins = 0
+	}
+	if user.Gold < 0 {
+		user.Gold = 0
+	}
+
+	switch req {
+	case 0:
+		// 优惠兑换：固定得 30 金豆，消耗 20000/40000/60000...
+		times := user.GoldDiscountExchangeTimes
+		if times < 0 {
+			times = 0
+		}
+		needCoins = 20000 * (times + 1)
+		if needCoins > 60000 {
+			needCoins = 60000
+		}
+		if needCoins < 0 {
+			needCoins = 0
+		}
+		if user.Coins >= needCoins && needCoins > 0 {
+			user.Coins -= needCoins
+			user.Gold += 30
+			user.GoldDiscountExchangeTimes++
+			goldAdd = 30
+			// 让前端扣币：1/2/3 -> 20000/40000/60000（与 ItemCmdListener 一致）
+			if user.GoldDiscountExchangeTimes <= 1 {
+				typeFlag = 1
+			} else if user.GoldDiscountExchangeTimes == 2 {
+				typeFlag = 2
+			} else {
+				typeFlag = 3
+			}
+		}
+	case 1, 5, 10:
+		// 直接兑换：按请求数兑换金豆
+		n := int(req)
+		needCoins = 0
+		if n == 1 {
+			needCoins = 10000
+		} else if n == 5 {
+			needCoins = 50000
+		} else if n == 10 {
+			needCoins = 100000
+		}
+		if needCoins > 0 && user.Coins >= needCoins {
+			user.Coins -= needCoins
+			user.Gold += n
+			goldAdd = uint32(n)
+			typeFlag = 0 // 前端不会自动扣币（此分支用提示弹窗兜底）
+
+			msg := fmt.Sprintf("兑换成功：获得金豆 %d（消耗赛尔豆 %d）", n, needCoins)
+			msgBytes := []byte(msg)
+			notify := make([]byte, 4+len(msgBytes))
+			binary.BigEndian.PutUint32(notify[0:4], uint32(len(msgBytes)))
+			copy(notify[4:], msgBytes)
+			ctx.GameServer.SendResponse(ctx.ClientData, 80002, ctx.UserID, 0, notify)
+		} else {
+			msg := "赛尔豆不足，无法兑换金豆"
+			msgBytes := []byte(msg)
+			notify := make([]byte, 4+len(msgBytes))
+			binary.BigEndian.PutUint32(notify[0:4], uint32(len(msgBytes)))
+			copy(notify[4:], msgBytes)
+			ctx.GameServer.SendResponse(ctx.ClientData, 80002, ctx.UserID, 0, notify)
+		}
+	default:
+		// 未知参数：返回 0
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], typeFlag)
+	binary.BigEndian.PutUint32(body[4:8], goldAdd)
+	ctx.GameServer.SendResponse(ctx.ClientData, 70004, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGetAchieveTitle CMD 70005 成就称号
+// 通常由服务端在达成条件后主动推送，响应体：titleID(4)。
+func handleGetAchieveTitle(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 70005, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleActiveAchieve CMD 80003 激活成就
+// 请求：achieveID(4)。这里把 achieveID 记录到 GameData.Achievements.List，并推送称号提示（70005）与刷新列表（80004）。
+func handleActiveAchieve(ctx *gameserver.HandlerContext) {
+	var achieveID uint32
+	if len(ctx.Body) >= 4 {
+		achieveID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user.Achievements.List == nil {
+		user.Achievements.List = []int{}
+	}
+	if achieveID > 0 {
+		exists := false
+		for _, id := range user.Achievements.List {
+			if id == int(achieveID) {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			user.Achievements.List = append(user.Achievements.List, int(achieveID))
+			user.Achievements.Total = len(user.Achievements.List)
+		}
+	}
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+	// ACK（前端多数只关心收到回包）
+	ctx.GameServer.SendResponse(ctx.ClientData, 80003, ctx.UserID, ctx.SeqID, []byte{})
+
+	// 推送称号提示（用 achieveID 作为 titleID，便于前端 AchieveXMLInfo.getTitle() 显示）
+	if achieveID > 0 {
+		tBody := make([]byte, 4)
+		binary.BigEndian.PutUint32(tBody[0:4], achieveID)
+		ctx.GameServer.SendResponse(ctx.ClientData, 70005, ctx.UserID, 0, tBody)
+	}
+	// 推送成就列表刷新
+	handleAchieveList80004(&gameserver.HandlerContext{
+		GameServer: ctx.GameServer,
+		ClientData: ctx.ClientData,
+		UserID:     ctx.UserID,
+		SeqID:      0,
+		Body:       nil,
+		CmdID:      80004,
+	})
+}
+
+// handleAchieveList80004 CMD 80004 成就列表（AchieveListInfo）
+// 响应：count(4) + [achieveID(4)]*count
+func handleAchieveList80004(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	list := user.Achievements.List
+	if list == nil {
+		list = []int{}
+	}
+	body := make([]byte, 4+len(list)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(list)))
+	for i, id := range list {
+		if id < 0 {
+			id = 0
+		}
+		off := 4 + i*4
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(id))
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 80004, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAchieveCurrent CMD 80005 当前成就（占位）
+// 响应：current(4)
+func handleAchieveCurrent(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 80005, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleAchieveInfo CMD 80006 成就详情（占位）
+// 响应：0(4)
+func handleAchieveInfo(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 80006, ctx.UserID, ctx.SeqID, body)
+}
+
+// handlePetGeneRecast CMD 70000 精灵基因重铸
+// 请求：mainCatchTime(4) + subCatchTime(4)
+// 响应：flag(4) + [newPetId(4)+newPetCatchTime(4)]（flag=1 时存在）
+func handlePetGeneRecast(ctx *gameserver.HandlerContext) {
+	var mainCT, subCT uint32
+	if len(ctx.Body) >= 4 {
+		mainCT = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	if len(ctx.Body) >= 8 {
+		subCT = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user == nil {
+		ctx.GameServer.SendResponse(ctx.ClientData, 70000, ctx.UserID, ctx.SeqID, make([]byte, 4))
+		return
+	}
+	if user.Coins < 0 {
+		user.Coins = 0
+	}
+	const cost = 5000
+	if int(user.Coins) < cost || mainCT == 0 || subCT == 0 {
+		body := make([]byte, 4)
+		binary.BigEndian.PutUint32(body[0:4], 0)
+		ctx.GameServer.SendResponse(ctx.ClientData, 70000, ctx.UserID, ctx.SeqID, body)
+		return
+	}
+
+	// 找到两只精灵
+	var p1, p2 *userdb.Pet
+	for i := range user.Pets {
+		if uint32(user.Pets[i].CatchTime) == mainCT {
+			p1 = &user.Pets[i]
+		} else if uint32(user.Pets[i].CatchTime) == subCT {
+			p2 = &user.Pets[i]
+		}
+	}
+	if p1 == nil || p2 == nil {
+		body := make([]byte, 4)
+		binary.BigEndian.PutUint32(body[0:4], 0)
+		ctx.GameServer.SendResponse(ctx.ClientData, 70000, ctx.UserID, ctx.SeqID, body)
+		return
+	}
+
+	// 扣费
+	user.Coins -= cost
+	if user.Coins < 0 {
+		user.Coins = 0
+	}
+
+	petMgr := gamepets.GetInstance()
+	mainInfo := petMgr.Get(p1.ID)
+	subInfo := petMgr.Get(p2.ID)
+	targetClass := 0
+	if mainInfo != nil && mainInfo.PetClass > 0 {
+		targetClass = mainInfo.PetClass
+	} else if subInfo != nil && subInfo.PetClass > 0 {
+		targetClass = subInfo.PetClass
+	}
+
+	// 按 PetClass 随机抽一个同类精灵作为新精灵（优先选第一形态 EvolvesFrom=0）
+	candidates := []int{}
+	all := petMgr.All()
+	for _, pi := range all {
+		if pi == nil || pi.PetClass <= 0 {
+			continue
+		}
+		if targetClass > 0 && pi.PetClass != targetClass {
+			continue
+		}
+		if pi.EvolvesFrom == 0 {
+			candidates = append(candidates, pi.ID)
+		}
+	}
+	if len(candidates) == 0 {
+		// 兜底：用主宠 ID
+		candidates = append(candidates, p1.ID)
+	}
+	newPetID := candidates[rand.Intn(len(candidates))]
+	newCatchTime := int(time.Now().Unix())
+
+	// 删除原两只精灵（按 catchTime）
+	newList := make([]userdb.Pet, 0, len(user.Pets))
+	for _, p := range user.Pets {
+		if uint32(p.CatchTime) == mainCT || uint32(p.CatchTime) == subCT {
+			continue
+		}
+		newList = append(newList, p)
+	}
+	user.Pets = newList
+
+	// 新精灵：继承更高等级（避免白板体验），DV=31，随机性格
+	level := p1.Level
+	if p2.Level > level {
+		level = p2.Level
+	}
+	if level < 1 {
+		level = 1
+	}
+	if level > 100 {
+		level = 100
+	}
+	newPet := userdb.Pet{
+		ID:        newPetID,
+		CatchTime: newCatchTime,
+		Level:     level,
+		DV:        31,
+		Nature:    rand.Intn(25),
+		Exp:       0,
+		Name:      "",
+	}
+	user.Pets = append(user.Pets, newPet)
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	resp := make([]byte, 12)
+	binary.BigEndian.PutUint32(resp[0:4], 1)
+	binary.BigEndian.PutUint32(resp[4:8], uint32(newPetID))
+	binary.BigEndian.PutUint32(resp[8:12], uint32(newCatchTime))
+	ctx.GameServer.SendResponse(ctx.ClientData, 70000, ctx.UserID, ctx.SeqID, resp)
+	logger.Info(fmt.Sprintf("[70000] 基因重铸: UID=%d cost=%d mainCT=%d subCT=%d newPetID=%d newCT=%d", ctx.UserID, cost, mainCT, subCT, newPetID, newCatchTime))
 }
 
 // handleXinCheck CMD 50004 客户端信息上报（空回包）
@@ -2101,9 +5180,9 @@ func handleNonoInfo(ctx *gameserver.HandlerContext) {
 		}
 	}
 
-	writeU32(uint32(targetID))  // 目标用户 userId（查谁就返回谁的）
-	writeU32(nonoFlag)         // flag（基地且跟随时置0，不显示基地NONO）
-	writeU32(uint32(n.State))  // state
+	writeU32(uint32(targetID))   // 目标用户 userId（查谁就返回谁的）
+	writeU32(nonoFlag)           // flag（基地且跟随时置0，不显示基地NONO）
+	writeU32(uint32(n.State))    // state
 	writeFixedString(n.Nick, 16) // nick
 	// 返回实际的超能NONO形态值（1-5），而不是布尔值，客户端据此加载对应的SWF文件
 	writeU32(uint32(n.SuperNono)) // superNono形态值（1-5）
@@ -2328,16 +5407,35 @@ func buildTaskCompleteResponse(taskID, param uint32, user *userdb.GameData) []by
 	var petID uint32
 	var captureTm uint32
 
-	// 处理新手选宠任务
+	// 根据任务ID添加物品奖励
+	itemCount := uint32(0)
+	itemRewards := []struct {
+		id    uint32
+		count uint32
+	}{}
+
+	// 1. 優先嘗試使用 GM 任務配置（gm_task_config）
+	cfg, hasCfg := GetTaskConfigByID(int(taskID))
+
+	// 特殊：新手選寵任務，使用配置中的 ParamMap 決定精靈，若無配置則回退原邏輯
 	if taskID == taskSelectPet {
-		if mapped, ok := novicePetMap[param]; ok {
-			petID = uint32(mapped)
-		} else {
-			petID = 1
+		mapped := 0
+		if cfg.ParamMap != nil {
+			key := fmt.Sprintf("%d", param)
+			if v, ok := cfg.ParamMap[key]; ok {
+				mapped = v
+			}
 		}
+		if mapped == 0 {
+			if v, ok := novicePetMap[param]; ok {
+				mapped = int(v)
+			} else {
+				mapped = 1
+			}
+		}
+		petID = uint32(mapped)
 		captureTm = 0x69686700 + petID
 
-		// 添加到 pets 列表（如果还没有该精灵）
 		found := false
 		for _, p := range user.Pets {
 			if p.ID == int(petID) && p.CatchTime == int(captureTm) {
@@ -2346,11 +5444,9 @@ func buildTaskCompleteResponse(taskID, param uint32, user *userdb.GameData) []by
 			}
 		}
 		if !found {
-			// 随机性格（0-24）
 			rand.Seed(time.Now().UnixNano())
 			randomNature := rand.Intn(25)
-			// 随机个体值（15-31，新手精灵稍微好一点）
-			randomDV := 15 + rand.Intn(17) // 15-31
+			randomDV := 15 + rand.Intn(17)
 
 			newPet := userdb.Pet{
 				ID:        int(petID),
@@ -2361,143 +5457,146 @@ func buildTaskCompleteResponse(taskID, param uint32, user *userdb.GameData) []by
 				Exp:       0,
 				Name:      "",
 			}
-			// 新手选宠不自动分配特性；后续可通过“特性开启芯片”等道具获得特性
 			user.Pets = append(user.Pets, newPet)
 			logger.Info(fmt.Sprintf("[2202] 新手选宠: PetID=%d DV=%d Nature=%d", petID, randomDV, randomNature))
 		}
 	}
 
-	// 根据任务ID添加物品奖励
-	itemCount := uint32(0)
-	itemRewards := []struct {
-		id    uint32
-		count uint32
-	}{}
-
-	if user.Items == nil {
-		user.Items = make(map[string]userdb.Item)
+	// 應用 GM 配置中的獎勵（若存在）
+	if hasCfg {
+		rPetID, rCaptureTm, rItems := ApplyTaskRewards(user, cfg.Rewards, fmt.Sprintf("[任务%d]", taskID))
+		if petID == 0 && rPetID > 0 {
+			petID = rPetID
+			captureTm = rCaptureTm
+		}
+		for _, it := range rItems {
+			itemRewards = append(itemRewards, it)
+			itemCount++
+		}
 	}
 
-	// 任务85（领取服装）给新手套装
-	if taskID == 85 {
-		noviceClothes := []struct {
-			id    uint32
-			count uint32
-		}{
-			{100027, 1}, // 新手服装1
-			{100028, 1}, // 新手服装2
-			{500001, 1}, // 新手家具
-			{300650, 3}, // 新手道具1
-			{300025, 3}, // 新手道具2
-			{300035, 3}, // 新手道具3
-			{500502, 1}, // 新手家具2
-			{500503, 1}, // 新手家具3
+	// 2. 若沒有任何 GM 配置（或獎勵完全為空，且不是 select_pet），保留原有硬編碼與默認邏輯
+	emptyRewards := func(r TaskRewards) bool {
+		return r.Coins == 0 && len(r.Items) == 0 && len(r.Pets) == 0 && len(r.Fitments) == 0 && len(r.Special) == 0
+	}
+	useLegacy := !hasCfg || (hasCfg && emptyRewards(cfg.Rewards) && cfg.Type == "")
+
+	if useLegacy {
+		if user.Items == nil {
+			user.Items = make(map[string]userdb.Item)
 		}
 
-		for _, item := range noviceClothes {
-			itemKey := strconv.FormatUint(uint64(item.id), 10)
+		if taskID == 85 {
+			noviceClothes := []struct {
+				id    uint32
+				count uint32
+			}{
+				{100027, 1},
+				{100028, 1},
+				{500001, 1},
+				{300650, 3},
+				{300025, 3},
+				{300035, 3},
+				{500502, 1},
+				{500503, 1},
+			}
+
+			for _, item := range noviceClothes {
+				itemKey := strconv.FormatUint(uint64(item.id), 10)
+				if existing, ok := user.Items[itemKey]; ok {
+					existing.Count += int(item.count)
+					user.Items[itemKey] = existing
+				} else {
+					user.Items[itemKey] = userdb.Item{Count: int(item.count), ExpireTime: 0x057E40}
+				}
+				itemRewards = append(itemRewards, item)
+				itemCount++
+				logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 物品 %d x%d", item.id, item.count))
+			}
+		}
+
+		if taskID == taskWinBattle {
+			itemKey := "300001"
 			if existing, ok := user.Items[itemKey]; ok {
-				existing.Count += int(item.count)
+				existing.Count += 5
 				user.Items[itemKey] = existing
 			} else {
-				user.Items[itemKey] = userdb.Item{Count: int(item.count), ExpireTime: 0x057E40}
+				user.Items[itemKey] = userdb.Item{Count: 5, ExpireTime: 0x057E40}
 			}
-			itemRewards = append(itemRewards, item)
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{300001, 5})
 			itemCount++
-			logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 物品 %d x%d", item.id, item.count))
+
+			itemKey2 := "300011"
+			if existing, ok := user.Items[itemKey2]; ok {
+				existing.Count += 3
+				user.Items[itemKey2] = existing
+			} else {
+				user.Items[itemKey2] = userdb.Item{Count: 3, ExpireTime: 0x057E40}
+			}
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{300011, 3})
+			itemCount++
+			logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 物品 300001 x5, 300011 x3"))
 		}
-	}
 
-	// 任务87（战斗胜利）给一些物品奖励
-	if taskID == taskWinBattle {
-		// 添加治疗药水
-		itemKey := "300001"
-		if existing, ok := user.Items[itemKey]; ok {
-			existing.Count += 5
-			user.Items[itemKey] = existing
-		} else {
-			user.Items[itemKey] = userdb.Item{Count: 5, ExpireTime: 0x057E40}
+		if taskID == taskUseItem {
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{1, 50000})
+			itemCount++
+
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{3, 250000})
+			itemCount++
+
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{5, 20})
+			itemCount++
+
+			user.Coins += 50000
+			logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 金币 +50000, 经验 +250000, 其他 +20"))
 		}
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{300001, 5})
-		itemCount++
 
-		itemKey2 := "300011"
-		if existing, ok := user.Items[itemKey2]; ok {
-			existing.Count += 3
-			user.Items[itemKey2] = existing
-		} else {
-			user.Items[itemKey2] = userdb.Item{Count: 3, ExpireTime: 0x057E40}
+		if taskID == taskBombDisposal {
+			itemID := uint32(100059)
+			itemKey := strconv.FormatUint(uint64(itemID), 10)
+			if existing, ok := user.Items[itemKey]; ok {
+				existing.Count++
+				user.Items[itemKey] = existing
+			} else {
+				user.Items[itemKey] = userdb.Item{Count: 1, ExpireTime: 0x057E40}
+			}
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{itemID, 1})
+			itemCount++
+			logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 拆弹小游戏 电能锯子(100059) x1"))
 		}
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{300011, 3})
-		itemCount++
-		logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 物品 300001 x5, 300011 x3"))
-	}
 
-	// 任务88（使用道具）给金币奖励
-	if taskID == taskUseItem {
-		// 添加金币（特殊奖励类型1）
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{1, 50000}) // 类型1=金币
-		itemCount++
-
-		// 添加经验（特殊奖励类型3）
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{3, 250000}) // 类型3=经验
-		itemCount++
-
-		// 添加其他奖励（特殊奖励类型5）
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{5, 20})
-		itemCount++
-
-		// 更新用户金币
-		user.Coins += 50000
-		logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 金币 +50000, 经验 +250000, 其他 +20"))
-	}
-
-	// 任务 9：赫尔卡星拆弹小游戏完成，奖励电能锯子（100059）
-	if taskID == taskBombDisposal {
-		itemID := uint32(100059) // 电能锯子
-		itemKey := strconv.FormatUint(uint64(itemID), 10)
-		if existing, ok := user.Items[itemKey]; ok {
-			existing.Count++
-			user.Items[itemKey] = existing
-		} else {
-			user.Items[itemKey] = userdb.Item{Count: 1, ExpireTime: 0x057E40}
+		if itemCount == 0 && petID == 0 {
+			defaultExp := uint32(2000)
+			if user.ExpPool < 0 {
+				user.ExpPool = 0
+			}
+			user.ExpPool += int(defaultExp)
+			itemRewards = append(itemRewards, struct {
+				id    uint32
+				count uint32
+			}{3, defaultExp})
+			itemCount++
+			logger.Info(fmt.Sprintf("[2202/2233] 任务完成默认奖励: 积累经验 +%d", defaultExp))
 		}
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{itemID, 1})
-		itemCount++
-		logger.Info(fmt.Sprintf("[2202] 任务完成奖励: 拆弹小游戏 电能锯子(100059) x1"))
-	}
-
-	// 无配置奖励时（如每日任务）给默认 2000 点积累经验，客户端 TaskClass 显示“你获得了 2000 点积累经验！”
-	if itemCount == 0 && petID == 0 {
-		defaultExp := uint32(2000)
-		if user.ExpPool < 0 {
-			user.ExpPool = 0
-		}
-		user.ExpPool += int(defaultExp)
-		itemRewards = append(itemRewards, struct {
-			id    uint32
-			count uint32
-		}{3, defaultExp}) // 类型 3 = 积累经验
-		itemCount++
-		logger.Info(fmt.Sprintf("[2202/2233] 任务完成默认奖励: 积累经验 +%d", defaultExp))
 	}
 
 	// 构建响应体
@@ -2837,8 +5936,8 @@ func handleSetSoulBeadBuf(ctx *gameserver.HandlerContext) {
 
 // 元神珠赋形/孵化错误码（与 ParseSocketError 一致）
 const (
-	soulBeadErrNotExist    = 103547 // 你的元神珠不存在
-	soulBeadErrAlreadyTransform = 13034 // 你已经有一个元神珠正在赋形噢
+	soulBeadErrNotExist         = 103547 // 你的元神珠不存在
+	soulBeadErrAlreadyTransform = 13034  // 你已经有一个元神珠正在赋形噢
 )
 
 // handleGetSoulBeadStatus CMD 2356 获取元神珠赋形状态（剩余孵化时间）
@@ -2879,8 +5978,9 @@ func handlePetHatchPutIn(ctx *gameserver.HandlerContext) {
 		ctx.GameServer.SendResponse(ctx.ClientData, 2315, ctx.UserID, ctx.SeqID, resp)
 		return
 	}
-	if user.SoulBeadTransform != nil {
-		logger.Info(fmt.Sprintf("[2315] 已有孵化中 UID=%d", ctx.UserID))
+	// 分子转化仪孵化與元神賦形相互獨立：這裡僅檢查 PetHatch 狀態，允許同時有一顆元神珠在賦形
+	if user.PetHatch != nil {
+		logger.Info(fmt.Sprintf("[2315] 已有精元孵化中 UID=%d", ctx.UserID))
 		ctx.GameServer.SendResponse(ctx.ClientData, 2315, ctx.UserID, ctx.SeqID, resp)
 		return
 	}
@@ -2910,11 +6010,10 @@ func handlePetHatchPutIn(ctx *gameserver.HandlerContext) {
 	if obtainTime == 0 {
 		obtainTime = 1
 	}
-	user.SoulBeadTransform = &userdb.SoulBeadTransformState{
-		ObtainTime:     obtainTime,
-		ItemID:         uint32(breedMonID),
-		RewardPetClass: uint32(breedMonID),
-		ExpireTime:     expireTime,
+	user.PetHatch = &userdb.PetHatchState{
+		ObtainTime: obtainTime,
+		PetID:      uint32(breedMonID),
+		ExpireTime: expireTime,
 	}
 	if ctx.GameServer.UserDB != nil {
 		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
@@ -2930,9 +6029,9 @@ func handleNonoMolecularTransform(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 	body := make([]byte, 16)
 	// 默认 falg=0 表示无孵化，客户端会打开 MoleculePanel
-	binary.BigEndian.PutUint32(body[0:4], 0)  // falg
-	binary.BigEndian.PutUint32(body[4:8], 0)  // leftTime
-	binary.BigEndian.PutUint32(body[8:12], 0) // petID
+	binary.BigEndian.PutUint32(body[0:4], 0)   // falg
+	binary.BigEndian.PutUint32(body[4:8], 0)   // leftTime
+	binary.BigEndian.PutUint32(body[8:12], 0)  // petID
 	binary.BigEndian.PutUint32(body[12:16], 0) // captmTime
 	action := uint32(0)
 	itemID := 0
@@ -2950,7 +6049,8 @@ func handleNonoMolecularTransform(ctx *gameserver.HandlerContext) {
 			ctx.GameServer.SendResponse(ctx.ClientData, 2316, ctx.UserID, ctx.SeqID, body)
 			return
 		}
-		if user.SoulBeadTransform != nil {
+		// 分子轉化儀孵化與元神賦形互不影響：這裡僅檢查 PetHatch
+		if user.PetHatch != nil {
 			ctx.GameServer.SendResponse(ctx.ClientData, 2316, ctx.UserID, ctx.SeqID, body)
 			return
 		}
@@ -2979,27 +6079,26 @@ func handleNonoMolecularTransform(ctx *gameserver.HandlerContext) {
 		if obtainTime == 0 {
 			obtainTime = 1
 		}
-		user.SoulBeadTransform = &userdb.SoulBeadTransformState{
-			ObtainTime:     obtainTime,
-			ItemID:         uint32(breedMonID),
-			RewardPetClass: uint32(breedMonID),
-			ExpireTime:     expireTime,
+		user.PetHatch = &userdb.PetHatchState{
+			ObtainTime: obtainTime,
+			PetID:      uint32(breedMonID),
+			ExpireTime: expireTime,
 		}
 		if ctx.GameServer.UserDB != nil {
 			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
 		}
 		logger.Info(fmt.Sprintf("[2316] 精元放入: UID=%d itemID=%d BreedMonID=%d 孵化秒数=%d", ctx.UserID, itemID, breedMonID, incubationSec))
 	}
-	if user.SoulBeadTransform != nil {
+	if user.PetHatch != nil {
 		remainingSec := int64(0)
-		if user.SoulBeadTransform.ExpireTime > time.Now().Unix() {
-			remainingSec = user.SoulBeadTransform.ExpireTime - time.Now().Unix()
+		if user.PetHatch.ExpireTime > time.Now().Unix() {
+			remainingSec = user.PetHatch.ExpireTime - time.Now().Unix()
 		}
-		binary.BigEndian.PutUint32(body[0:4], 1)                                    // falg=1 有孵化中
-		binary.BigEndian.PutUint32(body[4:8], uint32(remainingSec))                  // leftTime
-		binary.BigEndian.PutUint32(body[8:12], user.SoulBeadTransform.ItemID)        // petID
-		binary.BigEndian.PutUint32(body[12:16], user.SoulBeadTransform.ObtainTime)   // captmTime
-		logger.Info(fmt.Sprintf("[2316] 有孵化: leftTime=%d petID=%d captmTime=%d", remainingSec, user.SoulBeadTransform.ItemID, user.SoulBeadTransform.ObtainTime))
+		binary.BigEndian.PutUint32(body[0:4], 1)                                // flag=1 有孵化中
+		binary.BigEndian.PutUint32(body[4:8], uint32(remainingSec))             // leftTime
+		binary.BigEndian.PutUint32(body[8:12], user.PetHatch.PetID)             // petID
+		binary.BigEndian.PutUint32(body[12:16], user.PetHatch.ObtainTime)       // captmTime
+		logger.Info(fmt.Sprintf("[2316] 有孵化: leftTime=%d petID=%d captmTime=%d", remainingSec, user.PetHatch.PetID, user.PetHatch.ObtainTime))
 	}
 	ctx.GameServer.SendResponse(ctx.ClientData, 2316, ctx.UserID, ctx.SeqID, body)
 }
@@ -3218,15 +6317,6 @@ func buildItemList2605Body(user *userdb.GameData, reqBody []byte) []byte {
 	if a != 0 && b == 0 && c == 0 {
 		a, b, c = 0, 0, 0
 	}
-	// 根据请求范围决定每条 item 的 flag，供客户端在储存箱子各栏筛选（可能为 1-based 栏位索引：装备=1 收藏=2 超能NONO=3）
-	var itemFlag uint32
-	if a == 300001 && b == 500000 {
-		itemFlag = 2 // 收藏物品栏（第2栏）
-	} else if a == 100001 && b == 500000 {
-		itemFlag = 3 // 超能NONO栏（第3栏）
-	}
-	// 其余(装备 100001-101000、1300001-1400000、全量等)保持 0，若客户端用 1 表示装备则此处可改为 1
-
 	type itemRow struct {
 		id         uint32
 		count      uint32
@@ -3272,7 +6362,12 @@ func buildItemList2605Body(user *userdb.GameData, reqBody []byte) []byte {
 		binary.BigEndian.PutUint32(body[off:off+4], r.id)
 		binary.BigEndian.PutUint32(body[off+4:off+8], r.count)
 		binary.BigEndian.PutUint32(body[off+8:off+12], r.expireTime)
-		binary.BigEndian.PutUint32(body[off+12:off+16], itemFlag)
+		// 第 4 个 uint32 为 itemLevel，供 SingleItemInfo 解析；装备强化(2609)依赖该字段
+		level := uint32(0)
+		if it, ok := user.Items[strconv.FormatUint(uint64(r.id), 10)]; ok && it.Level > 0 {
+			level = uint32(it.Level)
+		}
+		binary.BigEndian.PutUint32(body[off+12:off+16], level)
 		off += 16
 	}
 	return body
@@ -3292,6 +6387,41 @@ func handleItemList(ctx *gameserver.HandlerContext) {
 	logger.Info(fmt.Sprintf("[2605] 物品列表请求: 范围 %d-%d, %d (用户总物品数: %d)", a, b, c, len(user.Items)))
 	logger.Info(fmt.Sprintf("[2605] 返回物品列表: 数量=%d BodyLen=%d", binary.BigEndian.Uint32(body[0:4]), len(body)))
 	ctx.GameServer.SendResponse(ctx.ClientData, 2605, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGetLasEgg CMD 2608 GET_LAS_EGG 领取精元蛋（例如里奥斯的精元 400107）
+// 前端 MapProcess_5 中：
+//   - 发送 2608 后本地直接弹出提示“400107 已放入你的储存箱中！”，不解析包体；
+//   - 为避免重复领取，这里若已拥有该精元则不再增加数量（Max=1）。
+func handleGetLasEgg(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user.Items == nil {
+		user.Items = make(map[string]userdb.Item)
+	}
+
+	const lasEggItemID = 400107
+	key := strconv.Itoa(lasEggItemID)
+	it, has := user.Items[key]
+	if !has || it.Count <= 0 {
+		// 首次领取：放入 1 个精元到储存箱
+		user.Items[key] = userdb.Item{
+			Count:      1,
+			ExpireTime: 0, // 精元类通常无过期时间
+		}
+		logger.Info(fmt.Sprintf("[2608] GET_LAS_EGG 首次领取: uid=%d itemID=%d", ctx.UserID, lasEggItemID))
+	} else {
+		// 已经有精元：不再叠加（Max=1）
+		logger.Info(fmt.Sprintf("[2608] GET_LAS_EGG 已存在: uid=%d itemID=%d count=%d", ctx.UserID, lasEggItemID, it.Count))
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	// 返回 4 字节 ret=0，前端不解析，仅用于表示成功
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2608, ctx.UserID, ctx.SeqID, body)
 }
 
 // ==================== 精灵互转 / 展示（2304） ====================
@@ -3340,25 +6470,22 @@ func handlePetRelease(ctx *gameserver.HandlerContext) {
 				picked = &user.StoragePets[pickedIndex]
 			}
 		}
-		// 精元孵化完成领取：无匹配仓库精灵时，检查 SoulBeadTransform（ObtainTime=catchID 且已到期）
-		if picked == nil && user.SoulBeadTransform != nil && user.SoulBeadTransform.ObtainTime == catchID &&
-			time.Now().Unix() >= user.SoulBeadTransform.ExpireTime {
-			petClass := int(user.SoulBeadTransform.RewardPetClass)
-			if petClass <= 0 {
-				petClass = int(user.SoulBeadTransform.ItemID)
-			}
+		// 精元孵化完成领取：无匹配仓库精灵时，检查 PetHatch（ObtainTime=catchID 且已到期）
+		if picked == nil && user.PetHatch != nil && user.PetHatch.ObtainTime == catchID &&
+			time.Now().Unix() >= user.PetHatch.ExpireTime {
+			petClass := int(user.PetHatch.PetID)
 			rand.Seed(time.Now().UnixNano() + int64(catchID))
 			newPet := userdb.Pet{
 				ID:        petClass,
 				CatchTime: int(catchID),
 				Level:     1,
-				DV:        rand.Intn(32),   // 个体 0-31 随机
-				Nature:    rand.Intn(25),   // 性格 0-24 随机
+				DV:        rand.Intn(32), // 个体 0-31 随机
+				Nature:    rand.Intn(25), // 性格 0-24 随机
 				Exp:       0,
 				Name:      "",
-				Trait:     0,               // 精元孵化无特性
+				Trait:     0, // 精元孵化无特性
 			}
-			user.SoulBeadTransform = nil
+			user.PetHatch = nil
 			if len(user.Pets) < 6 {
 				user.Pets = append(user.Pets, newPet)
 				picked = &user.Pets[len(user.Pets)-1]
@@ -3577,7 +6704,8 @@ func handleGetPetList(ctx *gameserver.HandlerContext) {
 	pets := user.StoragePets
 	count := uint32(len(pets))
 
-	body := make([]byte, 4+int(count)*12)
+	// 每只精灵占 16 字节：id + catchTime + skinID + shiny
+	body := make([]byte, 4+int(count)*16)
 	binary.BigEndian.PutUint32(body[0:4], count)
 	off := 4
 	for _, p := range pets {
@@ -3585,7 +6713,9 @@ func handleGetPetList(ctx *gameserver.HandlerContext) {
 		off += 4
 		binary.BigEndian.PutUint32(body[off:off+4], uint32(p.CatchTime))
 		off += 4
-		binary.BigEndian.PutUint32(body[off:off+4], 0) // skinID = 0
+		binary.BigEndian.PutUint32(body[off:off+4], 0) // skinID，占位，当前未实现皮肤系统
+		off += 4
+		binary.BigEndian.PutUint32(body[off:off+4], 0) // shiny，占位，当前未实现仓库异色持久化
 		off += 4
 	}
 
@@ -4071,8 +7201,10 @@ func handleRoweiPetReturn(ctx *gameserver.HandlerContext) {
 
 // handleRoomPetShow CMD 2323 房间精灵展示设置
 // 请求:
-//   count(4)=0                  -> 清空展示
-//   count(4)>0 + [catchTime(4)+id(4)]*count  -> 设置展示列表
+//
+//	count(4)=0                  -> 清空展示
+//	count(4)>0 + [catchTime(4)+id(4)]*count  -> 设置展示列表
+//
 // 响应: count(4) + [id(4)+catchTime(4)+skinID(4)]*count
 func handleRoomPetShow(ctx *gameserver.HandlerContext) {
 	if len(ctx.Body) < 4 {
@@ -4543,6 +7675,149 @@ func handleInviteToFight(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(targetClient, 2501, ctx.UserID, 0, noteBody)
 }
 
+// ==================== 精灵大师杯 / 精灵王参与（2413） ====================
+//
+// 前端入口：
+// - MapProcess_111.startFight: send(PET_KING_JOIN, 11, fightType)
+// - PetKingWaitPanel.joinFight: send(PET_KING_JOIN, mode, 0)
+//
+// 原服行为：将玩家加入精灵大师杯匹配队列，两两匹配后进入 PvP，对战流程与普通玩家对战一致（走 2503/2504/2404/2405 等）。
+//
+// 这里实现一个简化版匹配：
+// - 第一个玩家：进入队列，收到 4 字节 0 作为 ACK，客户端展示匹配等待界面
+// - 第二个玩家：与队列中的一个玩家配对，双方直接收 2503/2504，并初始化 PvP BattleState
+func handlePetKingJoin(ctx *gameserver.HandlerContext) {
+	var mode uint32
+	var fightType uint32
+	if len(ctx.Body) >= 4 {
+		mode = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	if len(ctx.Body) >= 8 {
+		fightType = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+
+	uid := ctx.UserID
+
+	// 回复调用方一个简单 ACK（4 字节 0），客户端不解析内容
+	ack := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2413, uid, ctx.SeqID, ack)
+
+	// 加入/匹配队列
+	petKingQueueMu.Lock()
+	defer petKingQueueMu.Unlock()
+
+	// 尝试从队列中找到一个对手（当前仅按 FIFO 简单匹配）
+	var opponent petKingQueueEntry
+	var idx = -1
+	for i, e := range petKingQueue {
+		if e.UserID != uid {
+			opponent = e
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		// 没有可匹配对手，入队等待
+		petKingQueue = append(petKingQueue, petKingQueueEntry{
+			UserID: uid,
+			Mode:   mode,
+			Type:   fightType,
+		})
+		logger.Info(fmt.Sprintf("[2413] 精灵大师杯排队: UID=%d mode=%d type=%d 等待对手", uid, mode, fightType))
+		return
+	}
+
+	// 匹配成功：从队列移除对手
+	petKingQueue = append(petKingQueue[:idx], petKingQueue[idx+1:]...)
+	opponentUID := opponent.UserID
+
+	// 在锁外完成后续较重操作（发送包/初始化 BattleState）
+	go func(inviterUID, responderUID int64) {
+		inviterClient := ctx.GameServer.GetClientByUserID(inviterUID)
+		responderClient := ctx.GameServer.GetClientByUserID(responderUID)
+		if inviterClient == nil || responderClient == nil {
+			logger.Warning(fmt.Sprintf("[2413] 精灵大师杯匹配失败: 一方已下线 inviter=%d responder=%d", inviterUID, responderUID))
+			return
+		}
+
+		// 2503：准备对战（NoteReadyToFightInfo）——按 PvP 规则对双方分别构造 [我方, 对方]
+		setPvPBattleStates(ctx.GameServer, inviterUID, responderUID)
+		body2503Inviter, body2503Responder := buildNoteReadyToFightInfoPvPPerClient(ctx.GameServer, inviterUID, responderUID)
+		ctx.GameServer.SendResponse(inviterClient, 2503, inviterUID, 0, body2503Inviter)
+		ctx.GameServer.SendResponse(responderClient, 2503, responderUID, 0, body2503Responder)
+
+		// 2504：开始对战（FightStartInfo）——同样分别构造 [我方, 对方]
+		body2504Inviter, body2504Responder := buildNoteStartFightPvP(ctx.GameServer, inviterUID, responderUID)
+		if len(body2504Inviter) > 0 {
+			ctx.GameServer.SendResponse(inviterClient, 2504, inviterUID, 0, body2504Inviter)
+		}
+		if len(body2504Responder) > 0 {
+			ctx.GameServer.SendResponse(responderClient, 2504, responderUID, 0, body2504Responder)
+		}
+
+		logger.Info(fmt.Sprintf("[2413] 精灵大师杯匹配成功: UID=%d vs UID=%d mode=%d/%d", inviterUID, responderUID, mode, opponent.Mode))
+	}(opponentUID, uid)
+}
+
+// handleInviteFightCancel CMD 2402 取消邀请/匹配（INVITE_FIGHT_CANCEL）
+// 前端用于：
+// - 取消 FightWaitPanel 中的普通 PvP 邀请
+// - 取消精灵大师杯/巅峰/精灵王等匹配等待
+//
+// 行为（简化版）：
+// - 从 PetKing 等匹配队列中移除当前玩家
+// - 回包 4 字节 0（对齐 Lua writeUInt32BE(0)）
+func handleInviteFightCancel(ctx *gameserver.HandlerContext) {
+	uid := ctx.UserID
+	targetUID := int64(0)
+	if len(ctx.Body) >= 4 {
+		targetUID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+
+	// 从精灵大师杯队列中移除
+	petKingQueueMu.Lock()
+	if len(petKingQueue) > 0 {
+		newQ := petKingQueue[:0]
+		for _, e := range petKingQueue {
+			if e.UserID != uid {
+				newQ = append(newQ, e)
+			}
+		}
+		petKingQueue = newQ
+	}
+	petKingQueueMu.Unlock()
+
+	// 从精灵大乱斗队列中移除
+	petWarQueueMu.Lock()
+	if len(petWarQueue) > 0 {
+		newQ := petWarQueue[:0]
+		for _, e := range petWarQueue {
+			if e.UserID != uid {
+				newQ = append(newQ, e)
+			}
+		}
+		petWarQueue = newQ
+	}
+	petWarQueueMu.Unlock()
+
+	// 回包 4 字节 0（前端只关心是否收到）
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2402, uid, ctx.SeqID, body)
+
+	// 若是普通 PvP 邀请取消，补发 2502(result=0) 给对方，驱动其关闭等待/邀请界面。
+	if targetUID > 0 && targetUID != uid {
+		if targetClient := ctx.GameServer.GetClientByUserID(targetUID); targetClient != nil {
+			nick := buildTeamNick(ctx.GameServer, uid)
+			noteBody := make([]byte, 24)
+			binary.BigEndian.PutUint32(noteBody[0:4], uint32(uid))
+			putFixedString(noteBody, 4, nick, 16)
+			binary.BigEndian.PutUint32(noteBody[20:24], 0)
+			ctx.GameServer.SendResponse(targetClient, 2502, targetUID, 0, noteBody)
+		}
+	}
+}
+
 // handleHandleFightInvite CMD 2403 接受/拒绝对战邀请（HANDLE_FIGHT_INVITE）
 // 请求: inviterUserID(4) + result(4) + type(4)，result=1 接受、0 拒绝；type 为对战模式
 // 向邀请方推送 NOTE_HANDLE_FIGHT_INVITE(2502)，body: responderUserID(4)+responderNick(16)+result(4)
@@ -4583,7 +7858,8 @@ func handleHandleFightInvite(ctx *gameserver.HandlerContext) {
 		responderClient := ctx.ClientData
 		if inviterClient != nil && responderClient != nil {
 			// 2503：DLL 用 userInfoArray[0]=我方（左）、[1]=对方（右）。我方在前：邀请方收 [邀请方,接受方]、接受方收 [接受方,邀请方]
-			body2503Inviter, body2503Responder := buildNoteReadyToFightInfoPvPPerClient(ctx.GameServer, inviterUserID, ctx.UserID)
+				setPvPBattleStates(ctx.GameServer, inviterUserID, ctx.UserID)
+				body2503Inviter, body2503Responder := buildNoteReadyToFightInfoPvPPerClient(ctx.GameServer, inviterUserID, ctx.UserID)
 			ctx.GameServer.SendResponse(inviterClient, 2503, inviterUserID, 0, body2503Inviter)
 			ctx.GameServer.SendResponse(responderClient, 2503, ctx.UserID, 0, body2503Responder)
 			// 2504：DLL 按包顺序“第一项→我方位、第二项→对方位”绑定 3D 模型，必须发 [我方,对方]；FightStartInfo 按 userID 区分 myInfo/otherInfo（血条/技能/日志）
@@ -4676,7 +7952,7 @@ func setPvPBattleStates(gs *gameserver.GameServer, inviterUID, responderUID int6
 	}
 }
 
-// buildNoteReadyToFightInfoPvP 构建 PvP 的 2503 包体：userCount(4) + [FighetUserInfo(20) + petCount(4) + SimplePetInfo(72)] * 2，与 NoteReadyToFightInfo 解析一致
+// buildNoteReadyToFightInfoPvP 构建 PvP 的 2503 包体：userCount(4) + [FighetUserInfo(20) + petCount(4) + SimplePetInfo(76)] * 2，与 NoteReadyToFightInfo 解析一致
 func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, responderUID int64) []byte {
 	petMgr := gamepets.GetInstance()
 	skillMgr := gameskills.GetInstance()
@@ -4690,8 +7966,8 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 		copy(b[4:20], nb)
 		return b
 	}
-	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32) []byte {
-		b := make([]byte, 72)
+	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32, skinID uint32, shiny uint32) []byte {
+		b := make([]byte, 76)
 		binary.BigEndian.PutUint32(b[0:4], petID)
 		binary.BigEndian.PutUint32(b[4:8], level)
 		binary.BigEndian.PutUint32(b[8:12], hp)
@@ -4718,6 +7994,7 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 		binary.BigEndian.PutUint32(b[60:64], 0)
 		binary.BigEndian.PutUint32(b[64:68], 0)
 		binary.BigEndian.PutUint32(b[68:72], petID) // skinID：客户端用此加载精灵模型/图标，0 会导致蓝格占位
+		binary.BigEndian.PutUint32(b[72:76], shiny)
 		return b
 	}
 	getUserFirstPet := func(uid int64) (petID int, level int, catchTime uint32, hp, maxHp int, skills [][2]uint32, nick string) {
@@ -4772,18 +8049,18 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 	petID1, lv1, ct1, hp1, maxHp1, sk1, nick1 := getUserFirstPet(inviterUID)
 	// User2: 接受方
 	petID2, lv2, ct2, hp2, maxHp2, sk2, nick2 := getUserFirstPet(responderUID)
-	out := make([]byte, 0, 4+96*2)
+	out := make([]byte, 0, 4+100*2)
 	tmp4 := make([]byte, 4)
 	binary.BigEndian.PutUint32(tmp4, 2)
 	out = append(out, tmp4...)
 	out = append(out, buildFightUserInfo(uint32(inviterUID), nick1)...)
 	binary.BigEndian.PutUint32(tmp4, 1)
 	out = append(out, tmp4...)
-	out = append(out, buildSimplePetInfo(uint32(petID1), uint32(lv1), uint32(hp1), uint32(maxHp1), ct1, sk1)...)
+	out = append(out, buildSimplePetInfo(uint32(petID1), uint32(lv1), uint32(hp1), uint32(maxHp1), ct1, sk1, uint32(petID1), 0)...)
 	out = append(out, buildFightUserInfo(uint32(responderUID), nick2)...)
 	binary.BigEndian.PutUint32(tmp4, 1)
 	out = append(out, tmp4...)
-	out = append(out, buildSimplePetInfo(uint32(petID2), uint32(lv2), uint32(hp2), uint32(maxHp2), ct2, sk2)...)
+	out = append(out, buildSimplePetInfo(uint32(petID2), uint32(lv2), uint32(hp2), uint32(maxHp2), ct2, sk2, uint32(petID2), 0)...)
 	return out
 }
 
@@ -4791,8 +8068,8 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 // 保证各方 userInfoArray[0]=自己，客户端用其区分“我方/对方”并加载对应精灵模型（petArray/skinID），避免双方都显示同一模型
 func buildNoteReadyToFightInfoPvPPerClient(gs *gameserver.GameServer, inviterUID, responderUID int64) (inviterBody, responderBody []byte) {
 	bodyInviterFirst := buildNoteReadyToFightInfoPvP(gs, inviterUID, responderUID) // [邀请方, 接受方]
-	// 接受方收 [接受方, 邀请方]：交换两段 FighetUserInfo(20)+petCount(4)+SimplePetInfo(72)
-	const blockSize = 20 + 4 + 72 // 96
+	// 接受方收 [接受方, 邀请方]：交换两段 FighetUserInfo(20)+petCount(4)+SimplePetInfo(76)
+	const blockSize = 20 + 4 + 76 // 100
 	if len(bodyInviterFirst) < 4+blockSize*2 {
 		return bodyInviterFirst, bodyInviterFirst
 	}
@@ -4927,97 +8204,84 @@ func buildNoteStartFightPvP(gs *gameserver.GameServer, inviterUID, responderUID 
 	logger.Info(fmt.Sprintf("[2504-PvP] 邀请方(UID=%d)包: 第1段 userID=%d petID=%d(name=%s), 第2段 userID=%d petID=%d(name=%s)",
 		inviterUID, inviterFirstUID, inviterFirstPetID, name1, inviterSecondUID, inviterSecondPetID, name2))
 	logger.Info(fmt.Sprintf("[2504-PvP] 接受方(UID=%d)包: 第1段 userID=%d petID=%d(name=%s), 第2段 userID=%d petID=%d(name=%s)",
-		responderUID, responderFirstUID, responderFirstPetID, name2, responderSecondUID, responderSecondPetID, name1))
-	return
+		responderUID, responderFirstUID, responderFirstPetID, name1, responderSecondUID, responderSecondPetID, name2))
+	return inviterBody, responderBody
 }
 
-// buildPvP2504BodyForUser 为 PvP 下 2404 构建当前用户的 2504 包体：我方 FightPetInfo + 对方 FightPetInfo（不修改 BattleState）
+// buildPvP2504BodyForUser 为 PvP 下 2404 构建当前用户的 2504 包体：isCanAuto + FightPetInfo*2
 func buildPvP2504BodyForUser(gs *gameserver.GameServer, myUID, opponentUID int64, battle *gameserver.BattleState) []byte {
 	petMgr := gamepets.GetInstance()
-	const fightPetInfoSize = 50
-	buildFightPetInfo := func(uid uint32, petID int, name string, ct uint32, hp, maxHp, lv int, catchable uint32) []byte {
-		if petID <= 0 {
-			petID = 7
-		}
-		if maxHp <= 0 {
-			maxHp = 1
-		}
-		if hp < 0 {
-			hp = 0
-		}
-		if hp > maxHp {
-			hp = maxHp
-		}
-		buf := make([]byte, fightPetInfoSize)
-		binary.BigEndian.PutUint32(buf[0:4], uid)
-		binary.BigEndian.PutUint32(buf[4:8], uint32(petID))
-		nb := []byte(name)
-		if len(nb) > 16 {
-			nb = nb[:16]
-		}
-		copy(buf[8:24], nb)
-		binary.BigEndian.PutUint32(buf[24:28], ct)
-		binary.BigEndian.PutUint32(buf[28:32], uint32(hp))
-		binary.BigEndian.PutUint32(buf[32:36], uint32(maxHp))
-		binary.BigEndian.PutUint32(buf[36:40], uint32(lv))
-		binary.BigEndian.PutUint32(buf[40:44], catchable)
-		for i := 44; i < 50; i++ {
-			buf[i] = 0
-		}
-		return buf
-	}
-	// 我方：当前用户
-	uMe := gs.GetOrCreateUser(myUID)
-	petID1, lv1, ct1, hp1, maxHp1 := 7, 5, uint32(0), int(battle.PlayerHP), int(battle.PlayerMaxHP)
-	if len(uMe.Pets) > 0 {
-		petID1 = uMe.Pets[0].ID
-		if uMe.Pets[0].Level > 0 {
-			lv1 = uMe.Pets[0].Level
-		}
-		ct1 = uint32(uMe.Pets[0].CatchTime)
-		if ct1 == 0 {
-			ct1 = 0x69686700 + uint32(petID1)
-		}
-	}
-	name1 := petMgr.GetName(petID1)
-	if name1 == "" {
-		name1 = "精灵"
-	}
-	// 对方：对手
-	uOpp := gs.GetOrCreateUser(opponentUID)
-	petID2, lv2, ct2 := battle.EnemyID, battle.EnemyLevel, uint32(0)
-	hp2, maxHp2 := int(battle.EnemyHP), int(battle.EnemyMaxHP)
-	if len(uOpp.Pets) > 0 {
-		ct2 = uint32(uOpp.Pets[0].CatchTime)
-		if ct2 == 0 {
-			ct2 = 0x69686700 + uint32(petID2)
-		}
-	}
-	name2 := petMgr.GetName(petID2)
-	if name2 == "" {
-		name2 = "精灵"
-	}
-	info1 := buildFightPetInfo(uint32(myUID), petID1, name1, ct1, hp1, maxHp1, lv1, 0)
-	info2 := buildFightPetInfo(uint32(opponentUID), petID2, name2, ct2, hp2, maxHp2, lv2, 0)
-	// 与 2403 推送的 2504 一致：包内顺序 [我方,对方]
-	out := make([]byte, 4+len(info1)+len(info2))
-	binary.BigEndian.PutUint32(out[0:4], 0)
-	copy(out[4:4+len(info1)], info1)
-	copy(out[4+len(info1):], info2)
-	// 确保第1段 userID 始终为接收方(myUID)，第2段为对方(opponentUID)，便于客户端正确识别"我方/对方"
-	firstUID := binary.BigEndian.Uint32(out[4:8])
-	firstPetID := binary.BigEndian.Uint32(out[8:12])
-	secondUID := binary.BigEndian.Uint32(out[54:58])
-	secondPetID := binary.BigEndian.Uint32(out[58:62])
 
-	// 验证：第一条 userID 必须等于接收方 userID
-	if firstUID != uint32(myUID) {
-		logger.Warning(fmt.Sprintf("[2504-2404] ⚠️ 包第1段 userID(%d) != 接收方UID(%d)，可能导致客户端识别错误！", firstUID, myUID))
+	// 获取用户首发精灵信息（仅使用本场大乱斗随机到的三只）
+	getFirstPet := func(uid int64, indexes []int) (petID, level, hp, maxHp, catchTime uint32, petName string) {
+		u := gs.GetOrCreateUser(uid)
+		pets := getPetWarPetList(u, indexes)
+		if len(pets) > 0 {
+			pet := pets[0]
+			petID = uint32(pet.ID)
+			level = uint32(pet.Level)
+			catchTime = uint32(pet.CatchTime)
+			if catchTime == 0 {
+				catchTime = 0x69686700 + uint32(pet.ID)
+			}
+			petName = pet.Name
+			if petName == "" {
+				petName = fmt.Sprintf("Pet%d", pet.ID)
+			}
+			if len(petName) > 16 {
+				petName = petName[:16]
+			}
+
+			// 计算HP
+			ev := pet.GetEVStats()
+			nature := pet.Nature
+			stats := petMgr.GetStats(pet.ID, int(level), nature, ev, 0)
+			hp, maxHp = uint32(stats.HP), uint32(stats.MaxHP)
+			if maxHp <= 0 {
+				maxHp = 1
+			}
+			if hp < 0 {
+				hp = 0
+			}
+			if hp > maxHp {
+				hp = maxHp
+			}
+		}
+		return
 	}
 
-	logger.Info(fmt.Sprintf("[2504-2404] UID=%d 包体: 第1段 userID=%d petID=%d(name=%s), 第2段 userID=%d petID=%d(name=%s)",
-		myUID, firstUID, firstPetID, name1, secondUID, secondPetID, name2))
-	return out
+	// 构建单个 FightPetInfo (46 bytes)
+	buildFightPetInfo := func(userID, petID, level, hp, maxHp, catchTime uint32, petName string) []byte {
+		b := make([]byte, 46) // 4+4+16+4+4+4+4+4+6
+		binary.BigEndian.PutUint32(b[0:4], userID)
+		binary.BigEndian.PutUint32(b[4:8], petID)
+		nameBytes := []byte(petName)
+		if len(nameBytes) > 16 {
+			nameBytes = nameBytes[:16]
+		}
+		copy(b[8:24], nameBytes)
+		binary.BigEndian.PutUint32(b[24:28], catchTime)
+		binary.BigEndian.PutUint32(b[28:32], hp)
+		binary.BigEndian.PutUint32(b[32:36], maxHp)
+		binary.BigEndian.PutUint32(b[36:40], level)
+		binary.BigEndian.PutUint32(b[40:44], 0) // catchable = false
+		// battleLv (6 bytes) - 默认全0
+		return b
+	}
+
+	// 获取双方精灵信息
+	myPetID, myLv, myHp, myMaxHp, myCatchTime, myName := getFirstPet(myUID, getPetWarBattleIndexes(gs, myUID))
+	oppPetID, oppLv, oppHp, oppMaxHp, oppCatchTime, oppName := getFirstPet(opponentUID, getPetWarBattleIndexes(gs, opponentUID))
+
+	// 构建包体：isCanAuto(4) + [我方FightPetInfo(46) + 对方FightPetInfo(46)]
+	body := make([]byte, 0, 4+46*2)
+	tmp4 := make([]byte, 4)
+	binary.BigEndian.PutUint32(tmp4, 1) // isCanAuto = true
+	body = append(body, tmp4...)
+	body = append(body, buildFightPetInfo(uint32(myUID), myPetID, myLv, myHp, myMaxHp, myCatchTime, myName)...)
+	body = append(body, buildFightPetInfo(uint32(opponentUID), oppPetID, oppLv, oppHp, oppMaxHp, oppCatchTime, oppName)...)
+
+	return body
 }
 
 // ==================== 新手战斗（2411 -> 2503） ====================
@@ -5119,6 +8383,13 @@ func handleChallengeBoss(ctx *gameserver.HandlerContext) {
 			logger.Info(fmt.Sprintf("[2411] 收到挑战BOSS请求: mapID=%d param2=%d bodyLen=%d", mapID, param2, len(ctx.Body)))
 		}
 
+		// 雷伊体能训练：客户端 FightInviteManager.fightWithBoss("雷伊幻影", 10000+index)
+		// 仅发送 param2(4)，mapID 由当前地图决定。这里根据 param2 范围 [10000,10005] 识别 6 项特训。
+		var leiyiTrainIndex int = -1
+		if param2 >= 10000 && param2 < 10006 {
+			leiyiTrainIndex = int(param2 - 10000)
+		}
+
 		if e, ok := sptboss.GetByMapAndParam(mapID, param2); ok {
 			bossID = uint32(e.BossPetID)
 			enemyLevel = e.Level
@@ -5152,6 +8423,20 @@ func handleChallengeBoss(ctx *gameserver.HandlerContext) {
 				enemyLevel = 70
 				logger.Info(fmt.Sprintf("[2421] 盖亚挑战回退: bossID=%d level=%d", bossID, enemyLevel))
 			}
+		}
+
+		// 若识别为雷伊体能训练战斗，则在 BattleState 中标记索引，供 2405 结算时更新 2393 计数
+		if leiyiTrainIndex >= 0 && leiyiTrainIndex < 6 {
+			ctx.GameServer.BattleMu.Lock()
+			battle, ok := ctx.GameServer.BattleStates[ctx.UserID]
+			if !ok || battle == nil {
+				battle = &gameserver.BattleState{}
+			}
+			battle.IsLeiyiTrain = true
+			battle.LeiyiTrainIndex = leiyiTrainIndex
+			ctx.GameServer.BattleStates[ctx.UserID] = battle
+			ctx.GameServer.BattleMu.Unlock()
+			logger.Info(fmt.Sprintf("[2411] 雷伊体能训练战斗: UID=%d index=%d param2=%d", ctx.UserID, leiyiTrainIndex, param2))
 		}
 	}
 
@@ -5197,6 +8482,7 @@ func handleChallengeBoss(ctx *gameserver.HandlerContext) {
 	battle.EnemyLevel = enemyLevel
 	battle.IsActive = true
 	battle.BattleMapID = mapID
+	battle.BossRegion = param2
 	battle.RoundCount = 0
 	battle.LastHitWasCrit = false
 	battle.IsBossChallenge = true // 仅 2411/2421 发起的 BOSS 挑战才在 2405 发放对应 BOSS 精元/精灵奖励
@@ -5209,7 +8495,7 @@ func handleChallengeBoss(ctx *gameserver.HandlerContext) {
 }
 
 // buildNoteReadyToFightInfo 构建 2503 回包（最小可用版本）
-// body: userCount(4) + [FighetUserInfo(20) + petCount(4) + SimplePetInfo] * 2
+// body: userCount(4) + [FighetUserInfo(20) + petCount(4) + SimplePetInfo(76)] * 2
 // 客户端用 2503 的 petArray（来自 SimplePetInfo 的 petId）预加载对战模型，petID 必须与 2504 一致且非 0
 func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) []byte {
 	if enemyID == 0 {
@@ -5266,16 +8552,20 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 
 	// 敌人属性（敌人默认性格0，EV 为 0）；2411 已写入 BattleStates.EnemyLevel（如密林蘑菇怪10级、依依5级）
 	enemyLevel := 5
+	var curBattle *gameserver.BattleState
 	ctx.GameServer.BattleMu.RLock()
-	if battle, ok := ctx.GameServer.BattleStates[ctx.UserID]; ok && battle.IsActive && battle.EnemyLevel > 0 {
-		enemyLevel = battle.EnemyLevel
+	if b, ok := ctx.GameServer.BattleStates[ctx.UserID]; ok && b != nil && b.IsActive {
+		curBattle = b
+		if b.EnemyLevel > 0 {
+			enemyLevel = b.EnemyLevel
+		}
 	}
 	ctx.GameServer.BattleMu.RUnlock()
 	enemyEV := gamepets.EVStats{} // 敌人 EV 默认为 0
 	enemyStats := petMgr.GetStats(int(enemyID), enemyLevel, 15, enemyEV, 0)
 	// 地图 BOSS 使用固定血量（只影响敌方战斗体力，不改种族值与玩家拥有的同名精灵）
-	enemyStats.HP = applyBossHPOverride(int(enemyID), enemyStats.HP)
-	enemyStats.MaxHP = applyBossHPOverride(int(enemyID), enemyStats.MaxHP)
+	enemyStats.HP = applyBossHPOverride(int(enemyID), enemyStats.HP, curBattle)
+	enemyStats.MaxHP = applyBossHPOverride(int(enemyID), enemyStats.MaxHP, curBattle)
 	// 试炼之塔倍率：若当前玩家在试炼之塔中（CurFreshStage>0 且有对应配置），按 GM 配置倍率缩放敌人属性
 	if user.CurFreshStage > 0 {
 		if entry, ok := GetFreshFightEntry(user.CurFreshStage, 1); ok && entry.BossID == int(enemyID) {
@@ -5324,10 +8614,13 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 		return b
 	}
 
-	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32) []byte {
-		// 结构对齐 Lua buildSimplePetInfo:
-		// petId(4)+level(4)+hp(4)+maxHp(4)+skillNum(4)+[id(4)+pp(4)]*4+catchTime(4)+catchMap(4)+catchRect(4)+catchLevel(4)+skinID(4)
-		b := make([]byte, 72)
+	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32, skinID uint32, shiny uint32) []byte {
+		// 结构对齐前端 PetInfo(false)：
+		// petId(4)+level(4)+hp(4)+maxHp(4)+skillNum(4)
+		//   + [id(4)+pp(4)]*4
+		//   + catchTime(4)+catchMap(4)+catchRect(4)+catchLevel(4)
+		//   + skinID(4)+shiny(4)
+		b := make([]byte, 76)
 		binary.BigEndian.PutUint32(b[0:4], petID)
 		binary.BigEndian.PutUint32(b[4:8], level)
 		binary.BigEndian.PutUint32(b[8:12], hp)
@@ -5351,10 +8644,11 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 			off += 8
 		}
 		binary.BigEndian.PutUint32(b[52:56], catchTime)
-		binary.BigEndian.PutUint32(b[56:60], 0) // catchMap = 0（Lua 注释：官服为0）
-		binary.BigEndian.PutUint32(b[60:64], 0) // catchRect
-		binary.BigEndian.PutUint32(b[64:68], 0) // catchLevel = 0（官服为0）
-		binary.BigEndian.PutUint32(b[68:72], petID) // skinID：客户端用此加载精灵模型/图标，0 会导致敌方切换时蓝格占位、模型不切换
+		binary.BigEndian.PutUint32(b[56:60], 0)        // catchMap = 0（Lua 注释：官服为0）
+		binary.BigEndian.PutUint32(b[60:64], 0)        // catchRect
+		binary.BigEndian.PutUint32(b[64:68], 0)        // catchLevel = 0（官服为0）
+		binary.BigEndian.PutUint32(b[68:72], petID)    // skinID：客户端用此加载精灵模型/图标，0 会导致敌方切换时蓝格占位、模型不切换
+		binary.BigEndian.PutUint32(b[72:76], shiny)    // shiny：与前端 PetInfo 结构对齐，这里先统一按 0 发送
 		return b
 	}
 
@@ -5375,7 +8669,11 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 	out = append(out, tmp4...)
 
 	// Player - 发送所有精灵
-	out = append(out, buildFightUserInfo(userID, "Seer")...)
+	nick := "Seer"
+	if user != nil && user.Nick != "" {
+		nick = user.Nick
+	}
+	out = append(out, buildFightUserInfo(userID, nick)...)
 	binary.BigEndian.PutUint32(tmp4, uint32(playerPetCount))
 	out = append(out, tmp4...)
 
@@ -5429,18 +8727,18 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 				petSkills = append(petSkills, [2]uint32{10001, 20})
 			}
 
-			out = append(out, buildSimplePetInfo(uint32(petID), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills)...)
+			out = append(out, buildSimplePetInfo(uint32(petID), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills, uint32(petID), 0)...)
 		}
 	} else {
 		// 没有精灵时发送默认精灵
-		out = append(out, buildSimplePetInfo(uint32(playerPetID), uint32(playerLevel), uint32(playerStats.HP), uint32(playerStats.MaxHP), playerCatch, playerSkills)...)
+		out = append(out, buildSimplePetInfo(uint32(playerPetID), uint32(playerLevel), uint32(playerStats.HP), uint32(playerStats.MaxHP), playerCatch, playerSkills, uint32(playerPetID), 0)...)
 	}
 
 	// Enemy：仅一条，catchTime=0；客户端 _petInfoMap 以 catchTime 为 key，2504/2407 敌方均为 catchTime=0，故此处 skinID=petID 保证 updateEnemyFromOtherInfo/changePet 时模型正确
 	out = append(out, buildFightUserInfo(0, "")...)
 	binary.BigEndian.PutUint32(tmp4, 1)
 	out = append(out, tmp4...)
-	out = append(out, buildSimplePetInfo(enemyID, uint32(enemyLevel), uint32(enemyStats.HP), uint32(enemyStats.MaxHP), 0, enemySkills)...)
+	out = append(out, buildSimplePetInfo(enemyID, uint32(enemyLevel), uint32(enemyStats.HP), uint32(enemyStats.MaxHP), 0, enemySkills, enemyID, 0)...)
 
 	logger.Info(fmt.Sprintf("[2503] NoteReadyToFight: 发送玩家精灵数=%d 敌人ID=%d", playerPetCount, enemyID))
 	return out
@@ -5475,7 +8773,19 @@ func initPlayerSkillPP(battle *gameserver.BattleState, user *userdb.GameData, ac
 	stats := petMgr.GetStats(petID, level, p.DV, ev, p.Nature)
 	battle.PlayerMaxHP = uint32(stats.MaxHP)
 	if battle.PlayerHP == 0 {
-		battle.PlayerHP = uint32(stats.HP)
+		// 使用背包中记录的 CurHP 作为战斗起始体力；若未记录或超出最大值，则按满血处理。
+		curHP := stats.HP
+		if p.CurHP > 0 {
+			if p.CurHP < stats.MaxHP {
+				curHP = p.CurHP
+			} else {
+				curHP = stats.MaxHP
+			}
+		}
+		if curHP < 0 {
+			curHP = 0
+		}
+		battle.PlayerHP = uint32(curHP)
 	}
 
 	var rawSkills []int
@@ -5615,8 +8925,8 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 		copy(b[4:20], nb)
 		return b
 	}
-	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32) []byte {
-		b := make([]byte, 72)
+	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32, skinID uint32, shiny uint32) []byte {
+		b := make([]byte, 76)
 		binary.BigEndian.PutUint32(b[0:4], petID)
 		binary.BigEndian.PutUint32(b[4:8], level)
 		binary.BigEndian.PutUint32(b[8:12], hp)
@@ -5643,6 +8953,7 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 		binary.BigEndian.PutUint32(b[60:64], 0)
 		binary.BigEndian.PutUint32(b[64:68], 0)
 		binary.BigEndian.PutUint32(b[68:72], petID)
+		binary.BigEndian.PutUint32(b[72:76], shiny)
 		return b
 	}
 
@@ -5674,7 +8985,7 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 	if playerPetCount == 0 {
 		playerPetCount = 1
 	}
-	out := make([]byte, 0, 4+20+4+72*playerPetCount+20+4+72*len(bossIDs))
+	out := make([]byte, 0, 4+20+4+76*playerPetCount+20+4+76*len(bossIDs))
 	tmp4 := make([]byte, 4)
 	binary.BigEndian.PutUint32(tmp4, 2)
 	out = append(out, tmp4...)
@@ -5722,10 +9033,10 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 			if len(petSkills) == 0 {
 				petSkills = append(petSkills, [2]uint32{10001, 20})
 			}
-			out = append(out, buildSimplePetInfo(uint32(pid), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills)...)
+			out = append(out, buildSimplePetInfo(uint32(pid), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills, uint32(pid), 0)...)
 		}
 	} else {
-		out = append(out, buildSimplePetInfo(uint32(playerPetID), uint32(playerLevel), uint32(playerStats.HP), uint32(playerStats.MaxHP), playerCatch, playerSkills)...)
+		out = append(out, buildSimplePetInfo(uint32(playerPetID), uint32(playerLevel), uint32(playerStats.HP), uint32(playerStats.MaxHP), playerCatch, playerSkills, uint32(playerPetID), 0)...)
 	}
 
 	out = append(out, buildFightUserInfo(0, "")...)
@@ -5743,8 +9054,8 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 			eid = 13
 		}
 		estats := petMgr.GetStats(eid, enemyLevel, 15, enemyEV, 0)
-		estats.HP = applyBossHPOverride(eid, estats.HP)
-		estats.MaxHP = applyBossHPOverride(eid, estats.MaxHP)
+		estats.HP = applyBossHPOverride(eid, estats.HP, nil)
+		estats.MaxHP = applyBossHPOverride(eid, estats.MaxHP, nil)
 		if towerLevelForScale > 0 {
 			ScaleFightLevelStats(&estats, towerLevelForScale)
 		}
@@ -5772,7 +9083,7 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 		if len(eskills) == 0 {
 			eskills = append(eskills, [2]uint32{10001, 20})
 		}
-		out = append(out, buildSimplePetInfo(uint32(eid), uint32(enemyLevel), uint32(estats.HP), uint32(estats.MaxHP), uint32(i), eskills)...)
+		out = append(out, buildSimplePetInfo(uint32(eid), uint32(enemyLevel), uint32(estats.HP), uint32(estats.MaxHP), uint32(i), eskills, uint32(eid), 0)...)
 	}
 	logger.Info(fmt.Sprintf("[2503] NoteReadyToFightTower: 玩家精灵数=%d 本层Boss数=%d bossIDs=%v", playerPetCount, len(bossIDs), bossIDs))
 	return out
@@ -5791,13 +9102,10 @@ func handleReadyToFight(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.BattleMu.RLock()
 	battle, pvpExists := ctx.GameServer.BattleStates[ctx.UserID]
 	if pvpExists && battle.IsActive && battle.OpponentUserID != 0 {
-		opponentUID := battle.OpponentUserID
 		ctx.GameServer.BattleMu.RUnlock()
 		// 仅回 2504（我方第一条、对方第二条）+ 2301，不写 BattleState
-		body2504 := buildPvP2504BodyForUser(ctx.GameServer, ctx.UserID, opponentUID, battle)
-		if len(body2504) > 0 {
-			ctx.GameServer.SendResponse(ctx.ClientData, 2504, ctx.UserID, ctx.SeqID, body2504)
-		}
+		ack := make([]byte, 4)
+		ctx.GameServer.SendResponse(ctx.ClientData, 2404, ctx.UserID, ctx.SeqID, ack)
 		if len(user.Pets) > 0 {
 			petInfoBody := buildFullPetInfo(user.Pets[0])
 			ctx.GameServer.SendResponse(ctx.ClientData, 2301, ctx.UserID, ctx.SeqID, petInfoBody)
@@ -5837,9 +9145,11 @@ func handleReadyToFight(ctx *gameserver.HandlerContext) {
 	bossID := uint32(13)
 	enemyLevel := 5
 	enemyEV := gamepets.EVStats{} // 敌人 EV 默认为 0
+	var curBattle *gameserver.BattleState
 
 	ctx.GameServer.BattleMu.RLock()
-	if battle, ok := ctx.GameServer.BattleStates[ctx.UserID]; ok && battle.IsActive && battle.EnemyID > 0 {
+	if battle, ok := ctx.GameServer.BattleStates[ctx.UserID]; ok && battle != nil && battle.IsActive && battle.EnemyID > 0 {
+		curBattle = battle
 		bossID = uint32(battle.EnemyID)
 		if battle.EnemyLevel > 0 {
 			enemyLevel = battle.EnemyLevel
@@ -5909,8 +9219,8 @@ func handleReadyToFight(ctx *gameserver.HandlerContext) {
 	enemyStats := petMgr.GetStats(int(bossID), enemyLevel, 15, enemyEV, 0)
 
 	// 地图 BOSS 固定血量：只影响敌方战斗体力，不改种族值与玩家拥有的同名精灵
-	enemyStats.HP = applyBossHPOverride(int(bossID), enemyStats.HP)
-	enemyStats.MaxHP = applyBossHPOverride(int(bossID), enemyStats.MaxHP)
+	enemyStats.HP = applyBossHPOverride(int(bossID), enemyStats.HP, curBattle)
+	enemyStats.MaxHP = applyBossHPOverride(int(bossID), enemyStats.MaxHP, curBattle)
 
 	// 特殊：克洛斯星 BOSS 闪光波克尔（mapID=10, petID=166）固定血量 2000（沿用原逻辑）
 	if int(bossID) == 166 && user.MapID == 10 {
@@ -6679,7 +9989,7 @@ func buildLoginResponse(userID int64, account *userdb.User, gameData *userdb.Gam
 	}
 	// 返回实际的超能NONO形态值（1-5），而不是布尔值，客户端据此加载对应的SWF文件
 	writeU32(uint32(superNono)) // superNono形态值（1-5）
-	logger.Info(fmt.Sprintf("[登录响应] UserID=%d SuperLevel=%d SuperNono形态=%d (应加载nono_%d.swf)", 
+	logger.Info(fmt.Sprintf("[登录响应] UserID=%d SuperLevel=%d SuperNono形态=%d (应加载nono_%d.swf)",
 		userID, gameData.Nono.SuperLevel, superNono, superNono))
 
 	// nonoState / nonoColor / nonoNick
@@ -6842,6 +10152,17 @@ func buildFullPetInfo(p userdb.Pet) []byte {
 	stats := petMgr.GetStats(petID, level, dv, ev, nature)
 	expInfo := petMgr.GetExpInfo(petID, level, exp)
 
+	// 当前体力：默认使用计算得出的 HP，若用户数据中记录了 CurHP（>0 且不超过 MaxHP），则以 CurHP 为准；
+	// CurHP<=0 表示满血（或未知），保持与旧存档兼容。
+	currentHP := stats.HP
+	if p.CurHP > 0 {
+		if p.CurHP < stats.MaxHP {
+			currentHP = p.CurHP
+		} else {
+			currentHP = stats.MaxHP
+		}
+	}
+
 	// 技能列表：最多 4 个；优先使用技能唤醒仪保存的自定义技能
 	var rawSkills []int
 	if len(p.Skills) > 0 {
@@ -6901,11 +10222,11 @@ func buildFullPetInfo(p userdb.Pet) []byte {
 	// 1. 基础信息
 	// nature: 后端与客户端 NatureXMLInfo 的性格顺序不同，需查表转换
 	// 后端: 0孤独,1勇敢,2固执,3调皮,4胆小... | 客户端: 0孤独,1固执,2调皮,3勇敢,4大胆...
-	writeU32(uint32(petID))    // id
-	writeFixedString(name, 16) // name
-	writeU32(uint32(dv))       // dv
+	writeU32(uint32(petID))                    // id
+	writeFixedString(name, 16)                 // name
+	writeU32(uint32(dv))                       // dv
 	writeU32(uint32(natureToClientID(nature))) // nature（转客户端 ID 供正确显示）
-	writeU32(uint32(level))    // level
+	writeU32(uint32(level))                    // level
 	// 对齐前端语义（经验分配器“升级所需经验值”= nextLvExp - exp，须非负）：
 	// - exp: 当前等级已获得经验，客户端用 nextLvExp - exp 显示“升级所需经验值”
 	// - lvExp: 同上，当前等级经验（与 exp 一致）
@@ -6915,7 +10236,7 @@ func buildFullPetInfo(p userdb.Pet) []byte {
 	writeU32(uint32(expInfo.NextLevelExp))    // nextLvExp
 
 	// 2. 战斗属性
-	writeU32(uint32(stats.HP))      // hp
+	writeU32(uint32(currentHP))     // hp（当前体力）
 	writeU32(uint32(stats.MaxHP))   // maxHp
 	writeU32(uint32(stats.Attack))  // atk
 	writeU32(uint32(stats.Defence)) // def
@@ -6955,21 +10276,22 @@ func buildFullPetInfo(p userdb.Pet) []byte {
 		// 对应 com.robot.core.info.pet.PetEffectInfo 的读取顺序：
 		// itemId(U32) + status(U8) + leftCount(U8) + effectID(U16) +
 		// param1(U8) + reserved(U8) + param2(U8) + paddingUTF(13)
-		writeU32(uint32(p.Trait)) // itemId = NewSeIdx.Idx
+		writeU32(uint32(p.Trait))  // itemId = NewSeIdx.Idx
 		buf = append(buf, byte(2)) // status: 2 = 常驻/生效中
 		buf = append(buf, byte(0)) // leftCount: 0 = 无次数限制
 		writeU16(0)                // effectID: 暂未在 Go 端使用，置 0
 		// 简化处理：参数与 13 字节描述区全部填 0，前端仅依赖 itemId/Idx 展示特性名称与说明。
-		buf = append(buf, byte(0))           // param1
-		buf = append(buf, byte(0))           // reserved
-		buf = append(buf, byte(0))           // param2
+		buf = append(buf, byte(0))             // param1
+		buf = append(buf, byte(0))             // reserved
+		buf = append(buf, byte(0))             // param2
 		buf = append(buf, make([]byte, 13)...) // padding / args 占位
 	} else {
 		writeU16(0) // effectCount
 	}
 
-	// 7. Skin
-	writeU32(0) // skinID
+	// 7. Skin & Shiny（与前端 PetInfo 结构对齐：skinID 后紧跟 shiny）
+	writeU32(0) // skinID，当前未实现皮肤系统，固定为 0
+	writeU32(0) // shiny，当前未实现持久化异色，统一返回 0 占位
 
 	return buf
 }
@@ -7056,7 +10378,7 @@ func handleEnterMap(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SetOgreEnterMapTime(ctx.UserID)
 
 	// 构建用户信息响应（格式对齐 UserInfo.setForPeoleInfo / Lua map_handlers.buildPeopleInfo）
-	body := buildPeopleInfo(ctx.UserID, user, time.Now().Unix(), int(x), int(y), true)
+	body := buildPeopleInfo(ctx.UserID, user, time.Now().Unix(), int(x), int(y))
 
 	logger.Info(fmt.Sprintf(
 		"进入地图响应2001: UID=%d MapID=%d BodyLen=%d",
@@ -7078,8 +10400,6 @@ func handleEnterMap(ctx *gameserver.HandlerContext) {
 		user.MapID,
 		binary.BigEndian.Uint32(listBody[0:4]),
 	))
-	// 补发 2112/9019 给进图者：部分客户端仅根据 2112、9019 更新他人飞行与 NONO 跟随显示
-	pushOtherPlayersFlyAndNonoToClient(ctx.GameServer, ctx.ClientData, int(mapId), ctx.UserID)
 
 	// 推送地图怪物列表（与 Lua 一致：每玩家每地图槽位，进图时生成并记录，供定时刷新与 2408 使用）
 	slots := gameogres.GenerateNewSlotsNoCache(int(mapId))
@@ -7124,22 +10444,12 @@ func handleEnterMap(ctx *gameserver.HandlerContext) {
 	// 盖亚按周几出现在三张地图之一：进入“当日盖亚地图”时推送 2022(SPECIAL_PET_NOTE)，客户端显示可点击盖亚及对话今日条件
 	if int(mapId) == getGaiyaMapIDForToday() {
 		gaiyaNote := make([]byte, 8)
-		binary.BigEndian.PutUint32(gaiyaNote[0:4], 1)   // show=1
+		binary.BigEndian.PutUint32(gaiyaNote[0:4], 1) // show=1
 		binary.BigEndian.PutUint32(gaiyaNote[4:8], petIDGaiya)
 		ctx.GameServer.SendResponse(ctx.ClientData, cmdSpecialPetNote, ctx.UserID, 0, gaiyaNote)
 		logger.Info(fmt.Sprintf("[2022] 推送盖亚出场(当日地图): UID=%d MapID=%d", ctx.UserID, user.MapID))
 	}
 
-	// 向自己推送 9003，使客户端 NonoManager.info 有完整数据（含 superStage），己方才能绘制跟随的 NoNo（解包：NonoModel 用 _info.superStage 拼 nono_N.swf）
-	// 原“家园且跟随时不推”会导致己方在基地完全看不见 NoNo，故改为每次进图都推；若出现基地内多一只再按客户端逻辑收窄
-	if user.Nono.SuperLevel > 0 {
-		updateSuperNonoTypeByLevel(user)
-		if ctx.GameServer.UserDB != nil {
-			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
-		}
-	}
-	nonoBody := buildNonoInfo(ctx.UserID, user)
-	ctx.GameServer.SendResponse(ctx.ClientData, 9003, ctx.UserID, 0, nonoBody)
 }
 
 // pushOtherPlayersFlyAndNonoToClient 向刚进图的客户端补发同图其他玩家的 2112（飞行）、9019（NONO 跟随），
@@ -7211,7 +10521,7 @@ func pushInitialMapEnter(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SetOgreEnterMapTime(ctx.UserID)
 
 	// 构建并发送 2001 / 2003 / 2004 / 9003；2003 含同地图所有人使其他玩家可见
-	body := buildPeopleInfo(ctx.UserID, user, time.Now().Unix(), int(x), int(y), true)
+	body := buildPeopleInfo(ctx.UserID, user, time.Now().Unix(), int(x), int(y))
 	ctx.GameServer.SendResponse(ctx.ClientData, 2001, ctx.UserID, 0, body)
 	listBody := buildMapPlayerListForMap(ctx.GameServer, int(mapId))
 	ctx.GameServer.SendResponse(ctx.ClientData, 2003, ctx.UserID, 0, listBody)
@@ -7256,8 +10566,8 @@ func pushInitialMapEnter(ctx *gameserver.HandlerContext) {
 
 // buildPeopleInfo 构建 2001/2003 用的用户信息体，严格对齐
 // 前端 UserInfo.setForPeoleInfo 与 Lua map_handlers.buildPeopleInfo 的读写顺序
-// fixedLen=true 用于 2001 单条包体（固定 144 字节）；fixedLen=false 用于 2003 列表项，保留装备数据供同图玩家可见
-func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, posY int, fixedLen bool) []byte {
+// 注意：包体长度为可变长度，末尾包含 clothes 列表与 curTitle，不能强行截断为固定 144 字节，否则会导致前端读取越界、卡在“加载地图 100%”。
+func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, posY int) []byte {
 	// 确保形态值根据超能等级更新，客户端用此值加载 nono_N.swf
 	if user.Nono.SuperLevel > 0 {
 		updateSuperNonoTypeByLevel(user)
@@ -7324,10 +10634,15 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 	writeU32(uint32(posY))
 	writeU32(0) // action
 	writeU32(0) // direction
-	writeU32(0) // changeShape
+	// changeShape：当前变身套装 ID（来自 PEOPLE_TRANSFROM/TRANSFORM_USER），用于在新地图还原变身外观
+	changeShape := uint32(0)
+	if user.TransformID > 0 {
+		changeShape = uint32(user.TransformID)
+	}
+	writeU32(changeShape)
 
 	// 4. 精灵（spiritTime=catchTime, spiritID=petId）— 仅使用当前跟随精灵，未设置跟随时不发首发精灵，避免别人看见“未设置跟随却显示首发跟随”
-	var petID, catchTime, petDV uint32 = 0, 0, 31
+	var petID, catchTime, petDV, petShiny, petSkin uint32 = 0, 0, 31, 0, 0
 	if user.FollowPetCatchTime > 0 {
 		for _, p := range user.Pets {
 			if p.CatchTime == user.FollowPetCatchTime {
@@ -7355,7 +10670,10 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 	writeU32(catchTime)
 	writeU32(petID)
 	writeU32(petDV)
-	writeU32(0) // petSkin
+	// 与前端 UserInfo.setForPeoleInfo 对齐：依次写入 petShiny / petSkin / fightFlag。
+	// 当前后端尚未持久化异色与皮肤信息，统一返回 0 作为占位值，保证包体结构正确。
+	writeU32(petShiny)
+	writeU32(petSkin)
 	writeU32(0) // fightFlag
 
 	// 5. 师徒
@@ -7375,7 +10693,12 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 	} else {
 		writeU32(0)
 	}
-	writeU32(0) // playerForm
+	// playerForm：是否处于变身状态（布尔），与 changeShape 搭配使用
+	if user.TransformID > 0 {
+		writeU32(1)
+	} else {
+		writeU32(0)
+	}
 	writeU32(0) // transTime
 
 	// 7. TeamInfo：id, coreCount, isShow, logoBg, logoIcon, logoColor, txtColor, logoWord(4)
@@ -7397,21 +10720,6 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 
 	// 9. curTitle
 	writeU32(uint32(user.CurTitle))
-
-	const peopleInfoFixedLen = 144
-	if fixedLen {
-		// 2001 单条包体固定 144 字节，超长会致后续包错位、地图卡 100%
-		if len(buf) > peopleInfoFixedLen {
-			out := make([]byte, peopleInfoFixedLen)
-			copy(out, buf[0:136])
-			binary.BigEndian.PutUint32(out[136:140], 0) // clothes count=0
-			copy(out[140:144], buf[len(buf)-4:])        // curTitle
-			return out
-		}
-	}
-	if len(buf) < peopleInfoFixedLen {
-		return append(buf, make([]byte, peopleInfoFixedLen-len(buf))...)
-	}
 	return buf
 }
 
@@ -7432,6 +10740,9 @@ func buildMapPlayerListForMap(gs *gameserver.GameServer, mapID int) []byte {
 	var parts [][]byte
 	now := time.Now().Unix()
 	for _, c := range clients {
+		if c == nil {
+			continue
+		}
 		user := gs.GetOrCreateUser(c.UserID)
 		x, y := user.PosX, user.PosY
 		if x == 0 {
@@ -7440,7 +10751,7 @@ func buildMapPlayerListForMap(gs *gameserver.GameServer, mapID int) []byte {
 		if y == 0 {
 			y = 300
 		}
-		parts = append(parts, buildPeopleInfo(c.UserID, user, now, x, y, false))
+		parts = append(parts, buildPeopleInfo(c.UserID, user, now, x, y))
 	}
 	total := 0
 	for _, p := range parts {
@@ -7652,14 +10963,89 @@ func handleListMapPlayer(ctx *gameserver.HandlerContext) {
 // handleMapHot CMD 1004 地图热点（宇宙地图热点数据）
 // 客户端 MapHotInfo: count(4) + [id(4)+value(4)]*count；空热点则 count=0
 func handleMapHot(ctx *gameserver.HandlerContext) {
-	body := make([]byte, 4)
-	binary.BigEndian.PutUint32(body, 0) // 热点数量 0，客户端不显示热点
+	// 统计当前在线玩家在各个地图上的人数，作为「热度」值返回给客户端。
+	// 这样世界地图 / 星系面板就能按实际在线人数显示火焰条，行为上与原版一致。
+
+	// 1. 获取当前在线用户列表
+	userIDs := ctx.GameServer.GetOnlineUserIDs()
+	if len(userIDs) == 0 {
+		body := make([]byte, 4)
+		binary.BigEndian.PutUint32(body[0:4], 0)
+		ctx.GameServer.SendResponse(ctx.ClientData, 1004, ctx.UserID, ctx.SeqID, body)
+		return
+	}
+
+	// 2. 统计每张地图的在线人数（MapID -> Count）
+	type mapCount struct {
+		id    int
+		count int
+	}
+	countsMap := make(map[int]int)
+	for _, uid := range userIDs {
+		if uid <= 0 {
+			continue
+		}
+		user := ctx.GameServer.GetOrCreateUser(uid)
+		if user == nil || user.MapID <= 0 {
+			continue
+		}
+		countsMap[user.MapID]++
+	}
+
+	if len(countsMap) == 0 {
+		body := make([]byte, 4)
+		binary.BigEndian.PutUint32(body[0:4], 0)
+		ctx.GameServer.SendResponse(ctx.ClientData, 1004, ctx.UserID, ctx.SeqID, body)
+		return
+	}
+
+	// 3. 转为切片并按在线人数降序、MapID 升序排序，便于客户端稳定展示
+	list := make([]mapCount, 0, len(countsMap))
+	for id, c := range countsMap {
+		list = append(list, mapCount{id: id, count: c})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].count == list[j].count {
+			return list[i].id < list[j].id
+		}
+		return list[i].count > list[j].count
+	})
+
+	// 4. 适当限制返回的地图数量，避免包体过大（客户端最多显示 5 级火焰条）
+	const maxHotMaps = 64
+	if len(list) > maxHotMaps {
+		list = list[:maxHotMaps]
+	}
+
+	// 5. 按 MapHotInfo 协议构建返回体：count(4) + [id(4)+value(4)] * count
+	body := make([]byte, 4+len(list)*8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(list)))
+	offset := 4
+	for _, mc := range list {
+		binary.BigEndian.PutUint32(body[offset:offset+4], uint32(mc.id))
+		offset += 4
+		binary.BigEndian.PutUint32(body[offset:offset+4], uint32(mc.count))
+		offset += 4
+	}
+
 	ctx.GameServer.SendResponse(ctx.ClientData, 1004, ctx.UserID, ctx.SeqID, body)
 }
 
 // handleMapOgreList 处理地图怪物列表命令（与 Lua 一致：优先返回该玩家当前地图的槽位）
 func handleMapOgreList(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user != nil && user.MapID == 677 {
+		slots := gameogres.GenerateNewSlotsNoCache(677)
+		if len(slots) > 0 {
+			ctx.GameServer.SetPlayerOgreSlots(ctx.UserID, 677, slots)
+			body := ctx.GameServer.BuildMapOgreListFromSlots(slots)
+			ctx.GameServer.SendResponse(ctx.ClientData, 2004, ctx.UserID, ctx.SeqID, body)
+			return
+		}
+		body := buildMapOgreList(677)
+		ctx.GameServer.SendResponse(ctx.ClientData, 2004, ctx.UserID, ctx.SeqID, body)
+		return
+	}
 	mapID := user.MapID
 	if mapID == 0 {
 		mapID = 1
@@ -7890,8 +11276,8 @@ func pushMultiEnemySwitch2504_2505(ctx *gameserver.HandlerContext, battle *games
 	petMgr := gamepets.GetInstance()
 	enemyEV := gamepets.EVStats{}
 	enemyStats := petMgr.GetStats(nextBossID, enemyLevel, 15, enemyEV, 0)
-	enemyStats.HP = applyBossHPOverride(nextBossID, enemyStats.HP)
-	enemyStats.MaxHP = applyBossHPOverride(nextBossID, enemyStats.MaxHP)
+	enemyStats.HP = applyBossHPOverride(nextBossID, enemyStats.HP, battle)
+	enemyStats.MaxHP = applyBossHPOverride(nextBossID, enemyStats.MaxHP, battle)
 	if useTowerIndex && battle.TowerLevel > 0 {
 		ScaleFightLevelStats(&enemyStats, battle.TowerLevel)
 	}
@@ -7959,12 +11345,12 @@ func puniDisplayHP(realHP, realMax uint32) (uint32, uint32) {
 
 // 盖亚精元物品 ID；COMPLETE_TASK(2202) / SPRINT_GIFT_NOTICE(8010) / SPECIAL_PET_NOTE(2022) 协议号
 const (
-	itemIDGaiyaEssence   = 400126
-	cmdCompleteTask      = 2202
-	cmdSprintGiftNotice  = 8010
-	cmdSpecialPetNote    = 2022   // 客户端显示/隐藏盖亚出场，body: show(4)+petID(4)
-	taskIDGaiya          = 99
-	petIDGaiya           = 261
+	itemIDGaiyaEssence  = 400126
+	cmdCompleteTask     = 2202
+	cmdSprintGiftNotice = 8010
+	cmdSpecialPetNote   = 2022 // 客户端显示/隐藏盖亚出场，body: show(4)+petID(4)
+	taskIDGaiya         = 99
+	petIDGaiya          = 261
 )
 
 // getGaiyaMapIDForToday 返回当日盖亚出现的地图 ID（15 火山星 / 54 露西欧星 / 105 双子阿尔法星），供进入地图时推送 2022 显示盖亚
@@ -8284,12 +11670,12 @@ func handleUseSkill(ctx *gameserver.HandlerContext) {
 			}
 			ctx.GameServer.BattleMu.Lock()
 			delete(ctx.GameServer.BattleStates, ctx.UserID)
-		if battle.OpponentUserID != 0 {
-			delete(ctx.GameServer.BattleStates, battle.OpponentUserID)
-			ctx.GameServer.BattleMu.Unlock()
-			if otherClient := ctx.GameServer.GetClientByUserID(battle.OpponentUserID); otherClient != nil {
-				ctx.GameServer.SendResponse(otherClient, 2506, battle.OpponentUserID, 0, overBody)
-			}
+			if battle.OpponentUserID != 0 {
+				delete(ctx.GameServer.BattleStates, battle.OpponentUserID)
+				ctx.GameServer.BattleMu.Unlock()
+				if otherClient := ctx.GameServer.GetClientByUserID(battle.OpponentUserID); otherClient != nil {
+					ctx.GameServer.SendResponse(otherClient, 2506, battle.OpponentUserID, 0, overBody)
+				}
 			} else {
 				ctx.GameServer.BattleMu.Unlock()
 			}
@@ -8297,8 +11683,25 @@ func handleUseSkill(ctx *gameserver.HandlerContext) {
 			// 多精灵：当前精灵被击败且还有后备时，自动切换为下一只可用精灵并推送 2407，客户端无需手动换宠
 			petMgr := gamepets.GetInstance()
 			nextIndex := -1
-			for i := 1; i < len(user.Pets); i++ {
-				idx := (battle.ActivePetIndex + i) % len(user.Pets)
+			candidateIndexes := battle.AllowedPetIndexes
+			if len(candidateIndexes) == 0 {
+				candidateIndexes = make([]int, 0, len(user.Pets))
+				for i := range user.Pets {
+					candidateIndexes = append(candidateIndexes, i)
+				}
+			}
+			startPos := 0
+			for pos, idx := range candidateIndexes {
+				if idx == battle.ActivePetIndex {
+					startPos = pos
+					break
+				}
+			}
+			for i := 1; i <= len(candidateIndexes); i++ {
+				idx := candidateIndexes[(startPos+i)%len(candidateIndexes)]
+				if idx < 0 || idx >= len(user.Pets) {
+					continue
+				}
 				p := &user.Pets[idx]
 				ev := p.GetEVStats()
 				st := petMgr.GetStats(p.ID, p.Level, p.DV, ev, p.Nature)
@@ -9369,57 +12772,57 @@ func handleUseSkill(ctx *gameserver.HandlerContext) {
 				}
 			}
 		}
-	// 68: 致死留 1 血（仅一次）
-	if playerHit && finalDamage > 0 && battle.EnemyEndureRounds > 0 && finalDamage >= battle.EnemyHP && battle.EnemyHP > 0 {
-		finalDamage = battle.EnemyHP - 1
-		battle.EnemyEndureRounds--
-	}
-	// 402 - 后出手时额外附加 n 点固定伤害
-	if playerHit && skill.EffectID == 402 && enemyFirst && finalDamage > 0 {
-		effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
-		bonus := uint32(50)
-		if len(effArgs) >= 1 && effArgs[0] > 0 {
-			bonus = uint32(effArgs[0])
+		// 68: 致死留 1 血（仅一次）
+		if playerHit && finalDamage > 0 && battle.EnemyEndureRounds > 0 && finalDamage >= battle.EnemyHP && battle.EnemyHP > 0 {
+			finalDamage = battle.EnemyHP - 1
+			battle.EnemyEndureRounds--
 		}
-		finalDamage += bonus
-		if finalDamage > battle.EnemyHP {
-			finalDamage = battle.EnemyHP
-		}
-	}
-	// 405 - 先出手时额外附加 n 点固定伤害
-	if playerHit && skill.EffectID == 405 && !enemyFirst && finalDamage > 0 {
-		effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
-		bonus := uint32(50)
-		if len(effArgs) >= 1 && effArgs[0] > 0 {
-			bonus = uint32(effArgs[0])
-		}
-		finalDamage += bonus
-		if finalDamage > battle.EnemyHP {
-			finalDamage = battle.EnemyHP
-		}
-	}
-	// BOSS/特殊多效果：GM 配置的固定伤害等（如 976 简/极）
-	if playerHit && finalDamage > 0 {
-		eids := gameskills.ParseSideEffectIds(skill.SideEffect)
-		for _, eid := range eids {
-			p := GetBossEffectParams(eid)
-			if p.FixedDamage > 0 {
-				finalDamage += uint32(p.FixedDamage)
+		// 402 - 后出手时额外附加 n 点固定伤害
+		if playerHit && skill.EffectID == 402 && enemyFirst && finalDamage > 0 {
+			effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
+			bonus := uint32(50)
+			if len(effArgs) >= 1 && effArgs[0] > 0 {
+				bonus = uint32(effArgs[0])
+			}
+			finalDamage += bonus
+			if finalDamage > battle.EnemyHP {
+				finalDamage = battle.EnemyHP
 			}
 		}
-		if finalDamage > battle.EnemyHP {
-			finalDamage = battle.EnemyHP
+		// 405 - 先出手时额外附加 n 点固定伤害
+		if playerHit && skill.EffectID == 405 && !enemyFirst && finalDamage > 0 {
+			effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
+			bonus := uint32(50)
+			if len(effArgs) >= 1 && effArgs[0] > 0 {
+				bonus = uint32(effArgs[0])
+			}
+			finalDamage += bonus
+			if finalDamage > battle.EnemyHP {
+				finalDamage = battle.EnemyHP
+			}
 		}
-	}
-	// 敌方 146：我方以物理攻击命中敌方时，敌方 n 回合内 m% 使对方（我方）中毒
-	if playerHit && finalDamage > 0 && skill.Category == 1 && battle.EnemyPoisonOnPhysHitRounds > 0 &&
-		battle.PlayerStatus[gameskills.StatusIndexPoison] == 0 {
-		if rand.Intn(100) < int(battle.EnemyPoisonOnPhysHitChance) {
-			battle.PlayerStatus[gameskills.StatusIndexPoison] = byte(rand.Intn(2) + 1)
+		// BOSS/特殊多效果：GM 配置的固定伤害等（如 976 简/极）
+		if playerHit && finalDamage > 0 {
+			eids := gameskills.ParseSideEffectIds(skill.SideEffect)
+			for _, eid := range eids {
+				p := GetBossEffectParams(eid)
+				if p.FixedDamage > 0 {
+					finalDamage += uint32(p.FixedDamage)
+				}
+			}
+			if finalDamage > battle.EnemyHP {
+				finalDamage = battle.EnemyHP
+			}
 		}
+		// 敌方 146：我方以物理攻击命中敌方时，敌方 n 回合内 m% 使对方（我方）中毒
+		if playerHit && finalDamage > 0 && skill.Category == 1 && battle.EnemyPoisonOnPhysHitRounds > 0 &&
+			battle.PlayerStatus[gameskills.StatusIndexPoison] == 0 {
+			if rand.Intn(100) < int(battle.EnemyPoisonOnPhysHitChance) {
+				battle.PlayerStatus[gameskills.StatusIndexPoison] = byte(rand.Intn(2) + 1)
+			}
+		}
+		damage = finalDamage
 	}
-	damage = finalDamage
-}
 	// 疲惫或未命中时本回合不造成直接伤害
 	if skipPlayerAction || !playerHit {
 		damageCalc = 0
@@ -10478,666 +13881,666 @@ doPlayerTurn:
 				}
 			}
 
-		var effectRecoil uint32
-		// 91 - 镜像前保存旧值，ApplyEffect 后若镜像回合>0 则双方能力/状态变化同步
-		var oldPlayerLv [6]int8
-		var oldEnemyLv [6]int8
-		var oldPlayerStatus, oldEnemyStatus [20]byte
-		if battle.PlayerStatusMirrorRounds > 0 {
-			oldPlayerLv = battle.PlayerBattleLv
-			oldEnemyLv = battle.EnemyBattleLv
-			oldPlayerStatus = battle.PlayerStatus
-			oldEnemyStatus = battle.EnemyStatus
-		}
-		effectGainHP, effectRecoil = gameskills.ApplyEffect(skill, damage,
-			&battle.PlayerHP, &battle.EnemyHP,
-			battle.PlayerMaxHP, battle.EnemyMaxHP,
-			&battle.PlayerBattleLv, &battle.EnemyBattleLv,
-			&battle.PlayerStatus, &battle.EnemyStatus, battle.EnemyID,
-			battle.EnemyImmuneStatDropRounds, battle.EnemyImmuneStatusRounds)
-		_ = effectRecoil
-		if battle.PlayerStatusMirrorRounds > 0 {
-			for i := 0; i < 6; i++ {
-				deltaE := int(battle.EnemyBattleLv[i]) - int(oldEnemyLv[i])
-				deltaP := int(battle.PlayerBattleLv[i]) - int(oldPlayerLv[i])
-				v := int(oldPlayerLv[i]) + deltaE + deltaP
-				if v > 6 {
-					v = 6
-				}
-				if v < -6 {
-					v = -6
-				}
-				battle.PlayerBattleLv[i] = int8(v)
-				v = int(oldEnemyLv[i]) + deltaE + deltaP
-				if v > 6 {
-					v = 6
-				}
-				if v < -6 {
-					v = -6
-				}
-				battle.EnemyBattleLv[i] = int8(v)
+			var effectRecoil uint32
+			// 91 - 镜像前保存旧值，ApplyEffect 后若镜像回合>0 则双方能力/状态变化同步
+			var oldPlayerLv [6]int8
+			var oldEnemyLv [6]int8
+			var oldPlayerStatus, oldEnemyStatus [20]byte
+			if battle.PlayerStatusMirrorRounds > 0 {
+				oldPlayerLv = battle.PlayerBattleLv
+				oldEnemyLv = battle.EnemyBattleLv
+				oldPlayerStatus = battle.PlayerStatus
+				oldEnemyStatus = battle.EnemyStatus
 			}
-			for i := 0; i < 20; i++ {
-				deltaE := int(battle.EnemyStatus[i]) - int(oldEnemyStatus[i])
-				deltaP := int(battle.PlayerStatus[i]) - int(oldPlayerStatus[i])
-				v := int(oldPlayerStatus[i]) + deltaE + deltaP
-				if v < 0 {
-					v = 0
+			effectGainHP, effectRecoil = gameskills.ApplyEffect(skill, damage,
+				&battle.PlayerHP, &battle.EnemyHP,
+				battle.PlayerMaxHP, battle.EnemyMaxHP,
+				&battle.PlayerBattleLv, &battle.EnemyBattleLv,
+				&battle.PlayerStatus, &battle.EnemyStatus, battle.EnemyID,
+				battle.EnemyImmuneStatDropRounds, battle.EnemyImmuneStatusRounds)
+			_ = effectRecoil
+			if battle.PlayerStatusMirrorRounds > 0 {
+				for i := 0; i < 6; i++ {
+					deltaE := int(battle.EnemyBattleLv[i]) - int(oldEnemyLv[i])
+					deltaP := int(battle.PlayerBattleLv[i]) - int(oldPlayerLv[i])
+					v := int(oldPlayerLv[i]) + deltaE + deltaP
+					if v > 6 {
+						v = 6
+					}
+					if v < -6 {
+						v = -6
+					}
+					battle.PlayerBattleLv[i] = int8(v)
+					v = int(oldEnemyLv[i]) + deltaE + deltaP
+					if v > 6 {
+						v = 6
+					}
+					if v < -6 {
+						v = -6
+					}
+					battle.EnemyBattleLv[i] = int8(v)
 				}
-				if v > 10 {
-					v = 10
+				for i := 0; i < 20; i++ {
+					deltaE := int(battle.EnemyStatus[i]) - int(oldEnemyStatus[i])
+					deltaP := int(battle.PlayerStatus[i]) - int(oldPlayerStatus[i])
+					v := int(oldPlayerStatus[i]) + deltaE + deltaP
+					if v < 0 {
+						v = 0
+					}
+					if v > 10 {
+						v = 10
+					}
+					battle.PlayerStatus[i] = byte(v)
+					v = int(oldEnemyStatus[i]) + deltaE + deltaP
+					if v < 0 {
+						v = 0
+					}
+					if v > 10 {
+						v = 10
+					}
+					battle.EnemyStatus[i] = byte(v)
 				}
-				battle.PlayerStatus[i] = byte(v)
-				v = int(oldEnemyStatus[i]) + deltaE + deltaP
-				if v < 0 {
-					v = 0
-				}
-				if v > 10 {
-					v = 10
-				}
-				battle.EnemyStatus[i] = byte(v)
 			}
-		}
 
-		// 暴击率提升效果（SideEffect 58 系列）：SideEffectArg[0] = 持续回合数
-		// 表现：下 n 回合内，自身使用“攻击技能”时必定打出致命一击。
-		if skill.EffectID == 58 {
-			effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
-			if len(effArgs) >= 1 {
-				rounds := effArgs[0]
-				if rounds < 0 {
-					rounds = 0
-				}
-				if rounds > 0 {
-					// +1 是为了配合“每个战斗回合结束时自动减 1”的机制，
-					// 确保玩家在之后能获得 param1[0] 个完整回合的必定暴击效果。
-					battle.PlayerCritBuffRounds = byte(rounds + 1)
+			// 暴击率提升效果（SideEffect 58 系列）：SideEffectArg[0] = 持续回合数
+			// 表现：下 n 回合内，自身使用“攻击技能”时必定打出致命一击。
+			if skill.EffectID == 58 {
+				effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
+				if len(effArgs) >= 1 {
+					rounds := effArgs[0]
+					if rounds < 0 {
+						rounds = 0
+					}
+					if rounds > 0 {
+						// +1 是为了配合“每个战斗回合结束时自动减 1”的机制，
+						// 确保玩家在之后能获得 param1[0] 个完整回合的必定暴击效果。
+						battle.PlayerCritBuffRounds = byte(rounds + 1)
+					}
 				}
 			}
-		}
 
-		// 多效果技能（如 43 508、1635）：按 SideEffect 列表依次消耗参数并设置回合状态
-		if playerHit {
-			eids := gameskills.ParseSideEffectIds(skill.SideEffect)
-			effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
-			offset := 0
-			for _, eid := range eids {
-				n := gameskills.EffectArgCount(eid)
-				if offset+n > len(effArgs) {
-					break
-				}
-				subArgs := effArgs[offset : offset+n]
-				offset += n
-				switch eid {
-				case 58: // 下 n 回合攻击技能必定暴击（多效果时也生效）
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						rounds := subArgs[0]
+			// 多效果技能（如 43 508、1635）：按 SideEffect 列表依次消耗参数并设置回合状态
+			if playerHit {
+				eids := gameskills.ParseSideEffectIds(skill.SideEffect)
+				effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
+				offset := 0
+				for _, eid := range eids {
+					n := gameskills.EffectArgCount(eid)
+					if offset+n > len(effArgs) {
+						break
+					}
+					subArgs := effArgs[offset : offset+n]
+					offset += n
+					switch eid {
+					case 58: // 下 n 回合攻击技能必定暴击（多效果时也生效）
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							rounds := subArgs[0]
+							if rounds > 10 {
+								rounds = 10
+							}
+							battle.PlayerCritBuffRounds = byte(rounds + 1)
+						}
+					case 508: // 减少 m 点下回合所受的伤害（魂之再生等）
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerNextTurnDamageReduce = uint32(subArgs[0])
+						}
+					case 81: // 下 n 回合自身攻击技能必定命中
+						rounds := 3
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							rounds = subArgs[0]
+						}
 						if rounds > 10 {
 							rounds = 10
 						}
-						battle.PlayerCritBuffRounds = byte(rounds + 1)
-					}
-				case 508: // 减少 m 点下回合所受的伤害（魂之再生等）
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerNextTurnDamageReduce = uint32(subArgs[0])
-					}
-				case 81: // 下 n 回合自身攻击技能必定命中
-					rounds := 3
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						rounds = subArgs[0]
-					}
-					if rounds > 10 {
-						rounds = 10
-					}
-					battle.PlayerMustHitRounds = byte(rounds + 1) // +1 使本回合也生效
-				case 60: // n 回合内每回合附加 m 点固定伤害
-					if len(subArgs) >= 2 && subArgs[0] > 0 && subArgs[1] > 0 {
-						battle.EnemyFixedDotRounds = byte(subArgs[0])
-						battle.EnemyFixedDotDamage = uint32(subArgs[1])
-					}
-				case 76: // m% 几率 n 回合每回合 k 点固定伤害
-					if len(subArgs) >= 3 && subArgs[1] > 0 && subArgs[2] > 0 {
-						chance := 100
-						if subArgs[0] > 0 {
+						battle.PlayerMustHitRounds = byte(rounds + 1) // +1 使本回合也生效
+					case 60: // n 回合内每回合附加 m 点固定伤害
+						if len(subArgs) >= 2 && subArgs[0] > 0 && subArgs[1] > 0 {
+							battle.EnemyFixedDotRounds = byte(subArgs[0])
+							battle.EnemyFixedDotDamage = uint32(subArgs[1])
+						}
+					case 76: // m% 几率 n 回合每回合 k 点固定伤害
+						if len(subArgs) >= 3 && subArgs[1] > 0 && subArgs[2] > 0 {
+							chance := 100
+							if subArgs[0] > 0 {
+								chance = subArgs[0]
+							}
+							if rand.Intn(100) < chance {
+								battle.EnemyFixedDotRounds = byte(subArgs[1])
+								battle.EnemyFixedDotDamage = uint32(subArgs[2])
+							}
+						}
+					case 77: // n 回合内每次使用技能恢复 m 点体力
+						if len(subArgs) >= 2 && subArgs[0] > 0 && subArgs[1] > 0 {
+							battle.PlayerRegenPerUseRounds = byte(subArgs[0])
+							battle.PlayerRegenPerUseAmount = uint32(subArgs[1])
+						}
+					case 78: // n 回合内物理攻击对自身必定 miss
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerPhysMissRounds = byte(subArgs[0])
+						}
+					case 83: // 自身雄性下两回合必定先手；雌性下两回合必定暴击
+						if attackerPet != nil {
+							if attackerPet.Gender == 1 {
+								battle.PlayerMaleFirstStrikeRounds = 2
+							} else if attackerPet.Gender == 2 {
+								battle.PlayerFemaleCritRounds = 2
+							}
+						}
+					case 84: // n 回合内受到物理攻击时 m% 几率将对手麻痹
+						if len(subArgs) >= 2 && subArgs[0] > 0 {
+							battle.PlayerParalyzeOnPhysHitRounds = byte(subArgs[0])
+							chance := subArgs[1]
+							if chance > 100 {
+								chance = 100
+							}
+							battle.PlayerParalyzeOnPhysHitChance = byte(chance)
+						}
+					case 86: // n 回合内属性（特殊）攻击对自身必定 miss
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerSpecialMissRounds = byte(subArgs[0])
+						}
+					case 91: // n 回合内双方状态变化同时影响己方与对手
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerStatusMirrorRounds = byte(subArgs[0])
+						}
+					case 89: // n 回合内造成伤害时吸血 damage/divisor
+						n, div := 0, 2
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							div = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerLifestealRounds = byte(n)
+							battle.PlayerLifestealDivisor = byte(div)
+						}
+					case 90: // n 回合己方攻击伤害 m 倍（同 53）
+						n, mult := 0, 2
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							mult = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerDamageMultRounds = byte(n)
+							battle.PlayerDamageMult = byte(mult)
+						}
+					case 92: // n 回合内受到物理攻击时 m% 几率将对手冻伤
+						n, chance := 0, 50
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							chance = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerFreezeOnPhysHitRounds = byte(n)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.PlayerFreezeOnPhysHitChance = byte(chance)
+						}
+					case 127: // n% 概率 m 回合内受到伤害减半
+						chance, rounds := 50, 3
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
 							chance = subArgs[0]
 						}
-						if rand.Intn(100) < chance {
-							battle.EnemyFixedDotRounds = byte(subArgs[1])
-							battle.EnemyFixedDotDamage = uint32(subArgs[2])
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							rounds = subArgs[1]
 						}
-					}
-				case 77: // n 回合内每次使用技能恢复 m 点体力
-					if len(subArgs) >= 2 && subArgs[0] > 0 && subArgs[1] > 0 {
-						battle.PlayerRegenPerUseRounds = byte(subArgs[0])
-						battle.PlayerRegenPerUseAmount = uint32(subArgs[1])
-					}
-				case 78: // n 回合内物理攻击对自身必定 miss
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerPhysMissRounds = byte(subArgs[0])
-					}
-				case 83: // 自身雄性下两回合必定先手；雌性下两回合必定暴击
-					if attackerPet != nil {
-						if attackerPet.Gender == 1 {
-							battle.PlayerMaleFirstStrikeRounds = 2
-						} else if attackerPet.Gender == 2 {
-							battle.PlayerFemaleCritRounds = 2
-						}
-					}
-				case 84: // n 回合内受到物理攻击时 m% 几率将对手麻痹
-					if len(subArgs) >= 2 && subArgs[0] > 0 {
-						battle.PlayerParalyzeOnPhysHitRounds = byte(subArgs[0])
-						chance := subArgs[1]
 						if chance > 100 {
 							chance = 100
 						}
-						battle.PlayerParalyzeOnPhysHitChance = byte(chance)
-					}
-				case 86: // n 回合内属性（特殊）攻击对自身必定 miss
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerSpecialMissRounds = byte(subArgs[0])
-					}
-				case 91: // n 回合内双方状态变化同时影响己方与对手
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerStatusMirrorRounds = byte(subArgs[0])
-					}
-				case 89: // n 回合内造成伤害时吸血 damage/divisor
-					n, div := 0, 2
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						div = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerLifestealRounds = byte(n)
-						battle.PlayerLifestealDivisor = byte(div)
-					}
-				case 90: // n 回合己方攻击伤害 m 倍（同 53）
-					n, mult := 0, 2
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						mult = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerDamageMultRounds = byte(n)
-						battle.PlayerDamageMult = byte(mult)
-					}
-				case 92: // n 回合内受到物理攻击时 m% 几率将对手冻伤
-					n, chance := 0, 50
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						chance = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerFreezeOnPhysHitRounds = byte(n)
-						if chance > 100 {
-							chance = 100
+						if rand.Intn(100) < chance && rounds > 0 {
+							battle.PlayerDamageHalfRounds = byte(rounds)
 						}
-						battle.PlayerFreezeOnPhysHitChance = byte(chance)
-					}
-				case 127: // n% 概率 m 回合内受到伤害减半
-					chance, rounds := 50, 3
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						chance = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						rounds = subArgs[1]
-					}
-					if chance > 100 {
-						chance = 100
-					}
-					if rand.Intn(100) < chance && rounds > 0 {
-						battle.PlayerDamageHalfRounds = byte(rounds)
-					}
-				case 144: // 消耗全部体力，下一只 n 回合免疫异常（HP 已在 ApplyEffect 归零）
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerSacrificeImmuneStatusRounds = byte(subArgs[0])
-					}
-				case 146: // n 回合内受物理攻击时 m% 使对方中毒
-					n, m := 0, 50
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						m = subArgs[1]
-					}
-					if m > 100 {
-						m = 100
-					}
-					if n > 0 {
-						battle.PlayerPoisonOnPhysHitRounds = byte(n)
-						battle.PlayerPoisonOnPhysHitChance = byte(m)
-					}
-				case 150: // n 回合内对手每回合防、特防等级 m
-					n, m := 0, 1
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 {
-						m = subArgs[1]
-					}
-					if n > 0 {
-						battle.EnemyDefSpDefRounds = byte(n)
-						if m < -6 {
-							m = -6
+					case 144: // 消耗全部体力，下一只 n 回合免疫异常（HP 已在 ApplyEffect 归零）
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerSacrificeImmuneStatusRounds = byte(subArgs[0])
 						}
-						if m > 6 {
-							m = 6
+					case 146: // n 回合内受物理攻击时 m% 使对方中毒
+						n, m := 0, 50
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
 						}
-						battle.EnemyDefSpDefStages = int8(m)
-					}
-				case 98: // n 回合内对雄性精灵的伤害为 m 倍
-					n, mult := 0, 2
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						mult = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerMaleDamageMultRounds = byte(n)
-						battle.PlayerMaleDamageMult = byte(mult)
-					}
-				case 104: // n 回合内每次直接攻击 m% 几率附带衰弱
-					n, chance := 0, 50
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						chance = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerWeaknessOnHitRounds = byte(n)
-						if chance > 100 {
-							chance = 100
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							m = subArgs[1]
 						}
-						battle.PlayerWeaknessOnHitChance = byte(chance)
-					}
-				case 106: // n 回合内属性（特殊）攻击对自身必定 miss（同 86）
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerSpecialMissRounds = byte(subArgs[0])
-					}
-				case 107: // 伤害小于 n 则自身 stat 等级+1（每击判定，无回合状态）
-					// 参数在伤害应用时从技能读取，此处仅占位保证多效果解析不越界
-				case 108: // n 回合内受到物理攻击时 m% 几率将对手烧伤
-					n, chance := 0, 50
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						chance = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerBurnOnPhysHitRounds = byte(n)
-						if chance > 100 {
-							chance = 100
+						if m > 100 {
+							m = 100
 						}
-						battle.PlayerBurnOnPhysHitChance = byte(chance)
-					}
-				case 109: // n 回合内造成伤害时 m% 几率令对手冻伤
-					n, chance := 0, 50
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						chance = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerFreezeOnDealDamageRounds = byte(n)
-						if chance > 100 {
-							chance = 100
+						if n > 0 {
+							battle.PlayerPoisonOnPhysHitRounds = byte(n)
+							battle.PlayerPoisonOnPhysHitChance = byte(m)
 						}
-						battle.PlayerFreezeOnDealDamageChance = byte(chance)
-					}
-				case 1635: // 誓言之约：k 回合后恢复全部体力
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						battle.PlayerDelayedFullHealRounds = byte(subArgs[1])
-					}
-				// BOSS/特殊多效果：仅消费参数，不修改战斗状态；后续可按配置扩展
-				case 691, 700, 1083, 1248, 1257, 1605, 1850, 1925, 2236, 2237:
-					// 单参或已由 effectArgCount 切分的 subArgs，此处仅占位
-				case 773, 935:
-					// 简/极 无独立参数（0 参）
-				case 976:
-					// 简/极 第二参（如 28），可扩展为当回合固定伤害等
-				case 1211:
-					// 希 双参（如 100 300）
-				case 1470:
-					// 简/极 首参（如 1）
-				case 1603:
-					// 谄诳/红莲等 两参（如 100 1）
-				case 439: // 若自身处于能力下降或异常则对手每回合受到 m 点固定伤害
-					nR, dmg := 5, 200
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						nR = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						dmg = subArgs[1]
-					}
-					if nR > 10 {
-						nR = 10
-					}
-					battle.PlayerDealFixedDotWhenWeakRounds = byte(nR)
-					battle.PlayerDealFixedDotWhenWeakDamage = uint32(dmg)
-				case 448: // n 回合内每回合对手全能力降低 stages 级
-					nR, stages := 2, -1
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						nR = subArgs[0]
-					}
-					if len(subArgs) >= 2 {
-						stages = subArgs[1]
-						if stages == 0 {
-							stages = -1
+					case 150: // n 回合内对手每回合防、特防等级 m
+						n, m := 0, 1
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
 						}
-					}
-					if stages > 0 {
-						stages = -stages
-					}
-					if stages < -6 {
-						stages = -6
-					}
-					if nR > 10 {
-						nR = 10
-					}
-					battle.EnemyAllStatDropRounds = byte(nR)
-					battle.EnemyAllStatDropStages = int8(stages)
-				case 478: // n 回合内令对手使用的属性技能无效
-					nR := 2
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						nR = subArgs[0]
-					}
-					if nR > 10 {
-						nR = 10
-					}
-					battle.EnemyStatusSkillInvalidRounds = byte(nR)
-				case 545: // n 回合内若受到伤害高于 m 则对手获得效果 type
-					nR, thresh, typ := 3, 200, 1
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						nR = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						thresh = subArgs[1]
-					}
-					if len(subArgs) >= 3 {
-						typ = subArgs[2]
-					}
-					if nR > 10 {
-						nR = 10
-					}
-					battle.PlayerReflectStatusWhenHitRounds = byte(nR)
-					battle.PlayerReflectStatusWhenHitThreshold = uint32(thresh)
-					battle.PlayerReflectStatusWhenHitType = byte(typ)
-				case 87: // 恢复自身所有技能 PP 值
-					for i := 0; i < 4; i++ {
-						if battle.PlayerSkillIDs[i] != 0 {
-							if sk := skillMgr.Get(int(battle.PlayerSkillIDs[i])); sk != nil && sk.MaxPP > 0 {
-								battle.PlayerSkillPP[i] = byte(sk.MaxPP)
-							} else {
-								battle.PlayerSkillPP[i] = 35
+						if len(subArgs) >= 2 {
+							m = subArgs[1]
+						}
+						if n > 0 {
+							battle.EnemyDefSpDefRounds = byte(n)
+							if m < -6 {
+								m = -6
+							}
+							if m > 6 {
+								m = 6
+							}
+							battle.EnemyDefSpDefStages = int8(m)
+						}
+					case 98: // n 回合内对雄性精灵的伤害为 m 倍
+						n, mult := 0, 2
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							mult = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerMaleDamageMultRounds = byte(n)
+							battle.PlayerMaleDamageMult = byte(mult)
+						}
+					case 104: // n 回合内每次直接攻击 m% 几率附带衰弱
+						n, chance := 0, 50
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							chance = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerWeaknessOnHitRounds = byte(n)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.PlayerWeaknessOnHitChance = byte(chance)
+						}
+					case 106: // n 回合内属性（特殊）攻击对自身必定 miss（同 86）
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerSpecialMissRounds = byte(subArgs[0])
+						}
+					case 107: // 伤害小于 n 则自身 stat 等级+1（每击判定，无回合状态）
+						// 参数在伤害应用时从技能读取，此处仅占位保证多效果解析不越界
+					case 108: // n 回合内受到物理攻击时 m% 几率将对手烧伤
+						n, chance := 0, 50
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							chance = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerBurnOnPhysHitRounds = byte(n)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.PlayerBurnOnPhysHitChance = byte(chance)
+						}
+					case 109: // n 回合内造成伤害时 m% 几率令对手冻伤
+						n, chance := 0, 50
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							chance = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerFreezeOnDealDamageRounds = byte(n)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.PlayerFreezeOnDealDamageChance = byte(chance)
+						}
+					case 1635: // 誓言之约：k 回合后恢复全部体力
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							battle.PlayerDelayedFullHealRounds = byte(subArgs[1])
+						}
+					// BOSS/特殊多效果：仅消费参数，不修改战斗状态；后续可按配置扩展
+					case 691, 700, 1083, 1248, 1257, 1605, 1850, 1925, 2236, 2237:
+						// 单参或已由 effectArgCount 切分的 subArgs，此处仅占位
+					case 773, 935:
+						// 简/极 无独立参数（0 参）
+					case 976:
+						// 简/极 第二参（如 28），可扩展为当回合固定伤害等
+					case 1211:
+						// 希 双参（如 100 300）
+					case 1470:
+						// 简/极 首参（如 1）
+					case 1603:
+						// 谄诳/红莲等 两参（如 100 1）
+					case 439: // 若自身处于能力下降或异常则对手每回合受到 m 点固定伤害
+						nR, dmg := 5, 200
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							nR = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							dmg = subArgs[1]
+						}
+						if nR > 10 {
+							nR = 10
+						}
+						battle.PlayerDealFixedDotWhenWeakRounds = byte(nR)
+						battle.PlayerDealFixedDotWhenWeakDamage = uint32(dmg)
+					case 448: // n 回合内每回合对手全能力降低 stages 级
+						nR, stages := 2, -1
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							nR = subArgs[0]
+						}
+						if len(subArgs) >= 2 {
+							stages = subArgs[1]
+							if stages == 0 {
+								stages = -1
+							}
+						}
+						if stages > 0 {
+							stages = -stages
+						}
+						if stages < -6 {
+							stages = -6
+						}
+						if nR > 10 {
+							nR = 10
+						}
+						battle.EnemyAllStatDropRounds = byte(nR)
+						battle.EnemyAllStatDropStages = int8(stages)
+					case 478: // n 回合内令对手使用的属性技能无效
+						nR := 2
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							nR = subArgs[0]
+						}
+						if nR > 10 {
+							nR = 10
+						}
+						battle.EnemyStatusSkillInvalidRounds = byte(nR)
+					case 545: // n 回合内若受到伤害高于 m 则对手获得效果 type
+						nR, thresh, typ := 3, 200, 1
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							nR = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							thresh = subArgs[1]
+						}
+						if len(subArgs) >= 3 {
+							typ = subArgs[2]
+						}
+						if nR > 10 {
+							nR = 10
+						}
+						battle.PlayerReflectStatusWhenHitRounds = byte(nR)
+						battle.PlayerReflectStatusWhenHitThreshold = uint32(thresh)
+						battle.PlayerReflectStatusWhenHitType = byte(typ)
+					case 87: // 恢复自身所有技能 PP 值
+						for i := 0; i < 4; i++ {
+							if battle.PlayerSkillIDs[i] != 0 {
+								if sk := skillMgr.Get(int(battle.PlayerSkillIDs[i])); sk != nil && sk.MaxPP > 0 {
+									battle.PlayerSkillPP[i] = byte(sk.MaxPP)
+								} else {
+									battle.PlayerSkillPP[i] = 35
+								}
+							}
+						}
+					case 21: // m~n 回合每回合反弹对手伤害的 1/k（多效果时用第2、3参为回合数、除数）
+						nR, k := 3, 4
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							nR = subArgs[1]
+						}
+						if len(subArgs) >= 3 && subArgs[2] > 0 {
+							k = subArgs[2]
+						}
+						if nR > 10 {
+							nR = 10
+						}
+						if k > 10 {
+							k = 10
+						}
+						battle.PlayerReflectDamageRounds = byte(nR)
+						battle.PlayerReflectDamageDivisor = byte(k)
+					case 32: // n 回合暴击率增加 1/16
+						nR := 3
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							nR = subArgs[0]
+						}
+						if nR > 10 {
+							nR = 10
+						}
+						battle.PlayerCritRateBonusRounds = byte(nR + 1)
+					case 454: // 当自身血量少于 1/n 时先制 +m
+						nDiv, mBonus := 3, 1
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							nDiv = subArgs[0]
+						}
+						if len(subArgs) >= 2 {
+							mBonus = subArgs[1]
+						}
+						if nDiv > 10 {
+							nDiv = 10
+						}
+						battle.PlayerPriorityBonusWhenLowHPRounds = 1
+						battle.PlayerPriorityBonusWhenLowHPDivisor = byte(nDiv)
+						battle.PlayerPriorityBonusWhenLowHPBonus = mBonus
+					case 482: // m% 几率先制 +n（本回合掷骰）
+						mChance, nBonus := 30, 1
+						if len(subArgs) >= 1 {
+							mChance = subArgs[0]
+						}
+						if len(subArgs) >= 2 {
+							nBonus = subArgs[1]
+						}
+						if mChance > 100 {
+							mChance = 100
+						}
+						battle.PlayerPriorityBonusChance = byte(mChance)
+						battle.PlayerPriorityBonusAmount = nBonus
+					case 488: // 对手体力小于 threshold 时伤害增加 percent%
+						thresh, percent := 400, byte(10)
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							thresh = subArgs[0]
+						}
+						if len(subArgs) >= 2 {
+							percent = byte(subArgs[1])
+						}
+						if percent > 100 {
+							percent = 100
+						}
+						battle.PlayerDamageBoostWhenEnemyLowThreshold = uint32(thresh)
+						battle.PlayerDamageBoostWhenEnemyLowPercent = percent
+					// 多效果时第二、第三效果也设置状态（41–50, 51–56, 57, 59, 62, 65, 68, 69, 71–73）
+					case 41:
+						n := 0
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							n = subArgs[1]
+						} else if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if n > 0 {
+							battle.PlayerFireResistRounds = byte(n)
+						}
+					case 42:
+						n := 0
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							n = subArgs[1]
+						} else if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if n > 0 {
+							battle.PlayerElectricBoostRounds = byte(n)
+						}
+					case 44:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerSpDefHalfRounds = byte(subArgs[0])
+						}
+					case 45:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerCopyDefRounds = byte(subArgs[0])
+						}
+					case 46:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerBlockCount = byte(subArgs[0])
+						}
+					case 47:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerImmuneStatDropRounds = byte(subArgs[0])
+						}
+					case 48:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerImmuneStatusRounds = byte(subArgs[0])
+						}
+					case 49:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerShieldPoints = uint32(subArgs[0])
+						}
+					case 50:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerPhysDefHalfRounds = byte(subArgs[0])
+						}
+					case 51:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerCopyAtkRounds = byte(subArgs[0])
+						}
+					case 52:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerEvasionRounds = byte(subArgs[0])
+						}
+					case 53:
+						n, mult := 0, 2
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							mult = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerDamageMultRounds = byte(n)
+							battle.PlayerDamageMult = byte(mult)
+						}
+					case 54:
+						n, mult := 0, 2
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							mult = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerDamageReductRounds = byte(n)
+							battle.PlayerDamageReduct = byte(mult)
+						}
+					case 55:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerTypeSwapRounds = byte(subArgs[0])
+						}
+					case 56:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerTypeCopyRounds = byte(subArgs[0])
+						}
+					case 57:
+						n, div := 0, 5
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 && subArgs[1] > 0 {
+							div = subArgs[1]
+						}
+						if n > 0 {
+							battle.PlayerRegenRounds = byte(n)
+							battle.PlayerRegenDivisor = byte(div)
+						}
+					case 59:
+						battle.PlayerSacrificeBuffActive = true
+						for i := 0; i < 6; i++ {
+							battle.PlayerSacrificeBuffStats[i] = 0
+						}
+						for i := 0; i+1 < len(subArgs); i += 2 {
+							stat, stages := subArgs[i], subArgs[i+1]
+							if stat >= 0 && stat < 6 && stages > 0 {
+								battle.PlayerSacrificeBuffStats[stat] = int8(stages)
+							}
+						}
+						if len(subArgs) == 0 {
+							for i := 0; i < 6; i++ {
+								battle.PlayerSacrificeBuffStats[i] = 1
+							}
+						}
+					case 62:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerDestinyBondRounds = byte(subArgs[0])
+						}
+					case 65:
+						n, mult, elemType := 0, 2, 0
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							n = subArgs[0]
+						}
+						if len(subArgs) >= 2 {
+							mult = subArgs[1]
+						}
+						if len(subArgs) >= 3 {
+							elemType = subArgs[2]
+						}
+						if n > 0 && mult > 0 {
+							battle.PlayerElemPowerRounds = byte(n)
+							battle.PlayerElemPowerMult = byte(mult)
+							battle.PlayerElemPowerType = byte(elemType)
+						}
+					case 68:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerEndureRounds = byte(subArgs[0])
+						}
+					case 69:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerPotionReverseRounds = byte(subArgs[0])
+						}
+					case 71:
+						battle.PlayerSacrificeCritActive = true
+					case 72:
+						battle.PlayerMissDeathActive = true
+					case 73:
+						if len(subArgs) >= 1 && subArgs[0] > 0 {
+							battle.PlayerFirstStrikeReflectRounds = byte(subArgs[0])
+							if !enemyFirst {
+								battle.PlayerFirstStrikeReflectActive = true
 							}
 						}
 					}
-				case 21: // m~n 回合每回合反弹对手伤害的 1/k（多效果时用第2、3参为回合数、除数）
-					nR, k := 3, 4
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						nR = subArgs[1]
-					}
-					if len(subArgs) >= 3 && subArgs[2] > 0 {
-						k = subArgs[2]
-					}
-					if nR > 10 {
-						nR = 10
-					}
-					if k > 10 {
-						k = 10
-					}
-					battle.PlayerReflectDamageRounds = byte(nR)
-					battle.PlayerReflectDamageDivisor = byte(k)
-				case 32: // n 回合暴击率增加 1/16
-					nR := 3
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						nR = subArgs[0]
-					}
-					if nR > 10 {
-						nR = 10
-					}
-					battle.PlayerCritRateBonusRounds = byte(nR + 1)
-				case 454: // 当自身血量少于 1/n 时先制 +m
-					nDiv, mBonus := 3, 1
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						nDiv = subArgs[0]
-					}
-					if len(subArgs) >= 2 {
-						mBonus = subArgs[1]
-					}
-					if nDiv > 10 {
-						nDiv = 10
-					}
-					battle.PlayerPriorityBonusWhenLowHPRounds = 1
-					battle.PlayerPriorityBonusWhenLowHPDivisor = byte(nDiv)
-					battle.PlayerPriorityBonusWhenLowHPBonus = mBonus
-				case 482: // m% 几率先制 +n（本回合掷骰）
-					mChance, nBonus := 30, 1
-					if len(subArgs) >= 1 {
-						mChance = subArgs[0]
-					}
-					if len(subArgs) >= 2 {
-						nBonus = subArgs[1]
-					}
-					if mChance > 100 {
-						mChance = 100
-					}
-					battle.PlayerPriorityBonusChance = byte(mChance)
-					battle.PlayerPriorityBonusAmount = nBonus
-				case 488: // 对手体力小于 threshold 时伤害增加 percent%
-					thresh, percent := 400, byte(10)
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						thresh = subArgs[0]
-					}
-					if len(subArgs) >= 2 {
-						percent = byte(subArgs[1])
-					}
-					if percent > 100 {
-						percent = 100
-					}
-					battle.PlayerDamageBoostWhenEnemyLowThreshold = uint32(thresh)
-					battle.PlayerDamageBoostWhenEnemyLowPercent = percent
-				// 多效果时第二、第三效果也设置状态（41–50, 51–56, 57, 59, 62, 65, 68, 69, 71–73）
-				case 41:
-					n := 0
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						n = subArgs[1]
-					} else if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if n > 0 {
-						battle.PlayerFireResistRounds = byte(n)
-					}
-				case 42:
-					n := 0
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						n = subArgs[1]
-					} else if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if n > 0 {
-						battle.PlayerElectricBoostRounds = byte(n)
-					}
-				case 44:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerSpDefHalfRounds = byte(subArgs[0])
-					}
-				case 45:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerCopyDefRounds = byte(subArgs[0])
-					}
-				case 46:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerBlockCount = byte(subArgs[0])
-					}
-				case 47:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerImmuneStatDropRounds = byte(subArgs[0])
-					}
-				case 48:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerImmuneStatusRounds = byte(subArgs[0])
-					}
-				case 49:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerShieldPoints = uint32(subArgs[0])
-					}
-				case 50:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerPhysDefHalfRounds = byte(subArgs[0])
-					}
-				case 51:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerCopyAtkRounds = byte(subArgs[0])
-					}
-				case 52:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerEvasionRounds = byte(subArgs[0])
-					}
-				case 53:
-					n, mult := 0, 2
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						mult = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerDamageMultRounds = byte(n)
-						battle.PlayerDamageMult = byte(mult)
-					}
-				case 54:
-					n, mult := 0, 2
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						mult = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerDamageReductRounds = byte(n)
-						battle.PlayerDamageReduct = byte(mult)
-					}
-				case 55:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerTypeSwapRounds = byte(subArgs[0])
-					}
-				case 56:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerTypeCopyRounds = byte(subArgs[0])
-					}
-				case 57:
-					n, div := 0, 5
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 && subArgs[1] > 0 {
-						div = subArgs[1]
-					}
-					if n > 0 {
-						battle.PlayerRegenRounds = byte(n)
-						battle.PlayerRegenDivisor = byte(div)
-					}
-				case 59:
-					battle.PlayerSacrificeBuffActive = true
-					for i := 0; i < 6; i++ {
-						battle.PlayerSacrificeBuffStats[i] = 0
-					}
-					for i := 0; i+1 < len(subArgs); i += 2 {
-						stat, stages := subArgs[i], subArgs[i+1]
-						if stat >= 0 && stat < 6 && stages > 0 {
-							battle.PlayerSacrificeBuffStats[stat] = int8(stages)
-						}
-					}
-					if len(subArgs) == 0 {
-						for i := 0; i < 6; i++ {
-							battle.PlayerSacrificeBuffStats[i] = 1
-						}
-					}
-				case 62:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerDestinyBondRounds = byte(subArgs[0])
-					}
-				case 65:
-					n, mult, elemType := 0, 2, 0
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						n = subArgs[0]
-					}
-					if len(subArgs) >= 2 {
-						mult = subArgs[1]
-					}
-					if len(subArgs) >= 3 {
-						elemType = subArgs[2]
-					}
-					if n > 0 && mult > 0 {
-						battle.PlayerElemPowerRounds = byte(n)
-						battle.PlayerElemPowerMult = byte(mult)
-						battle.PlayerElemPowerType = byte(elemType)
-					}
-				case 68:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerEndureRounds = byte(subArgs[0])
-					}
-				case 69:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerPotionReverseRounds = byte(subArgs[0])
-					}
-				case 71:
-					battle.PlayerSacrificeCritActive = true
-				case 72:
-					battle.PlayerMissDeathActive = true
-				case 73:
-					if len(subArgs) >= 1 && subArgs[0] > 0 {
-						battle.PlayerFirstStrikeReflectRounds = byte(subArgs[0])
-						if !enemyFirst {
-							battle.PlayerFirstStrikeReflectActive = true
-						}
-					}
 				}
 			}
-		}
 
-		// Effect ID 39：n% 降低对手所有技能 m 点 PP 值
-		// SideEffectArg: n m（例如 "20 1" 表示 20% 几率每个技能 -1 PP）
-		if skill.EffectID == 39 && playerHit {
-			effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
-			chance, ppReduction := 100, 1
-			if len(effArgs) >= 1 {
-				chance = effArgs[0]
-			}
-			if len(effArgs) >= 2 {
-				ppReduction = effArgs[1]
-			}
-			if chance < 0 {
-				chance = 0
-			}
-			if chance > 100 {
-				chance = 100
-			}
-			if ppReduction < 0 {
-				ppReduction = 0
-			}
-			if rand.Intn(100) < chance && ppReduction > 0 && !battle.EnemyPPInfinite {
-				for i := 0; i < 4; i++ {
-					if battle.EnemySkillPP[i] > 0 {
-						if int(battle.EnemySkillPP[i]) >= ppReduction {
-							battle.EnemySkillPP[i] -= byte(ppReduction)
-						} else {
-							battle.EnemySkillPP[i] = 0
+			// Effect ID 39：n% 降低对手所有技能 m 点 PP 值
+			// SideEffectArg: n m（例如 "20 1" 表示 20% 几率每个技能 -1 PP）
+			if skill.EffectID == 39 && playerHit {
+				effArgs := gameskills.ParseSideEffectArg(skill.SideEffectArg)
+				chance, ppReduction := 100, 1
+				if len(effArgs) >= 1 {
+					chance = effArgs[0]
+				}
+				if len(effArgs) >= 2 {
+					ppReduction = effArgs[1]
+				}
+				if chance < 0 {
+					chance = 0
+				}
+				if chance > 100 {
+					chance = 100
+				}
+				if ppReduction < 0 {
+					ppReduction = 0
+				}
+				if rand.Intn(100) < chance && ppReduction > 0 && !battle.EnemyPPInfinite {
+					for i := 0; i < 4; i++ {
+						if battle.EnemySkillPP[i] > 0 {
+							if int(battle.EnemySkillPP[i]) >= ppReduction {
+								battle.EnemySkillPP[i] -= byte(ppReduction)
+							} else {
+								battle.EnemySkillPP[i] = 0
+							}
 						}
 					}
 				}
 			}
-		}
 
 			// 对于“同生共死”一类基于血量差的技能，附加效果可能在普通伤害结算后再次大幅修改 enemyHP。
 			// 为了让客户端看到的 lostHP/日志中的 Damage 与真实扣血一致，
@@ -11455,8 +14858,8 @@ doPlayerTurn:
 			battle.EnemyHP = 1
 		}
 
-	// ===== 谱尼七封印 / 真身收尾逻辑 =====
-	isPuniBattle := ((battle.BattleMapID == 108 || battle.BattleMapID == 514) && battle.EnemyID == 300 && battle.PuniDoorIndex >= 1 && battle.PuniDoorIndex <= 8)
+		// ===== 谱尼七封印 / 真身收尾逻辑 =====
+		isPuniBattle := ((battle.BattleMapID == 108 || battle.BattleMapID == 514) && battle.EnemyID == 300 && battle.PuniDoorIndex >= 1 && battle.PuniDoorIndex <= 8)
 		door := battle.PuniDoorIndex
 		life := battle.PuniTrueFormLifeIndex
 
@@ -11670,2228 +15073,2228 @@ runEnemyTurnFirst:
 		enemyAttempted = false
 		enemyHitFor2505 = false
 		if battle.EnemyHP > 0 && !enemyFlinched && !enemyParalyzed && !enemyPetrified && !enemyConfused {
-		if enemySkillForTurn != nil && enemySkillIDForTurn != 0 {
-			enemySkillID = enemySkillIDForTurn
-			enemyAttempted = true
+			if enemySkillForTurn != nil && enemySkillIDForTurn != 0 {
+				enemySkillID = enemySkillIDForTurn
+				enemyAttempted = true
 
-			// 敌方 PP 消耗与耗尽判定（支持 Effect 39 导致本回合无法行动）
-			if !battle.EnemyPPInfinite {
-				idxPP := -1
-				for i := 0; i < 4; i++ {
-					if battle.EnemySkillIDs[i] == enemySkillIDForTurn {
-						idxPP = i
-						break
-					}
-				}
-				if idxPP >= 0 {
-					if battle.EnemySkillPP[idxPP] == 0 {
-						// 敌方当前选择的技能 PP 已为 0：本回合无法出招
-						enemySkillID = 0
-						enemyAttempted = false
-						enemyHitFor2505 = false
-						return
-					}
-					battle.EnemySkillPP[idxPP]--
-				}
-			}
-
-			// 魔狮迪露(187) 体力低于一半时：任意技能（属性/攻击）必定秒杀我方当前精灵
-			moShiDiLuOneShot := sptboss.IsHalfHPOneShotBoss(battle.EnemyID) && battle.EnemyMaxHP > 0 && battle.EnemyHP*2 < battle.EnemyMaxHP
-			if moShiDiLuOneShot {
-				enemyDamageCalc = battle.PlayerHP
-				battle.PlayerHP = 0
-				enemyHitFor2505 = true
-			} else {
-			// 计算敌人本回合是否命中（考虑命中等级与必中）
-			enemyHit := true
-			if enemySkillForTurn.MustHit != 1 {
-				baseAcc := enemySkillForTurn.Accuracy
-				if baseAcc == 0 {
-					baseAcc = 100
-				}
-				accStage := int(battle.EnemyBattleLv[gameskills.StatAccuracy])
-				finalAcc := gamebattle.CalcHitChance(baseAcc, accStage, 0)
-				// 特性：回避(1025) —— 被技能命中的几率减少5%
-				if playerTrait == 1025 {
-					finalAcc -= 5
-				}
-				if finalAcc > 100 {
-					finalAcc = 100
-				}
-				if finalAcc < 1 {
-					finalAcc = 1
-				}
-				if rand.Intn(100) >= finalAcc {
-					enemyHit = false
-				}
-			}
-			// 52：本方先手时对方技能 miss（我方有 52 且敌方先手则敌方 miss）
-			if enemyHit && enemyFirst && battle.PlayerEvasionRounds > 0 && enemySkillForTurn.MustHit != 1 {
-				enemyHit = false
-			}
-			// 78（我方）：n 回合内物理攻击对自身必定 miss
-			if enemyHit && enemySkillForTurn.Category == 1 && battle.PlayerPhysMissRounds > 0 && enemySkillForTurn.MustHit != 1 {
-				enemyHit = false
-			}
-			// 86（我方）：n 回合内属性（特殊）攻击对自身必定 miss
-			if enemyHit && enemySkillForTurn.Category == 2 && battle.PlayerSpecialMissRounds > 0 && enemySkillForTurn.MustHit != 1 {
-				enemyHit = false
-			}
-			// 72 - Miss死亡：如果此回合miss，则立即死亡
-			if !enemyHit && battle.EnemyMissDeathActive {
-				battle.EnemyHP = 0
-				battle.EnemyMissDeathActive = false
-			}
-			enemyHitFor2505 = enemyHit
-
-			// 敌人伤害计算（仅在命中且为攻击技能时）
-			enemyPower := uint32(enemySkillForTurn.Power)
-			// Category=4 为纯变化/属性技能（红韵、魅惑等），不应造成直接伤害
-			if enemySkillForTurn.Category != 4 && enemyPower == 0 {
-				enemyPower = 40
-			}
-			// 1901：潜力越高威力越大（按 DV*5）。PvE 敌方 DV 统一按 15 计算（与 enemyStats 取值一致）。
-			if enemySkillForTurn.EffectID == 1901 && enemySkillForTurn.Category != 4 {
-				enemyPower = 15 * 5
-			}
-			// 61：威力随机 50~150
-			if enemySkillForTurn.EffectID == 61 && enemySkillForTurn.Category != 4 {
-				enemyPower = uint32(rand.Intn(150-50+1) + 50)
-			}
-			// 70：威力随机 140~220
-			if enemySkillForTurn.EffectID == 70 && enemySkillForTurn.Category != 4 {
-				enemyPower = uint32(rand.Intn(220-140+1) + 140)
-			}
-			// 40：先出手时威力为 2 倍（仅当敌方本回合先手）
-			if enemySkillForTurn.EffectID == 40 && enemySkillForTurn.Category != 4 && enemyFirst {
-				enemyPower *= 2
-			}
-			// 118：威力随机 140~180
-			if enemySkillForTurn.EffectID == 118 && enemySkillForTurn.Category != 4 {
-				enemyPower = uint32(rand.Intn(180-140+1) + 140)
-			}
-			// 65：敌方某属性技能威力 m 倍
-			if battle.EnemyElemPowerRounds > 0 && enemySkillForTurn.Type == int(battle.EnemyElemPowerType) {
-				enemyPower *= uint32(battle.EnemyElemPowerMult)
-			}
-			// 敌方攻防（按技能类别），并应用强化弱化倍率
-			enemyAtk := float64(enemyStats.Attack)
-			enemyDef := float64(playerStats.Defence)
-			enemyAtkStage, enemyDefStage := 0, 1 // 物理：攻击/防御
-			if enemySkillForTurn.Category == 2 {
-				enemyAtk = float64(enemyStats.SpAtk)
-				enemyDef = float64(playerStats.SpDef)
-				enemyAtkStage, enemyDefStage = 2, 3 // 特殊：特攻/特防
-			}
-			// 51：敌方攻击力与己方相同
-			if battle.EnemyCopyAtkRounds > 0 {
-				if enemySkillForTurn.Category == 2 {
-					enemyAtk = float64(playerStats.SpAtk)
-				} else {
-					enemyAtk = float64(playerStats.Attack)
-				}
-			}
-			// 45：我方防御力与对手相同（即我方防御=敌方防御）
-			if battle.PlayerCopyDefRounds > 0 {
-				if enemySkillForTurn.Category == 2 {
-					enemyDef = float64(enemyStats.SpDef)
-				} else {
-					enemyDef = float64(enemyStats.Defence)
-				}
-			}
-			enemyAtk *= gamebattle.GetStatMultiplier(int(battle.EnemyBattleLv[enemyAtkStage]))
-			enemyDef *= gamebattle.GetStatMultiplier(int(battle.PlayerBattleLv[enemyDefStage]))
-			if enemyDef < 1 {
-				enemyDef = 1
-			}
-			enemyBaseDamage := 0.0
-			if enemySkillForTurn.Category != 4 && enemyPower > 0 {
-				enemyBaseDamage = math.Floor(((float64(battle.EnemyLevel)*0.4 + 2.0) * float64(enemyPower) * enemyAtk / enemyDef / 50.0) + 2.0)
-			}
-			enemyFinalDamage := uint32(0)
-			isCritEnemy := false
-			if enemyHit && enemySkillForTurn.Category != 4 && enemyBaseDamage > 0 {
-				enemyStab := 1.0
-				if enemyPet != nil && (enemySkillForTurn.Type == enemyPet.Type || (enemyPet.Type2 > 0 && enemySkillForTurn.Type == enemyPet.Type2)) {
-					enemyStab = 1.5
-				}
-				enemyTypeMod := 1.0
-				if attackerPet != nil {
-					if battle.PlayerTypeSwapRounds > 0 {
-						// 55：属性反转（我方有 55，敌方攻击我方时）
-						enemyTypeMod = gamebattle.GetTypeMultiplierDual(attackerPet.Type, attackerPet.Type2, enemySkillForTurn.Type)
-					} else if battle.PlayerTypeCopyRounds > 0 {
-						// 56：属性相同
-						enemyTypeMod = 1.0
-					} else {
-						enemyTypeMod = gamebattle.GetTypeMultiplierDual(enemySkillForTurn.Type, attackerPet.Type, attackerPet.Type2)
-					}
-				}
-				enemyRandomMod := float64(rand.Intn(255-217+1)+217) / 255.0
-				// 敌人暴击：1/16 基础概率
-				enemyCritRate := enemySkillForTurn.CritRate
-				if enemyCritRate == 0 {
-					enemyCritRate = 1
-				}
-				// 若敌方处于“下 N 回合必定暴击”效果中，则直接视为 100% 暴击率
-				if battle.EnemyCritBuffRounds > 0 {
-					enemyCritRate = 16
-				}
-				// 32（敌方）- n 回合暴击率增加 1/16
-				if battle.EnemyCritRateBonusRounds > 0 && enemyCritRate < 16 {
-					enemyCritRate++
-				}
-				// 441（敌方）- 每次攻击暴击率 +n%（累积，最高 m%）
-				if battle.EnemyCritRateBonus > 0 {
-					enemyCritRate += int(battle.EnemyCritRateBonus)
-					if enemyCritRate > 16 {
-						enemyCritRate = 16
-					}
-				}
-				// 83（敌方雌性）- 下两回合必定暴击
-				if battle.EnemyFemaleCritRounds > 0 {
-					enemyCritRate = 16
-				}
-				// 95（敌方）- 对手处于睡眠状态时致命一击率提升 n/16
-				if enemySkillForTurn.EffectID == 95 && battle.PlayerStatus[gameskills.StatusIndexSleep] > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					bonus := 4
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						bonus = effArgs[0]
-					}
-					enemyCritRate += bonus
-					if enemyCritRate > 16 {
-						enemyCritRate = 16
-					}
-				}
-				enemyCritMod := 1.0
-				if rand.Intn(16) < enemyCritRate {
-					// 暴击：伤害为正常攻击伤害的两倍
-					isCritEnemy = true
-					enemyCritMod = 2.0
-					// 敌方暴击时，同样清除我方防御/特防的强化状态
-					if enemySkillForTurn.Category == 1 {
-						// 物理暴击：清空我方防御提升
-						if battle.PlayerBattleLv[gameskills.StatDefence] > 0 {
-							battle.PlayerBattleLv[gameskills.StatDefence] = 0
-						}
-					} else if enemySkillForTurn.Category == 2 {
-						// 特殊暴击：清空我方特防提升
-						if battle.PlayerBattleLv[gameskills.StatSpDef] > 0 {
-							battle.PlayerBattleLv[gameskills.StatSpDef] = 0
+				// 敌方 PP 消耗与耗尽判定（支持 Effect 39 导致本回合无法行动）
+				if !battle.EnemyPPInfinite {
+					idxPP := -1
+					for i := 0; i < 4; i++ {
+						if battle.EnemySkillIDs[i] == enemySkillIDForTurn {
+							idxPP = i
+							break
 						}
 					}
-				}
-				enemyFinalDamage = uint32(enemyBaseDamage * enemyStab * enemyTypeMod * enemyRandomMod * enemyCritMod)
-				// 53：敌方攻击伤害 m 倍
-				if battle.EnemyDamageMultRounds > 0 && battle.EnemyDamageMult > 0 {
-					enemyFinalDamage *= uint32(battle.EnemyDamageMult)
-				}
-				// 盖亚(261) 伤害翻倍，能力提升仍与其他 BOSS 一致（仅攻击+2）
-				if battle.EnemyID == petIDGaiya && enemyFinalDamage > 0 {
-					enemyFinalDamage *= 2
-				}
-			}
-			// effect 88：n% 几率伤害为 m 倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 88 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				chance, mult := 10, 2
-				if len(effArgs) >= 1 {
-					chance = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					mult = effArgs[1]
-				}
-				if chance < 0 {
-					chance = 0
-				}
-				if mult < 1 {
-					mult = 1
-				}
-				if rand.Intn(100) < chance {
-					mul := uint64(enemyFinalDamage) * uint64(mult)
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
+					if idxPP >= 0 {
+						if battle.EnemySkillPP[idxPP] == 0 {
+							// 敌方当前选择的技能 PP 已为 0：本回合无法出招
+							enemySkillID = 0
+							enemyAttempted = false
+							enemyHitFor2505 = false
+							return
+						}
+						battle.EnemySkillPP[idxPP]--
 					}
 				}
-			}
-			// 敌人多段攻击（effect 31），同样折算为单次伤害倍数
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 31 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				minHits, maxHits := 2, 5
-				if len(effArgs) >= 1 {
-					minHits = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					maxHits = effArgs[1]
-				}
-				if minHits < 1 {
-					minHits = 1
-				}
-				if maxHits < minHits {
-					maxHits = minHits
-				}
-				hits := rand.Intn(maxHits-minHits+1) + minHits
-				if hits > 1 {
-					mul := uint64(enemyFinalDamage) * uint64(hits)
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// effect 64：自身在烧伤/冻伤/中毒状态下造成的伤害加倍（并视为覆盖烧伤减伤）
-			enemyHasAilment := battle.EnemyStatus[gameskills.StatusIndexPoison] > 0 ||
-				battle.EnemyStatus[gameskills.StatusIndexBurn] > 0 ||
-				battle.EnemyStatus[gameskills.StatusIndexFreeze] > 0
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 64 && enemyHasAilment {
-				mul := uint64(enemyFinalDamage) * 2
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
+
+				// 魔狮迪露(187) 体力低于一半时：任意技能（属性/攻击）必定秒杀我方当前精灵
+				moShiDiLuOneShot := sptboss.IsHalfHPOneShotBoss(battle.EnemyID) && battle.EnemyMaxHP > 0 && battle.EnemyHP*2 < battle.EnemyMaxHP
+				if moShiDiLuOneShot {
+					enemyDamageCalc = battle.PlayerHP
+					battle.PlayerHP = 0
+					enemyHitFor2505 = true
 				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-			} else if enemyFinalDamage > 0 && battle.EnemyStatus[gameskills.StatusIndexBurn] > 0 {
-				// 烧伤效果：被烧伤方（敌人）造成的伤害减半
-				enemyFinalDamage = enemyFinalDamage / 2
-				if enemyFinalDamage < 1 {
-					enemyFinalDamage = 1
-				}
-			}
-			// effect 82（敌方）：目标为雄性伤害 200%，雌性 50%
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 82 {
-				targetPet := petMgr.Get(playerPetID)
-				if targetPet != nil {
-					if targetPet.Gender == 1 {
+					// 计算敌人本回合是否命中（考虑命中等级与必中）
+					enemyHit := true
+					if enemySkillForTurn.MustHit != 1 {
+						baseAcc := enemySkillForTurn.Accuracy
+						if baseAcc == 0 {
+							baseAcc = 100
+						}
+						accStage := int(battle.EnemyBattleLv[gameskills.StatAccuracy])
+						finalAcc := gamebattle.CalcHitChance(baseAcc, accStage, 0)
+						// 特性：回避(1025) —— 被技能命中的几率减少5%
+						if playerTrait == 1025 {
+							finalAcc -= 5
+						}
+						if finalAcc > 100 {
+							finalAcc = 100
+						}
+						if finalAcc < 1 {
+							finalAcc = 1
+						}
+						if rand.Intn(100) >= finalAcc {
+							enemyHit = false
+						}
+					}
+					// 52：本方先手时对方技能 miss（我方有 52 且敌方先手则敌方 miss）
+					if enemyHit && enemyFirst && battle.PlayerEvasionRounds > 0 && enemySkillForTurn.MustHit != 1 {
+						enemyHit = false
+					}
+					// 78（我方）：n 回合内物理攻击对自身必定 miss
+					if enemyHit && enemySkillForTurn.Category == 1 && battle.PlayerPhysMissRounds > 0 && enemySkillForTurn.MustHit != 1 {
+						enemyHit = false
+					}
+					// 86（我方）：n 回合内属性（特殊）攻击对自身必定 miss
+					if enemyHit && enemySkillForTurn.Category == 2 && battle.PlayerSpecialMissRounds > 0 && enemySkillForTurn.MustHit != 1 {
+						enemyHit = false
+					}
+					// 72 - Miss死亡：如果此回合miss，则立即死亡
+					if !enemyHit && battle.EnemyMissDeathActive {
+						battle.EnemyHP = 0
+						battle.EnemyMissDeathActive = false
+					}
+					enemyHitFor2505 = enemyHit
+
+					// 敌人伤害计算（仅在命中且为攻击技能时）
+					enemyPower := uint32(enemySkillForTurn.Power)
+					// Category=4 为纯变化/属性技能（红韵、魅惑等），不应造成直接伤害
+					if enemySkillForTurn.Category != 4 && enemyPower == 0 {
+						enemyPower = 40
+					}
+					// 1901：潜力越高威力越大（按 DV*5）。PvE 敌方 DV 统一按 15 计算（与 enemyStats 取值一致）。
+					if enemySkillForTurn.EffectID == 1901 && enemySkillForTurn.Category != 4 {
+						enemyPower = 15 * 5
+					}
+					// 61：威力随机 50~150
+					if enemySkillForTurn.EffectID == 61 && enemySkillForTurn.Category != 4 {
+						enemyPower = uint32(rand.Intn(150-50+1) + 50)
+					}
+					// 70：威力随机 140~220
+					if enemySkillForTurn.EffectID == 70 && enemySkillForTurn.Category != 4 {
+						enemyPower = uint32(rand.Intn(220-140+1) + 140)
+					}
+					// 40：先出手时威力为 2 倍（仅当敌方本回合先手）
+					if enemySkillForTurn.EffectID == 40 && enemySkillForTurn.Category != 4 && enemyFirst {
+						enemyPower *= 2
+					}
+					// 118：威力随机 140~180
+					if enemySkillForTurn.EffectID == 118 && enemySkillForTurn.Category != 4 {
+						enemyPower = uint32(rand.Intn(180-140+1) + 140)
+					}
+					// 65：敌方某属性技能威力 m 倍
+					if battle.EnemyElemPowerRounds > 0 && enemySkillForTurn.Type == int(battle.EnemyElemPowerType) {
+						enemyPower *= uint32(battle.EnemyElemPowerMult)
+					}
+					// 敌方攻防（按技能类别），并应用强化弱化倍率
+					enemyAtk := float64(enemyStats.Attack)
+					enemyDef := float64(playerStats.Defence)
+					enemyAtkStage, enemyDefStage := 0, 1 // 物理：攻击/防御
+					if enemySkillForTurn.Category == 2 {
+						enemyAtk = float64(enemyStats.SpAtk)
+						enemyDef = float64(playerStats.SpDef)
+						enemyAtkStage, enemyDefStage = 2, 3 // 特殊：特攻/特防
+					}
+					// 51：敌方攻击力与己方相同
+					if battle.EnemyCopyAtkRounds > 0 {
+						if enemySkillForTurn.Category == 2 {
+							enemyAtk = float64(playerStats.SpAtk)
+						} else {
+							enemyAtk = float64(playerStats.Attack)
+						}
+					}
+					// 45：我方防御力与对手相同（即我方防御=敌方防御）
+					if battle.PlayerCopyDefRounds > 0 {
+						if enemySkillForTurn.Category == 2 {
+							enemyDef = float64(enemyStats.SpDef)
+						} else {
+							enemyDef = float64(enemyStats.Defence)
+						}
+					}
+					enemyAtk *= gamebattle.GetStatMultiplier(int(battle.EnemyBattleLv[enemyAtkStage]))
+					enemyDef *= gamebattle.GetStatMultiplier(int(battle.PlayerBattleLv[enemyDefStage]))
+					if enemyDef < 1 {
+						enemyDef = 1
+					}
+					enemyBaseDamage := 0.0
+					if enemySkillForTurn.Category != 4 && enemyPower > 0 {
+						enemyBaseDamage = math.Floor(((float64(battle.EnemyLevel)*0.4 + 2.0) * float64(enemyPower) * enemyAtk / enemyDef / 50.0) + 2.0)
+					}
+					enemyFinalDamage := uint32(0)
+					isCritEnemy := false
+					if enemyHit && enemySkillForTurn.Category != 4 && enemyBaseDamage > 0 {
+						enemyStab := 1.0
+						if enemyPet != nil && (enemySkillForTurn.Type == enemyPet.Type || (enemyPet.Type2 > 0 && enemySkillForTurn.Type == enemyPet.Type2)) {
+							enemyStab = 1.5
+						}
+						enemyTypeMod := 1.0
+						if attackerPet != nil {
+							if battle.PlayerTypeSwapRounds > 0 {
+								// 55：属性反转（我方有 55，敌方攻击我方时）
+								enemyTypeMod = gamebattle.GetTypeMultiplierDual(attackerPet.Type, attackerPet.Type2, enemySkillForTurn.Type)
+							} else if battle.PlayerTypeCopyRounds > 0 {
+								// 56：属性相同
+								enemyTypeMod = 1.0
+							} else {
+								enemyTypeMod = gamebattle.GetTypeMultiplierDual(enemySkillForTurn.Type, attackerPet.Type, attackerPet.Type2)
+							}
+						}
+						enemyRandomMod := float64(rand.Intn(255-217+1)+217) / 255.0
+						// 敌人暴击：1/16 基础概率
+						enemyCritRate := enemySkillForTurn.CritRate
+						if enemyCritRate == 0 {
+							enemyCritRate = 1
+						}
+						// 若敌方处于“下 N 回合必定暴击”效果中，则直接视为 100% 暴击率
+						if battle.EnemyCritBuffRounds > 0 {
+							enemyCritRate = 16
+						}
+						// 32（敌方）- n 回合暴击率增加 1/16
+						if battle.EnemyCritRateBonusRounds > 0 && enemyCritRate < 16 {
+							enemyCritRate++
+						}
+						// 441（敌方）- 每次攻击暴击率 +n%（累积，最高 m%）
+						if battle.EnemyCritRateBonus > 0 {
+							enemyCritRate += int(battle.EnemyCritRateBonus)
+							if enemyCritRate > 16 {
+								enemyCritRate = 16
+							}
+						}
+						// 83（敌方雌性）- 下两回合必定暴击
+						if battle.EnemyFemaleCritRounds > 0 {
+							enemyCritRate = 16
+						}
+						// 95（敌方）- 对手处于睡眠状态时致命一击率提升 n/16
+						if enemySkillForTurn.EffectID == 95 && battle.PlayerStatus[gameskills.StatusIndexSleep] > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							bonus := 4
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								bonus = effArgs[0]
+							}
+							enemyCritRate += bonus
+							if enemyCritRate > 16 {
+								enemyCritRate = 16
+							}
+						}
+						enemyCritMod := 1.0
+						if rand.Intn(16) < enemyCritRate {
+							// 暴击：伤害为正常攻击伤害的两倍
+							isCritEnemy = true
+							enemyCritMod = 2.0
+							// 敌方暴击时，同样清除我方防御/特防的强化状态
+							if enemySkillForTurn.Category == 1 {
+								// 物理暴击：清空我方防御提升
+								if battle.PlayerBattleLv[gameskills.StatDefence] > 0 {
+									battle.PlayerBattleLv[gameskills.StatDefence] = 0
+								}
+							} else if enemySkillForTurn.Category == 2 {
+								// 特殊暴击：清空我方特防提升
+								if battle.PlayerBattleLv[gameskills.StatSpDef] > 0 {
+									battle.PlayerBattleLv[gameskills.StatSpDef] = 0
+								}
+							}
+						}
+						enemyFinalDamage = uint32(enemyBaseDamage * enemyStab * enemyTypeMod * enemyRandomMod * enemyCritMod)
+						// 53：敌方攻击伤害 m 倍
+						if battle.EnemyDamageMultRounds > 0 && battle.EnemyDamageMult > 0 {
+							enemyFinalDamage *= uint32(battle.EnemyDamageMult)
+						}
+						// 盖亚(261) 伤害翻倍，能力提升仍与其他 BOSS 一致（仅攻击+2）
+						if battle.EnemyID == petIDGaiya && enemyFinalDamage > 0 {
+							enemyFinalDamage *= 2
+						}
+					}
+					// effect 88：n% 几率伤害为 m 倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 88 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						chance, mult := 10, 2
+						if len(effArgs) >= 1 {
+							chance = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							mult = effArgs[1]
+						}
+						if chance < 0 {
+							chance = 0
+						}
+						if mult < 1 {
+							mult = 1
+						}
+						if rand.Intn(100) < chance {
+							mul := uint64(enemyFinalDamage) * uint64(mult)
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 敌人多段攻击（effect 31），同样折算为单次伤害倍数
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 31 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						minHits, maxHits := 2, 5
+						if len(effArgs) >= 1 {
+							minHits = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							maxHits = effArgs[1]
+						}
+						if minHits < 1 {
+							minHits = 1
+						}
+						if maxHits < minHits {
+							maxHits = minHits
+						}
+						hits := rand.Intn(maxHits-minHits+1) + minHits
+						if hits > 1 {
+							mul := uint64(enemyFinalDamage) * uint64(hits)
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// effect 64：自身在烧伤/冻伤/中毒状态下造成的伤害加倍（并视为覆盖烧伤减伤）
+					enemyHasAilment := battle.EnemyStatus[gameskills.StatusIndexPoison] > 0 ||
+						battle.EnemyStatus[gameskills.StatusIndexBurn] > 0 ||
+						battle.EnemyStatus[gameskills.StatusIndexFreeze] > 0
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 64 && enemyHasAilment {
+						mul := uint64(enemyFinalDamage) * 2
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+					} else if enemyFinalDamage > 0 && battle.EnemyStatus[gameskills.StatusIndexBurn] > 0 {
+						// 烧伤效果：被烧伤方（敌人）造成的伤害减半
+						enemyFinalDamage = enemyFinalDamage / 2
+						if enemyFinalDamage < 1 {
+							enemyFinalDamage = 1
+						}
+					}
+					// effect 82（敌方）：目标为雄性伤害 200%，雌性 50%
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 82 {
+						targetPet := petMgr.Get(playerPetID)
+						if targetPet != nil {
+							if targetPet.Gender == 1 {
+								enemyFinalDamage *= 2
+								if enemyFinalDamage > battle.PlayerHP {
+									enemyFinalDamage = battle.PlayerHP
+								}
+							} else if targetPet.Gender == 2 {
+								enemyFinalDamage /= 2
+								if enemyFinalDamage < 1 {
+									enemyFinalDamage = 1
+								}
+							}
+						}
+					}
+					// 96（敌方）- 对手处于烧伤状态时威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 96 && battle.PlayerStatus[gameskills.StatusIndexBurn] > 0 {
+						mul := uint64(enemyFinalDamage) * 2
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
+						}
+					}
+					// 97（敌方）- 对手处于冻伤状态时威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 97 && battle.PlayerStatus[gameskills.StatusIndexFreeze] > 0 {
+						mul := uint64(enemyFinalDamage) * 2
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
+						}
+					}
+					// 102（敌方）- 对手处于麻痹状态时威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 102 && battle.PlayerStatus[gameskills.StatusIndexParalysis] > 0 {
+						mul := uint64(enemyFinalDamage) * 2
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
+						}
+					}
+					// 98（敌方）- n 回合内对雄性精灵的伤害为 m 倍
+					if enemyFinalDamage > 0 && battle.EnemyMaleDamageMultRounds > 0 {
+						targetPet := petMgr.Get(playerPetID)
+						if targetPet != nil && targetPet.Gender == 1 {
+							mult := battle.EnemyMaleDamageMult
+							if mult < 1 {
+								mult = 1
+							}
+							mul := uint64(enemyFinalDamage) * uint64(mult)
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+							if enemyFinalDamage > battle.PlayerHP {
+								enemyFinalDamage = battle.PlayerHP
+							}
+						}
+					}
+					// 100（敌方）- 自身体力越少则威力越大
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 100 && battle.EnemyMaxHP > 0 {
+						ratio := 2.0 - float64(battle.EnemyHP)/float64(battle.EnemyMaxHP)
+						if ratio < 1.0 {
+							ratio = 1.0
+						}
+						if ratio > 2.0 {
+							ratio = 2.0
+						}
+						mul := uint64(float64(enemyFinalDamage) * ratio)
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
+						}
+					}
+					if enemyFinalDamage < 1 {
+						enemyFinalDamage = 0
+					}
+					// 179（敌方）- 若属性相同则技能威力提升 n
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 179 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						boost := 20
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							boost = effArgs[0]
+						}
+						enemyPet := petMgr.Get(battle.EnemyID)
+						targetPet := petMgr.Get(playerPetID)
+						if enemyPet != nil && targetPet != nil && enemyPet.Type == targetPet.Type {
+							enemyFinalDamage = enemyFinalDamage * uint32(100+boost) / 100
+						}
+					}
+					// 129（敌方）- 对方为 X 性则技能威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 129 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						gender := 2
+						if len(effArgs) >= 1 {
+							gender = effArgs[0]
+						}
+						targetPet := petMgr.Get(playerPetID)
+						if targetPet != nil && targetPet.Gender == gender {
+							mul := uint64(enemyFinalDamage) * 2
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 130（敌方）- 对方为 X 性则附加 n 点伤害
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 130 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						gender, bonus := 1, 100
+						if len(effArgs) >= 1 {
+							gender = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							bonus = effArgs[1]
+						}
+						targetPet := petMgr.Get(playerPetID)
+						if targetPet != nil && targetPet.Gender == gender {
+							enemyFinalDamage += uint32(bonus)
+						}
+					}
+					// 131（敌方）- 对方为 X 性则免疫当前回合伤害
+					if enemySkillForTurn.EffectID == 131 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						gender := 1
+						if len(effArgs) >= 1 {
+							gender = effArgs[0]
+						}
+						targetPet := petMgr.Get(playerPetID)
+						if targetPet != nil && targetPet.Gender == gender {
+							enemyFinalDamage = 0
+							enemyDamageCalc = 0
+						}
+					}
+					// 135/447（敌方）- 造成的伤害不会低于 n
+					if (enemySkillForTurn.EffectID == 135 || enemySkillForTurn.EffectID == 447) && enemyFinalDamage > 0 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						floor := 80
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							floor = effArgs[0]
+						}
+						if enemyFinalDamage < uint32(floor) {
+							enemyFinalDamage = uint32(floor)
+						}
+					}
+					// 193（敌方）- 若对手处于 XX 状态则必定致命一击
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 193 && !isCritEnemy {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						statusIdx := 5
+						if len(effArgs) >= 1 {
+							statusIdx = effArgs[0]
+						}
+						if statusIdx >= 0 && statusIdx < 20 && battle.PlayerStatus[statusIdx] > 0 {
+							isCritEnemy = true
+							mul := uint64(enemyFinalDamage) * 2
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 468（敌方）- 若自身处于能力下降状态则威力翻倍，同时解除能力下降状态
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 468 {
+						hasStatDrop := false
+						for i := 0; i < 6; i++ {
+							if battle.EnemyBattleLv[i] < 0 {
+								hasStatDrop = true
+								break
+							}
+						}
+						if hasStatDrop {
+							mul := uint64(enemyFinalDamage) * 2
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+							for i := 0; i < 6; i++ {
+								if battle.EnemyBattleLv[i] < 0 {
+									battle.EnemyBattleLv[i] = 0
+								}
+							}
+						}
+					}
+					// 195（敌方）- 若对手处于异常状态则攻击力双倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 195 {
+						hasStatus := false
+						for i := 0; i < 20; i++ {
+							if battle.PlayerStatus[i] > 0 {
+								hasStatus = true
+								break
+							}
+						}
+						if hasStatus {
+							mul := uint64(enemyFinalDamage) * 2
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 180（敌方）- 只在第一回合有效果
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 180 && battle.RoundCount > 1 {
+						enemyFinalDamage /= 2
+						if enemyFinalDamage < 1 {
+							enemyFinalDamage = 1
+						}
+					}
+					// 88（敌方）- n% 概率伤害为 m 倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 88 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						chance, mult := 10, 2
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							chance = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							mult = effArgs[1]
+						}
+						if rand.Intn(100) < chance {
+							mul := uint64(enemyFinalDamage) * uint64(mult)
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 35（敌方）- 对方能力等级越高伤害越大
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 35 {
+						totalBoost := 0
+						for i := 0; i < 6; i++ {
+							if battle.PlayerBattleLv[i] > 0 {
+								totalBoost += int(battle.PlayerBattleLv[i])
+							}
+						}
+						if totalBoost > 0 {
+							mul := uint64(enemyFinalDamage) * uint64(100+totalBoost*5) / 100
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 111（敌方）- 攻击力越高附加伤害越大
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 111 {
+						enemyPet := petMgr.Get(battle.EnemyID)
+						targetPet := petMgr.Get(playerPetID)
+						if enemyPet != nil && targetPet != nil && enemyPet.Atk > targetPet.Atk {
+							bonus := uint32(enemyPet.Atk-targetPet.Atk) / 10
+							enemyFinalDamage += bonus
+						}
+					}
+					// 113（敌方）- 速度越高威力越大
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 113 {
+						enemyPet := petMgr.Get(battle.EnemyID)
+						targetPet := petMgr.Get(playerPetID)
+						if enemyPet != nil && targetPet != nil && enemyPet.Spd > targetPet.Spd {
+							bonus := uint32(enemyPet.Spd-targetPet.Spd) / 10
+							enemyFinalDamage += bonus
+						}
+					}
+					// 132（敌方）- 当前体力在对方体力以上时威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 132 && battle.EnemyHP >= battle.PlayerHP {
+						mul := uint64(enemyFinalDamage) * 2
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+					}
+					// 168（敌方）- 若自身处于睡眠状态则威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 168 && battle.EnemyStatus[gameskills.StatusIndexSleep] > 0 {
+						mul := uint64(enemyFinalDamage) * 2
+						if mul > math.MaxUint32 {
+							enemyFinalDamage = math.MaxUint32
+						} else {
+							enemyFinalDamage = uint32(mul)
+						}
+					}
+					// 429（敌方）- 固定伤递增
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 429 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						base, increment, maxDmg := 25, 25, 100
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							base = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							increment = effArgs[1]
+						}
+						if len(effArgs) >= 3 && effArgs[2] > 0 {
+							maxDmg = effArgs[2]
+						}
+						current := uint32(base) + battle.EnemyFixedDmgIncrement
+						if current > uint32(maxDmg) {
+							current = uint32(maxDmg)
+						}
+						if current > battle.PlayerHP {
+							current = battle.PlayerHP
+						}
+						enemyFinalDamage += current
+						battle.EnemyFixedDmgIncrement += uint32(increment)
+						if battle.EnemyFixedDmgIncrement > uint32(maxDmg-base) {
+							battle.EnemyFixedDmgIncrement = uint32(maxDmg - base)
+						}
+					}
+					// 431（敌方）- 若自身处于能力下降状态则威力翻倍
+					if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 431 {
+						hasStatDrop := false
+						for i := 0; i < 6; i++ {
+							if battle.EnemyBattleLv[i] < 0 {
+								hasStatDrop = true
+								break
+							}
+						}
+						if hasStatDrop {
+							mul := uint64(enemyFinalDamage) * 2
+							if mul > math.MaxUint32 {
+								enemyFinalDamage = math.MaxUint32
+							} else {
+								enemyFinalDamage = uint32(mul)
+							}
+						}
+					}
+					// 402（敌方）- 后出手时额外附加 n 点固定伤害
+					if enemyHit && enemySkillForTurn.EffectID == 402 && !enemyFirst && enemyFinalDamage > 0 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						bonus := uint32(50)
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							bonus = uint32(effArgs[0])
+						}
+						enemyFinalDamage += bonus
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
+						}
+					}
+					// 405（敌方）- 先出手时额外附加 n 点固定伤害
+					if enemyHit && enemySkillForTurn.EffectID == 405 && enemyFirst && enemyFinalDamage > 0 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						bonus := uint32(50)
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							bonus = uint32(effArgs[0])
+						}
+						enemyFinalDamage += bonus
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
+						}
+					}
+					// 理论伤害用于客户端显示（对方打我方时显示实际受到的伤害数字，而非仅剩余血量）
+					enemyDamageCalc = enemyFinalDamage
+					// 42：敌方电系技能伤害×2
+					if enemyHit && battle.EnemyElectricBoostRounds > 0 && enemySkillForTurn.Type == 5 && enemyFinalDamage > 0 {
 						enemyFinalDamage *= 2
 						if enemyFinalDamage > battle.PlayerHP {
 							enemyFinalDamage = battle.PlayerHP
 						}
-					} else if targetPet.Gender == 2 {
-						enemyFinalDamage /= 2
-						if enemyFinalDamage < 1 {
-							enemyFinalDamage = 1
-						}
 					}
-				}
-			}
-			// 96（敌方）- 对手处于烧伤状态时威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 96 && battle.PlayerStatus[gameskills.StatusIndexBurn] > 0 {
-				mul := uint64(enemyFinalDamage) * 2
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
-				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			// 97（敌方）- 对手处于冻伤状态时威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 97 && battle.PlayerStatus[gameskills.StatusIndexFreeze] > 0 {
-				mul := uint64(enemyFinalDamage) * 2
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
-				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			// 102（敌方）- 对手处于麻痹状态时威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 102 && battle.PlayerStatus[gameskills.StatusIndexParalysis] > 0 {
-				mul := uint64(enemyFinalDamage) * 2
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
-				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			// 98（敌方）- n 回合内对雄性精灵的伤害为 m 倍
-			if enemyFinalDamage > 0 && battle.EnemyMaleDamageMultRounds > 0 {
-				targetPet := petMgr.Get(playerPetID)
-				if targetPet != nil && targetPet.Gender == 1 {
-					mult := battle.EnemyMaleDamageMult
-					if mult < 1 {
-						mult = 1
-					}
-					mul := uint64(enemyFinalDamage) * uint64(mult)
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-					if enemyFinalDamage > battle.PlayerHP {
-						enemyFinalDamage = battle.PlayerHP
-					}
-				}
-			}
-			// 100（敌方）- 自身体力越少则威力越大
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 100 && battle.EnemyMaxHP > 0 {
-				ratio := 2.0 - float64(battle.EnemyHP)/float64(battle.EnemyMaxHP)
-				if ratio < 1.0 {
-					ratio = 1.0
-				}
-				if ratio > 2.0 {
-					ratio = 2.0
-				}
-				mul := uint64(float64(enemyFinalDamage) * ratio)
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
-				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			if enemyFinalDamage < 1 {
-				enemyFinalDamage = 0
-			}
-			// 179（敌方）- 若属性相同则技能威力提升 n
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 179 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				boost := 20
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					boost = effArgs[0]
-				}
-				enemyPet := petMgr.Get(battle.EnemyID)
-				targetPet := petMgr.Get(playerPetID)
-				if enemyPet != nil && targetPet != nil && enemyPet.Type == targetPet.Type {
-					enemyFinalDamage = enemyFinalDamage * uint32(100+boost) / 100
-				}
-			}
-			// 129（敌方）- 对方为 X 性则技能威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 129 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				gender := 2
-				if len(effArgs) >= 1 {
-					gender = effArgs[0]
-				}
-				targetPet := petMgr.Get(playerPetID)
-				if targetPet != nil && targetPet.Gender == gender {
-					mul := uint64(enemyFinalDamage) * 2
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// 130（敌方）- 对方为 X 性则附加 n 点伤害
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 130 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				gender, bonus := 1, 100
-				if len(effArgs) >= 1 {
-					gender = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					bonus = effArgs[1]
-				}
-				targetPet := petMgr.Get(playerPetID)
-				if targetPet != nil && targetPet.Gender == gender {
-					enemyFinalDamage += uint32(bonus)
-				}
-			}
-			// 131（敌方）- 对方为 X 性则免疫当前回合伤害
-			if enemySkillForTurn.EffectID == 131 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				gender := 1
-				if len(effArgs) >= 1 {
-					gender = effArgs[0]
-				}
-				targetPet := petMgr.Get(playerPetID)
-				if targetPet != nil && targetPet.Gender == gender {
-					enemyFinalDamage = 0
-					enemyDamageCalc = 0
-				}
-			}
-			// 135/447（敌方）- 造成的伤害不会低于 n
-			if (enemySkillForTurn.EffectID == 135 || enemySkillForTurn.EffectID == 447) && enemyFinalDamage > 0 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				floor := 80
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					floor = effArgs[0]
-				}
-				if enemyFinalDamage < uint32(floor) {
-					enemyFinalDamage = uint32(floor)
-				}
-			}
-			// 193（敌方）- 若对手处于 XX 状态则必定致命一击
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 193 && !isCritEnemy {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				statusIdx := 5
-				if len(effArgs) >= 1 {
-					statusIdx = effArgs[0]
-				}
-				if statusIdx >= 0 && statusIdx < 20 && battle.PlayerStatus[statusIdx] > 0 {
-					isCritEnemy = true
-					mul := uint64(enemyFinalDamage) * 2
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// 468（敌方）- 若自身处于能力下降状态则威力翻倍，同时解除能力下降状态
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 468 {
-				hasStatDrop := false
-				for i := 0; i < 6; i++ {
-					if battle.EnemyBattleLv[i] < 0 {
-						hasStatDrop = true
-						break
-					}
-				}
-				if hasStatDrop {
-					mul := uint64(enemyFinalDamage) * 2
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-					for i := 0; i < 6; i++ {
-						if battle.EnemyBattleLv[i] < 0 {
-							battle.EnemyBattleLv[i] = 0
-						}
-					}
-				}
-			}
-			// 195（敌方）- 若对手处于异常状态则攻击力双倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 195 {
-				hasStatus := false
-				for i := 0; i < 20; i++ {
-					if battle.PlayerStatus[i] > 0 {
-						hasStatus = true
-						break
-					}
-				}
-				if hasStatus {
-					mul := uint64(enemyFinalDamage) * 2
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// 180（敌方）- 只在第一回合有效果
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 180 && battle.RoundCount > 1 {
-				enemyFinalDamage /= 2
-				if enemyFinalDamage < 1 {
-					enemyFinalDamage = 1
-				}
-			}
-			// 88（敌方）- n% 概率伤害为 m 倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 88 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				chance, mult := 10, 2
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					chance = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					mult = effArgs[1]
-				}
-				if rand.Intn(100) < chance {
-					mul := uint64(enemyFinalDamage) * uint64(mult)
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// 35（敌方）- 对方能力等级越高伤害越大
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 35 {
-				totalBoost := 0
-				for i := 0; i < 6; i++ {
-					if battle.PlayerBattleLv[i] > 0 {
-						totalBoost += int(battle.PlayerBattleLv[i])
-					}
-				}
-				if totalBoost > 0 {
-					mul := uint64(enemyFinalDamage) * uint64(100+totalBoost*5) / 100
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// 111（敌方）- 攻击力越高附加伤害越大
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 111 {
-				enemyPet := petMgr.Get(battle.EnemyID)
-				targetPet := petMgr.Get(playerPetID)
-				if enemyPet != nil && targetPet != nil && enemyPet.Atk > targetPet.Atk {
-					bonus := uint32(enemyPet.Atk-targetPet.Atk) / 10
-					enemyFinalDamage += bonus
-				}
-			}
-			// 113（敌方）- 速度越高威力越大
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 113 {
-				enemyPet := petMgr.Get(battle.EnemyID)
-				targetPet := petMgr.Get(playerPetID)
-				if enemyPet != nil && targetPet != nil && enemyPet.Spd > targetPet.Spd {
-					bonus := uint32(enemyPet.Spd-targetPet.Spd) / 10
-					enemyFinalDamage += bonus
-				}
-			}
-			// 132（敌方）- 当前体力在对方体力以上时威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 132 && battle.EnemyHP >= battle.PlayerHP {
-				mul := uint64(enemyFinalDamage) * 2
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
-				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-			}
-			// 168（敌方）- 若自身处于睡眠状态则威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 168 && battle.EnemyStatus[gameskills.StatusIndexSleep] > 0 {
-				mul := uint64(enemyFinalDamage) * 2
-				if mul > math.MaxUint32 {
-					enemyFinalDamage = math.MaxUint32
-				} else {
-					enemyFinalDamage = uint32(mul)
-				}
-			}
-			// 429（敌方）- 固定伤递增
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 429 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				base, increment, maxDmg := 25, 25, 100
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					base = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					increment = effArgs[1]
-				}
-				if len(effArgs) >= 3 && effArgs[2] > 0 {
-					maxDmg = effArgs[2]
-				}
-				current := uint32(base) + battle.EnemyFixedDmgIncrement
-				if current > uint32(maxDmg) {
-					current = uint32(maxDmg)
-				}
-				if current > battle.PlayerHP {
-					current = battle.PlayerHP
-				}
-				enemyFinalDamage += current
-				battle.EnemyFixedDmgIncrement += uint32(increment)
-				if battle.EnemyFixedDmgIncrement > uint32(maxDmg-base) {
-					battle.EnemyFixedDmgIncrement = uint32(maxDmg - base)
-				}
-			}
-			// 431（敌方）- 若自身处于能力下降状态则威力翻倍
-			if enemyFinalDamage > 0 && enemySkillForTurn.EffectID == 431 {
-				hasStatDrop := false
-				for i := 0; i < 6; i++ {
-					if battle.EnemyBattleLv[i] < 0 {
-						hasStatDrop = true
-						break
-					}
-				}
-				if hasStatDrop {
-					mul := uint64(enemyFinalDamage) * 2
-					if mul > math.MaxUint32 {
-						enemyFinalDamage = math.MaxUint32
-					} else {
-						enemyFinalDamage = uint32(mul)
-					}
-				}
-			}
-			// 402（敌方）- 后出手时额外附加 n 点固定伤害
-			if enemyHit && enemySkillForTurn.EffectID == 402 && !enemyFirst && enemyFinalDamage > 0 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				bonus := uint32(50)
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					bonus = uint32(effArgs[0])
-				}
-				enemyFinalDamage += bonus
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			// 405（敌方）- 先出手时额外附加 n 点固定伤害
-			if enemyHit && enemySkillForTurn.EffectID == 405 && enemyFirst && enemyFinalDamage > 0 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				bonus := uint32(50)
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					bonus = uint32(effArgs[0])
-				}
-				enemyFinalDamage += bonus
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			// 理论伤害用于客户端显示（对方打我方时显示实际受到的伤害数字，而非仅剩余血量）
-			enemyDamageCalc = enemyFinalDamage
-			// 42：敌方电系技能伤害×2
-			if enemyHit && battle.EnemyElectricBoostRounds > 0 && enemySkillForTurn.Type == 5 && enemyFinalDamage > 0 {
-				enemyFinalDamage *= 2
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-			}
-			if enemyHit && enemyFinalDamage > 0 {
-				// 我方防御侧：46 挡一次 54 伤害1/m 41 火抗 44 特防减半 50 物防减半 49 护盾
-				if battle.PlayerBlockCount > 0 {
-					battle.PlayerBlockCount--
-					enemyFinalDamage = 0
-				} else {
-					// 54：对方打我方伤害 1/m
-					if battle.PlayerDamageReductRounds > 0 && battle.PlayerDamageReduct > 0 {
-						enemyFinalDamage /= uint32(battle.PlayerDamageReduct)
-						if enemyFinalDamage < 1 {
-							enemyFinalDamage = 1
-						}
-					}
-					if battle.PlayerFireResistRounds > 0 && enemySkillForTurn.Type == 3 {
-						enemyFinalDamage /= 2
-						if enemyFinalDamage < 1 {
-							enemyFinalDamage = 1
-						}
-					}
-					if battle.PlayerSpDefHalfRounds > 0 && enemySkillForTurn.Category == 2 {
-						enemyFinalDamage /= 2
-						if enemyFinalDamage < 1 {
-							enemyFinalDamage = 1
-						}
-					}
-					if battle.PlayerPhysDefHalfRounds > 0 && enemySkillForTurn.Category == 1 {
-						enemyFinalDamage /= 2
-						if enemyFinalDamage < 1 {
-							enemyFinalDamage = 1
-						}
-					}
-					if battle.PlayerShieldPoints > 0 {
-						if enemyFinalDamage <= battle.PlayerShieldPoints {
-							battle.PlayerShieldPoints -= enemyFinalDamage
+					if enemyHit && enemyFinalDamage > 0 {
+						// 我方防御侧：46 挡一次 54 伤害1/m 41 火抗 44 特防减半 50 物防减半 49 护盾
+						if battle.PlayerBlockCount > 0 {
+							battle.PlayerBlockCount--
 							enemyFinalDamage = 0
 						} else {
-							enemyFinalDamage -= battle.PlayerShieldPoints
-							battle.PlayerShieldPoints = 0
-						}
-					}
-					if enemyFinalDamage > battle.PlayerHP {
-						enemyFinalDamage = battle.PlayerHP
-					}
-				}
-			}
-			// 68：致死留 1 血（仅一次）
-			if enemyHit && enemyFinalDamage > 0 && battle.PlayerEndureRounds > 0 && enemyFinalDamage >= battle.PlayerHP && battle.PlayerHP > 0 {
-				enemyFinalDamage = battle.PlayerHP - 1
-				battle.PlayerEndureRounds--
-			}
-			if enemyHit && enemyFinalDamage > 0 {
-				// 特性：坚硬(1024) —— 受到的伤害减少5%
-				if playerTrait == 1024 {
-					reduced := uint32(math.Floor(float64(enemyFinalDamage) * 0.95))
-					if reduced < 1 {
-						reduced = 1
-					}
-					enemyFinalDamage = reduced
-				}
-				// 顽强(1026)：受到致死攻击时有3%几率余下1点体力
-				if playerTrait == 1026 && playerHPBeforeEnemy > 1 && enemyFinalDamage >= playerHPBeforeEnemy {
-					if rand.Intn(100) < 3 {
-						enemyFinalDamage = playerHPBeforeEnemy - 1
-					}
-				}
-				if enemyFinalDamage > battle.PlayerHP {
-					enemyFinalDamage = battle.PlayerHP
-				}
-				enemyDamage = enemyFinalDamage
-				// 73 - 先手反弹：如果先出手，则受攻击时反弹200%的伤害给对手
-				if battle.PlayerFirstStrikeReflectActive && battle.PlayerFirstStrikeReflectRounds > 0 && enemyDamage > 0 {
-					reflectDamage := enemyDamage * 2
-					if reflectDamage > battle.EnemyHP {
-						reflectDamage = battle.EnemyHP
-					}
-					battle.EnemyHP -= reflectDamage
-				}
-			playerHPBeforeDamage := battle.PlayerHP
-			// 127 - n 回合内受到伤害减半
-			if battle.PlayerDamageHalfRounds > 0 && enemyDamage > 0 {
-				enemyDamage /= 2
-			}
-			// 508 - 下回合所受伤害减少 m 点（生效一次后清零）
-			if battle.PlayerNextTurnDamageReduce > 0 {
-				if enemyDamage > battle.PlayerNextTurnDamageReduce {
-					enemyDamage -= battle.PlayerNextTurnDamageReduce
-				} else {
-					enemyDamage = 0
-				}
-				battle.PlayerNextTurnDamageReduce = 0
-			}
-			// 463 - n 回合内每回合所受的伤害减少 m 点
-			if battle.PlayerDamageReducePerRoundRounds > 0 && battle.PlayerDamageReducePerRoundAmount > 0 && enemyDamage > 0 {
-				if enemyDamage > battle.PlayerDamageReducePerRoundAmount {
-					enemyDamage -= battle.PlayerDamageReducePerRoundAmount
-				} else {
-					enemyDamage = 0
-				}
-			}
-			// 125 - n 回合内被攻击时减少受到的伤害上限 m
-			if battle.PlayerDamageCapRounds > 0 && battle.PlayerDamageCap > 0 && enemyDamage > battle.PlayerDamageCap {
-				enemyDamage = battle.PlayerDamageCap
-			}
-			// 128 - n 回合内接受的物理伤害转化为体力恢复
-			if battle.PlayerPhysDmgToHealRounds > 0 && enemySkillForTurn != nil && enemySkillForTurn.Category == 1 && enemyDamage > 0 {
-				heal := enemyDamage
-				newHP := battle.PlayerHP + heal
-				if newHP > battle.PlayerMaxHP {
-					newHP = battle.PlayerMaxHP
-				}
-				battle.PlayerHP = newHP
-				enemyDamage = 0
-			}
-			// 123 - n 回合内受到任何伤害时自身 XX 提高 m 级
-			if battle.PlayerHurtStatBoostRounds > 0 && enemyDamage > 0 {
-				stat := int(battle.PlayerHurtStatBoostStat)
-				if stat >= 0 && stat < 6 {
-					cur := int(battle.PlayerBattleLv[stat]) + int(battle.PlayerHurtStatBoostStages)
-					if cur > 6 {
-						cur = 6
-					}
-					if cur < -6 {
-						cur = -6
-					}
-					battle.PlayerBattleLv[stat] = int8(cur)
-				}
-			}
-				// 84 - 受到物理攻击时 m% 几率将对手麻痹
-				if battle.PlayerParalyzeOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
-					!sptboss.IsControlImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexParalysis] == 0 {
-					if rand.Intn(100) < int(battle.PlayerParalyzeOnPhysHitChance) {
-						battle.EnemyStatus[gameskills.StatusIndexParalysis] = byte(rand.Intn(2) + 2)
-					}
-				}
-				// 92 - 受到物理攻击时 m% 几率将对手冻伤
-				if battle.PlayerFreezeOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
-					!sptboss.IsControlImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexFreeze] == 0 {
-					if rand.Intn(100) < int(battle.PlayerFreezeOnPhysHitChance) {
-						battle.EnemyStatus[gameskills.StatusIndexFreeze] = byte(rand.Intn(2) + 1)
-						dmg := battle.EnemyMaxHP / 8
-						if dmg > battle.EnemyHP {
-							dmg = battle.EnemyHP
-						}
-						battle.EnemyHP -= dmg
-					}
-				}
-				// 108 - 受到物理攻击时 m% 几率将对手烧伤
-				if battle.PlayerBurnOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
-					!sptboss.IsStatusImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexBurn] == 0 {
-					if rand.Intn(100) < int(battle.PlayerBurnOnPhysHitChance) {
-						battle.EnemyStatus[gameskills.StatusIndexBurn] = byte(rand.Intn(2) + 1)
-						dmg := battle.EnemyMaxHP / 8
-						if dmg > battle.EnemyHP {
-							dmg = battle.EnemyHP
-						}
-						battle.EnemyHP -= dmg
-					}
-				}
-				// 146 - n 回合内受物理攻击时 m% 使对方中毒
-				if battle.PlayerPoisonOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
-					!sptboss.IsStatusImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexPoison] == 0 {
-					if rand.Intn(100) < int(battle.PlayerPoisonOnPhysHitChance) {
-						battle.EnemyStatus[gameskills.StatusIndexPoison] = byte(rand.Intn(2) + 1)
-					}
-				}
-				// 21 - 反弹伤害 1/k：受到攻击时对对手造成本次受到伤害的 1/divisor
-				if battle.PlayerReflectDamageRounds > 0 && battle.PlayerReflectDamageDivisor > 0 && enemyDamage > 0 {
-					reflectDmg := enemyDamage / uint32(battle.PlayerReflectDamageDivisor)
-					if reflectDmg > battle.EnemyHP {
-						reflectDmg = battle.EnemyHP
-					}
-					battle.EnemyHP -= reflectDmg
-				}
-				// 545 - 若受到伤害高于 m 则对手获得效果 type（如刺刃甲壳：type 1 = 防御-1）
-				if battle.PlayerReflectStatusWhenHitRounds > 0 && enemyDamage >= battle.PlayerReflectStatusWhenHitThreshold && enemyDamage > 0 && !sptboss.IsStatDropImmune(battle.EnemyID) {
-					typ := battle.PlayerReflectStatusWhenHitType
-					if typ <= 5 {
-						// type 0~5：对手对应能力等级 -1（0攻 1防 2特攻 3特防 4速 5命中）
-						cur := int(battle.EnemyBattleLv[typ])
-						cur--
-						if cur < -6 {
-							cur = -6
-						}
-						battle.EnemyBattleLv[typ] = int8(cur)
-					}
-					// type >= 10 可扩展为异常状态，此处仅实现能力下降
-				}
-				battle.PlayerHP -= enemyDamage
-				// 116 - n 回合内每次受到攻击造成伤害的 1/5 恢复自身体力
-				if battle.PlayerDefendHealRounds > 0 && enemyDamage > 0 {
-					heal := enemyDamage / 5
-					if heal > 0 {
-						newHP := battle.PlayerHP + heal
-						if newHP > battle.PlayerMaxHP {
-							newHP = battle.PlayerMaxHP
-						}
-						battle.PlayerHP = newHP
-					}
-				}
-				// 117 - n 回合内每次受到攻击 m% 概率使对手疲惫 1~3 回合
-				if battle.PlayerDefendFatigueRounds > 0 && enemyDamage > 0 &&
-					!sptboss.IsControlImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexFatigue] == 0 {
-					if rand.Intn(100) < int(battle.PlayerDefendFatigueChance) {
-						battle.EnemyStatus[gameskills.StatusIndexFatigue] = byte(rand.Intn(3) + 1)
-					}
-				}
-				// 110 - n 回合内每次受到攻击时 m% 几率使对手 stat 等级 -1
-				if battle.PlayerDefendStatDropRounds > 0 && enemyDamage > 0 &&
-					!sptboss.IsStatDropImmune(battle.EnemyID) && battle.EnemyImmuneStatDropRounds == 0 {
-					if rand.Intn(100) < int(battle.PlayerDefendStatDropChance) {
-						stat := int(battle.PlayerDefendStatDropStat)
-						cur := int(battle.EnemyBattleLv[stat]) - 1
-						if cur < -6 {
-							cur = -6
-						}
-						battle.EnemyBattleLv[stat] = int8(cur)
-					}
-				}
-				// 172（敌方）- 若自身后出手则造成伤害的 1/n 回复体力
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 172 && !enemyFirst && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					div := 2
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						div = effArgs[0]
-					}
-					heal := enemyDamage / uint32(div)
-					if heal > 0 {
-						newHP := battle.EnemyHP + heal
-						if newHP > battle.EnemyMaxHP {
-							newHP = battle.EnemyMaxHP
-						}
-						battle.EnemyHP = newHP
-					}
-				}
-				// 458（敌方）- 若自身先出手则造成伤害的 n% 回复体力
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 458 && enemyFirst && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					pct := 50
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						pct = effArgs[0]
-					}
-					heal := enemyDamage * uint32(pct) / 100
-					if heal > 0 {
-						newHP := battle.EnemyHP + heal
-						if newHP > battle.EnemyMaxHP {
-							newHP = battle.EnemyMaxHP
-						}
-						battle.EnemyHP = newHP
-					}
-				}
-				// 459（敌方）- 附加对手防御/特防 n% 的固定伤害
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 459 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					pct := 50
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						pct = effArgs[0]
-					}
-					var defVal uint32
-					if enemySkillForTurn.Category == 1 {
-						defVal = uint32(playerStats.Defence)
-					} else {
-						defVal = uint32(playerStats.SpDef)
-					}
-					bonus := defVal * uint32(pct) / 100
-					if bonus > 0 && battle.PlayerHP > 0 {
-						if bonus > battle.PlayerHP {
-							bonus = battle.PlayerHP
-						}
-						battle.PlayerHP -= bonus
-					}
-				}
-				// 461（敌方）- 若自身体力低于 1/m 则下回合起必定暴击
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 461 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					div := 4
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						div = effArgs[0]
-					}
-					if battle.EnemyMaxHP > 0 && battle.EnemyHP > 0 && battle.EnemyHP < battle.EnemyMaxHP/uint32(div) {
-						battle.EnemyCritBuffRounds = 3
-					}
-				}
-				// 474（敌方）- 若自身先出手则 n% 几率自身 stat 提升 m 级
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 474 && enemyFirst && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statIdx, stages := 50, 0, 1
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statIdx = effArgs[1]
-					}
-					if len(effArgs) >= 3 && effArgs[2] > 0 {
-						stages = effArgs[2]
-					}
-					if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
-						cur := int(battle.EnemyBattleLv[statIdx])
-						cur += stages
-						if cur > 6 {
-							cur = 6
-						}
-						battle.EnemyBattleLv[statIdx] = int8(cur)
-					}
-				}
-				// 475（敌方）- 若伤害不足 m 则下 n 回合必定暴击
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 475 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					threshold, rounds := 100, 2
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						threshold = effArgs[0]
-					}
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						rounds = effArgs[1]
-					}
-					if enemyDamage < uint32(threshold) {
-						battle.EnemyCritBuffRounds = byte(rounds + 1)
-					}
-				}
-				// 476（敌方）- 若自身后出手则回复 n 点体力
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 476 && !enemyFirst && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					amount := uint32(100)
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						amount = uint32(effArgs[0])
-					}
-					newHP := battle.EnemyHP + amount
-					if newHP > battle.EnemyMaxHP {
-						newHP = battle.EnemyMaxHP
-					}
-					battle.EnemyHP = newHP
-				}
-				// 186（敌方）- 若自身后出手则 n% 几率自身 stat 提升 m 级
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 186 && !enemyFirst && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statIdx, stages := 50, 0, 1
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statIdx = effArgs[1]
-					}
-					if len(effArgs) >= 3 && effArgs[2] > 0 {
-						stages = effArgs[2]
-					}
-					if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
-						cur := int(battle.EnemyBattleLv[statIdx])
-						cur += stages
-						if cur > 6 {
-							cur = 6
-						}
-						battle.EnemyBattleLv[statIdx] = int8(cur)
-					}
-				}
-				// 122（敌方）- 若自身先出手则 n% 几率对手 stat 降低 m 级
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 122 && enemyFirst && enemyDamage > 0 &&
-					!sptboss.IsStatDropImmune(playerPetID) && battle.PlayerImmuneStatDropRounds == 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statIdx, stages := 50, 0, 1
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statIdx = effArgs[1]
-					}
-					if len(effArgs) >= 3 && effArgs[2] > 0 {
-						stages = effArgs[2]
-					}
-					if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
-						cur := int(battle.PlayerBattleLv[statIdx])
-						cur -= stages
-						if cur < -6 {
-							cur = -6
-						}
-						battle.PlayerBattleLv[statIdx] = int8(cur)
-					}
-				}
-				// 148（敌方）- 若自身后出手则 n% 几率对手 stat 降低 m 级
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 148 && !enemyFirst && enemyDamage > 0 &&
-					!sptboss.IsStatDropImmune(playerPetID) && battle.PlayerImmuneStatDropRounds == 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statIdx, stages := 50, 0, 1
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statIdx = effArgs[1]
-					}
-					if len(effArgs) >= 3 && effArgs[2] > 0 {
-						stages = effArgs[2]
-					}
-					if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
-						cur := int(battle.PlayerBattleLv[statIdx])
-						cur -= stages
-						if cur < -6 {
-							cur = -6
-						}
-						battle.PlayerBattleLv[statIdx] = int8(cur)
-					}
-				}
-				// 147（敌方）- 若自身后出手则 n% 几率令对手陷入异常状态
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 147 && !enemyFirst && enemyDamage > 0 &&
-					!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statusIdx := 50, gameskills.StatusIndexBurn
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statusIdx = effArgs[1]
-					}
-					if statusIdx >= 0 && statusIdx < 20 && battle.PlayerStatus[statusIdx] == 0 && rand.Intn(100) < chance {
-						battle.PlayerStatus[statusIdx] = 2
-					}
-				}
-				// 173（敌方）- 若自身先出手则 n% 几率令对手陷入异常状态
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 173 && enemyFirst && enemyDamage > 0 &&
-					!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statusIdx := 50, gameskills.StatusIndexBurn
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statusIdx = effArgs[1]
-					}
-					if statusIdx >= 0 && statusIdx < 20 && battle.PlayerStatus[statusIdx] == 0 && rand.Intn(100) < chance {
-						battle.PlayerStatus[statusIdx] = 2
-					}
-				}
-				// 115（敌方）- n% 概率附加速度的 1/m 点固定伤害
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 115 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, divisor := 30, 2
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						divisor = effArgs[1]
-					}
-					if rand.Intn(100) < chance {
-						bonus := uint32(enemyStats.Speed) / uint32(divisor)
-						if bonus > 0 && battle.PlayerHP > 0 {
-							if bonus > battle.PlayerHP {
-								bonus = battle.PlayerHP
-							}
-							battle.PlayerHP -= bonus
-						}
-					}
-				}
-				// 119（敌方）- 伤害为偶数时 30% 疲惫对手 +1 回合；奇数时 30% 自身速度 +1
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 119 && enemyDamage > 0 {
-					if enemyDamage%2 == 0 {
-						if !sptboss.IsControlImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 && rand.Intn(100) < 30 {
-							if battle.PlayerStatus[gameskills.StatusIndexFatigue] == 0 {
-								battle.PlayerStatus[gameskills.StatusIndexFatigue] = 1
-							}
-						}
-					} else {
-						if rand.Intn(100) < 30 {
-							cur := int(battle.EnemyBattleLv[gameskills.StatSpeed]) + 1
-							if cur > 6 {
-								cur = 6
-							}
-							battle.EnemyBattleLv[gameskills.StatSpeed] = int8(cur)
-						}
-					}
-				}
-				// 134（敌方）- 造成的伤害低于 n，则自身所有技能的 PP +m
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 134 && enemyDamage > 0 && !battle.EnemyPPInfinite {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					threshold, ppBonus := 100, 1
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						threshold = effArgs[0]
-					}
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						ppBonus = effArgs[1]
-					}
-					if enemyDamage < uint32(threshold) {
-						for i := 0; i < 4; i++ {
-							if battle.EnemySkillPP[i] > 0 {
-								newPP := int(battle.EnemySkillPP[i]) + ppBonus
-								if newPP > 255 {
-									newPP = 255
+							// 54：对方打我方伤害 1/m
+							if battle.PlayerDamageReductRounds > 0 && battle.PlayerDamageReduct > 0 {
+								enemyFinalDamage /= uint32(battle.PlayerDamageReduct)
+								if enemyFinalDamage < 1 {
+									enemyFinalDamage = 1
 								}
-								battle.EnemySkillPP[i] = byte(newPP)
+							}
+							if battle.PlayerFireResistRounds > 0 && enemySkillForTurn.Type == 3 {
+								enemyFinalDamage /= 2
+								if enemyFinalDamage < 1 {
+									enemyFinalDamage = 1
+								}
+							}
+							if battle.PlayerSpDefHalfRounds > 0 && enemySkillForTurn.Category == 2 {
+								enemyFinalDamage /= 2
+								if enemyFinalDamage < 1 {
+									enemyFinalDamage = 1
+								}
+							}
+							if battle.PlayerPhysDefHalfRounds > 0 && enemySkillForTurn.Category == 1 {
+								enemyFinalDamage /= 2
+								if enemyFinalDamage < 1 {
+									enemyFinalDamage = 1
+								}
+							}
+							if battle.PlayerShieldPoints > 0 {
+								if enemyFinalDamage <= battle.PlayerShieldPoints {
+									battle.PlayerShieldPoints -= enemyFinalDamage
+									enemyFinalDamage = 0
+								} else {
+									enemyFinalDamage -= battle.PlayerShieldPoints
+									battle.PlayerShieldPoints = 0
+								}
+							}
+							if enemyFinalDamage > battle.PlayerHP {
+								enemyFinalDamage = battle.PlayerHP
 							}
 						}
 					}
-				}
-				// 188（敌方）- 若自身处于异常状态，则附加对应的反击效果
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 188 && enemyDamage > 0 && !sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
-					if battle.EnemyStatus[gameskills.StatusIndexBurn] > 0 && battle.PlayerStatus[gameskills.StatusIndexBurn] == 0 {
-						battle.PlayerStatus[gameskills.StatusIndexBurn] = byte(rand.Intn(2) + 1)
-						dmg := battle.PlayerMaxHP / 8
-						if dmg > battle.PlayerHP {
-							dmg = battle.PlayerHP
-						}
-						battle.PlayerHP -= dmg
-					} else if battle.EnemyStatus[gameskills.StatusIndexFreeze] > 0 && battle.PlayerStatus[gameskills.StatusIndexFreeze] == 0 {
-						battle.PlayerStatus[gameskills.StatusIndexFreeze] = byte(rand.Intn(2) + 1)
-						dmg := battle.PlayerMaxHP / 8
-						if dmg > battle.PlayerHP {
-							dmg = battle.PlayerHP
-						}
-						battle.PlayerHP -= dmg
-					} else if battle.EnemyStatus[gameskills.StatusIndexPoison] > 0 && battle.PlayerStatus[gameskills.StatusIndexPoison] == 0 {
-						battle.PlayerStatus[gameskills.StatusIndexPoison] = byte(rand.Intn(2) + 1)
-						dmg := battle.PlayerMaxHP / 8
-						if dmg > battle.PlayerHP {
-							dmg = battle.PlayerHP
-						}
-						battle.PlayerHP -= dmg
+					// 68：致死留 1 血（仅一次）
+					if enemyHit && enemyFinalDamage > 0 && battle.PlayerEndureRounds > 0 && enemyFinalDamage >= battle.PlayerHP && battle.PlayerHP > 0 {
+						enemyFinalDamage = battle.PlayerHP - 1
+						battle.PlayerEndureRounds--
 					}
-				}
-				// 428（敌方）- 命中时附加 m 点固定伤害
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 428 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					bonus := uint32(50)
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						bonus = uint32(effArgs[0])
-					}
-					if bonus > 0 && battle.PlayerHP > 0 {
-						if bonus > battle.PlayerHP {
-							bonus = battle.PlayerHP
-						}
-						battle.PlayerHP -= bonus
-					}
-				}
-				// 464（敌方）- 命中时 m% 概率使对方烧伤
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 464 && enemyDamage > 0 &&
-					!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance := 30
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						chance = effArgs[0]
-					}
-					if rand.Intn(100) < chance && battle.PlayerStatus[gameskills.StatusIndexBurn] == 0 {
-						battle.PlayerStatus[gameskills.StatusIndexBurn] = byte(rand.Intn(2) + 1)
-						dmg := battle.PlayerMaxHP / 8
-						if dmg > battle.PlayerHP {
-							dmg = battle.PlayerHP
-						}
-						battle.PlayerHP -= dmg
-					}
-				}
-				// 181（敌方）- n% 概率使对手XX，每次使用m%增加，最高k%
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 181 && enemyHit &&
-					!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					statusIdx, baseChance, increment, maxChance := gameskills.StatusIndexBurn, 30, 10, 100
-					if len(effArgs) >= 1 {
-						statusIdx = effArgs[0]
-					}
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						baseChance = effArgs[1]
-					}
-					if len(effArgs) >= 3 && effArgs[2] > 0 {
-						increment = effArgs[2]
-					}
-					if len(effArgs) >= 4 && effArgs[3] > 0 {
-						maxChance = effArgs[3]
-					}
-					if battle.Enemy181CurrentChance == 0 {
-						battle.Enemy181CurrentChance = byte(baseChance)
-						battle.Enemy181StatusIdx = byte(statusIdx)
-						battle.Enemy181MaxChance = byte(maxChance)
-						battle.Enemy181Increment = byte(increment)
-					}
-					currentChance := int(battle.Enemy181CurrentChance)
-					if statusIdx >= 0 && statusIdx < 20 && rand.Intn(100) < currentChance {
-						if battle.PlayerStatus[statusIdx] == 0 {
-							battle.PlayerStatus[statusIdx] = byte(rand.Intn(2) + 2)
-						}
-					}
-					newChance := currentChance + increment
-					if newChance > maxChance {
-						newChance = maxChance
-					}
-					battle.Enemy181CurrentChance = byte(newChance)
-				}
-				// 441（敌方）- 每次攻击暴击率 +n%，最高 m%
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 441 && enemyHit {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					increment, maxBonus := 1, 8
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						increment = effArgs[0] / 6
-						if increment < 1 {
-							increment = 1
-						}
-					}
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						maxBonus = effArgs[1] / 6
-						if maxBonus < 1 {
-							maxBonus = 1
-						}
-					}
-					newBonus := int(battle.EnemyCritRateBonus) + increment
-					if newBonus > maxBonus {
-						newBonus = maxBonus
-					}
-					if newBonus > 16 {
-						newBonus = 16
-					}
-					battle.EnemyCritRateBonus = byte(newBonus)
-				}
-				// 490（敌方）- 若造成伤害超过 m，则自身速度 +n 级
-				if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 490 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					threshold, stages := 200, 1
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						threshold = effArgs[0]
-					}
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						stages = effArgs[1]
-					}
-					if enemyDamage > uint32(threshold) {
-						cur := int(battle.EnemyBattleLv[gameskills.StatSpeed]) + stages
-						if cur > 6 {
-							cur = 6
-						}
-						battle.EnemyBattleLv[gameskills.StatSpeed] = int8(cur)
-					}
-				}
-				// 89（敌方）- 吸血：造成伤害时恢复自身 damage/divisor 体力
-				if battle.EnemyLifestealRounds > 0 && enemyDamage > 0 && battle.EnemyLifestealDivisor > 0 {
-					heal := enemyDamage / uint32(battle.EnemyLifestealDivisor)
-					if heal > 0 {
-						newHP := battle.EnemyHP + heal
-						if newHP > battle.EnemyMaxHP {
-							newHP = battle.EnemyMaxHP
-						}
-						battle.EnemyHP = newHP
-					}
-				}
-				// 104（敌方）- n 回合内每次直接攻击 m% 几率附带衰弱（随机能力-1）
-				if battle.EnemyWeaknessOnHitRounds > 0 && enemySkillForTurn.Category != 4 && enemyDamage > 0 &&
-					!sptboss.IsStatDropImmune(playerPetID) && battle.PlayerImmuneStatDropRounds == 0 {
-					if rand.Intn(100) < int(battle.EnemyWeaknessOnHitChance) {
-						stat := rand.Intn(6)
-						cur := int(battle.PlayerBattleLv[stat])
-						cur--
-						if cur < -6 {
-							cur = -6
-						}
-						battle.PlayerBattleLv[stat] = int8(cur)
-					}
-				}
-				// 109（敌方）- 造成伤害时 m% 几率令对手冻伤
-				if battle.EnemyFreezeOnDealDamageRounds > 0 && enemySkillForTurn.Category != 4 && enemyDamage > 0 &&
-					!sptboss.IsControlImmune(playerPetID) && battle.PlayerStatus[gameskills.StatusIndexFreeze] == 0 {
-					if rand.Intn(100) < int(battle.EnemyFreezeOnDealDamageChance) {
-						battle.PlayerStatus[gameskills.StatusIndexFreeze] = byte(rand.Intn(2) + 1)
-						dmg := battle.PlayerMaxHP / 8
-						if dmg > battle.PlayerHP {
-							dmg = battle.PlayerHP
-						}
-						battle.PlayerHP -= dmg
-					}
-				}
-				// 107（敌方）- 若本次攻击造成的伤害小于 n 则自身 xx 等级提升 1
-				if enemyHit && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 107 && enemySkillForTurn.Category != 4 && enemyDamage > 0 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					if len(effArgs) >= 2 {
-						thresh, statIdx := effArgs[0], effArgs[1]
-						if statIdx >= 0 && statIdx < 6 && enemyDamage < uint32(thresh) {
-							cur := int(battle.EnemyBattleLv[statIdx])
-							cur++
-							if cur > 6 {
-								cur = 6
+					if enemyHit && enemyFinalDamage > 0 {
+						// 特性：坚硬(1024) —— 受到的伤害减少5%
+						if playerTrait == 1024 {
+							reduced := uint32(math.Floor(float64(enemyFinalDamage) * 0.95))
+							if reduced < 1 {
+								reduced = 1
 							}
-							battle.EnemyBattleLv[statIdx] = int8(cur)
+							enemyFinalDamage = reduced
 						}
-					}
-				}
-				// 66 - 击败回血（敌方版本）：当次攻击击败我方时恢复敌方最大体力的1/n
-				if playerHPBeforeDamage > 0 && battle.PlayerHP == 0 && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 66 {
-					div := 2
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						div = effArgs[0]
-					}
-					heal := battle.EnemyMaxHP / uint32(div)
-					if heal > 0 {
-						newHP := battle.EnemyHP + heal
-						if newHP > battle.EnemyMaxHP {
-							newHP = battle.EnemyMaxHP
+						// 顽强(1026)：受到致死攻击时有3%几率余下1点体力
+						if playerTrait == 1026 && playerHPBeforeEnemy > 1 && enemyFinalDamage >= playerHPBeforeEnemy {
+							if rand.Intn(100) < 3 {
+								enemyFinalDamage = playerHPBeforeEnemy - 1
+							}
 						}
-						battle.EnemyHP = newHP
-					}
-				}
-				// 67 - 击败减对方下只最大HP（敌方版本）：当次攻击击败我方时减少我方下次出战精灵的最大体力1/n
-				if playerHPBeforeDamage > 0 && battle.PlayerHP == 0 && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 67 {
-					div := 2
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						div = effArgs[0]
-					}
-					battle.EnemyKillReduceMaxHpDivisor = byte(div)
-				}
-				// 158（敌方）- 击败对手后 n% 几率自身 stat 提升 m 级
-				if playerHPBeforeDamage > 0 && battle.PlayerHP == 0 && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 158 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					chance, statIdx, stages := 100, 0, 1
-					if len(effArgs) >= 1 {
-						chance = effArgs[0]
-					}
-					if len(effArgs) >= 2 {
-						statIdx = effArgs[1]
-					}
-					if len(effArgs) >= 3 && effArgs[2] > 0 {
-						stages = effArgs[2]
-					}
-					if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
-						cur := int(battle.EnemyBattleLv[statIdx])
-						cur += stages
-						if cur > 6 {
-							cur = 6
+						if enemyFinalDamage > battle.PlayerHP {
+							enemyFinalDamage = battle.PlayerHP
 						}
-						battle.EnemyBattleLv[statIdx] = int8(cur)
-					}
-				}
-				// 73 - 先手反弹（敌方版本）：如果敌方先出手，则受攻击时反弹200%的伤害给我方
-				if battle.EnemyFirstStrikeReflectActive && battle.EnemyFirstStrikeReflectRounds > 0 && enemyDamage > 0 {
-					reflectDamage := enemyDamage * 2
-					if reflectDamage > battle.PlayerHP {
-						reflectDamage = battle.PlayerHP
-					}
-					battle.PlayerHP -= reflectDamage
-				}
-				if battle.PlayerHP > battle.PlayerMaxHP {
-					battle.PlayerHP = 0 // uint 下溢时置 0
-				}
+						enemyDamage = enemyFinalDamage
+						// 73 - 先手反弹：如果先出手，则受攻击时反弹200%的伤害给对手
+						if battle.PlayerFirstStrikeReflectActive && battle.PlayerFirstStrikeReflectRounds > 0 && enemyDamage > 0 {
+							reflectDamage := enemyDamage * 2
+							if reflectDamage > battle.EnemyHP {
+								reflectDamage = battle.EnemyHP
+							}
+							battle.EnemyHP -= reflectDamage
+						}
+						playerHPBeforeDamage := battle.PlayerHP
+						// 127 - n 回合内受到伤害减半
+						if battle.PlayerDamageHalfRounds > 0 && enemyDamage > 0 {
+							enemyDamage /= 2
+						}
+						// 508 - 下回合所受伤害减少 m 点（生效一次后清零）
+						if battle.PlayerNextTurnDamageReduce > 0 {
+							if enemyDamage > battle.PlayerNextTurnDamageReduce {
+								enemyDamage -= battle.PlayerNextTurnDamageReduce
+							} else {
+								enemyDamage = 0
+							}
+							battle.PlayerNextTurnDamageReduce = 0
+						}
+						// 463 - n 回合内每回合所受的伤害减少 m 点
+						if battle.PlayerDamageReducePerRoundRounds > 0 && battle.PlayerDamageReducePerRoundAmount > 0 && enemyDamage > 0 {
+							if enemyDamage > battle.PlayerDamageReducePerRoundAmount {
+								enemyDamage -= battle.PlayerDamageReducePerRoundAmount
+							} else {
+								enemyDamage = 0
+							}
+						}
+						// 125 - n 回合内被攻击时减少受到的伤害上限 m
+						if battle.PlayerDamageCapRounds > 0 && battle.PlayerDamageCap > 0 && enemyDamage > battle.PlayerDamageCap {
+							enemyDamage = battle.PlayerDamageCap
+						}
+						// 128 - n 回合内接受的物理伤害转化为体力恢复
+						if battle.PlayerPhysDmgToHealRounds > 0 && enemySkillForTurn != nil && enemySkillForTurn.Category == 1 && enemyDamage > 0 {
+							heal := enemyDamage
+							newHP := battle.PlayerHP + heal
+							if newHP > battle.PlayerMaxHP {
+								newHP = battle.PlayerMaxHP
+							}
+							battle.PlayerHP = newHP
+							enemyDamage = 0
+						}
+						// 123 - n 回合内受到任何伤害时自身 XX 提高 m 级
+						if battle.PlayerHurtStatBoostRounds > 0 && enemyDamage > 0 {
+							stat := int(battle.PlayerHurtStatBoostStat)
+							if stat >= 0 && stat < 6 {
+								cur := int(battle.PlayerBattleLv[stat]) + int(battle.PlayerHurtStatBoostStages)
+								if cur > 6 {
+									cur = 6
+								}
+								if cur < -6 {
+									cur = -6
+								}
+								battle.PlayerBattleLv[stat] = int8(cur)
+							}
+						}
+						// 84 - 受到物理攻击时 m% 几率将对手麻痹
+						if battle.PlayerParalyzeOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
+							!sptboss.IsControlImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexParalysis] == 0 {
+							if rand.Intn(100) < int(battle.PlayerParalyzeOnPhysHitChance) {
+								battle.EnemyStatus[gameskills.StatusIndexParalysis] = byte(rand.Intn(2) + 2)
+							}
+						}
+						// 92 - 受到物理攻击时 m% 几率将对手冻伤
+						if battle.PlayerFreezeOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
+							!sptboss.IsControlImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexFreeze] == 0 {
+							if rand.Intn(100) < int(battle.PlayerFreezeOnPhysHitChance) {
+								battle.EnemyStatus[gameskills.StatusIndexFreeze] = byte(rand.Intn(2) + 1)
+								dmg := battle.EnemyMaxHP / 8
+								if dmg > battle.EnemyHP {
+									dmg = battle.EnemyHP
+								}
+								battle.EnemyHP -= dmg
+							}
+						}
+						// 108 - 受到物理攻击时 m% 几率将对手烧伤
+						if battle.PlayerBurnOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
+							!sptboss.IsStatusImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexBurn] == 0 {
+							if rand.Intn(100) < int(battle.PlayerBurnOnPhysHitChance) {
+								battle.EnemyStatus[gameskills.StatusIndexBurn] = byte(rand.Intn(2) + 1)
+								dmg := battle.EnemyMaxHP / 8
+								if dmg > battle.EnemyHP {
+									dmg = battle.EnemyHP
+								}
+								battle.EnemyHP -= dmg
+							}
+						}
+						// 146 - n 回合内受物理攻击时 m% 使对方中毒
+						if battle.PlayerPoisonOnPhysHitRounds > 0 && enemySkillForTurn.Category == 1 && enemyDamage > 0 &&
+							!sptboss.IsStatusImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexPoison] == 0 {
+							if rand.Intn(100) < int(battle.PlayerPoisonOnPhysHitChance) {
+								battle.EnemyStatus[gameskills.StatusIndexPoison] = byte(rand.Intn(2) + 1)
+							}
+						}
+						// 21 - 反弹伤害 1/k：受到攻击时对对手造成本次受到伤害的 1/divisor
+						if battle.PlayerReflectDamageRounds > 0 && battle.PlayerReflectDamageDivisor > 0 && enemyDamage > 0 {
+							reflectDmg := enemyDamage / uint32(battle.PlayerReflectDamageDivisor)
+							if reflectDmg > battle.EnemyHP {
+								reflectDmg = battle.EnemyHP
+							}
+							battle.EnemyHP -= reflectDmg
+						}
+						// 545 - 若受到伤害高于 m 则对手获得效果 type（如刺刃甲壳：type 1 = 防御-1）
+						if battle.PlayerReflectStatusWhenHitRounds > 0 && enemyDamage >= battle.PlayerReflectStatusWhenHitThreshold && enemyDamage > 0 && !sptboss.IsStatDropImmune(battle.EnemyID) {
+							typ := battle.PlayerReflectStatusWhenHitType
+							if typ <= 5 {
+								// type 0~5：对手对应能力等级 -1（0攻 1防 2特攻 3特防 4速 5命中）
+								cur := int(battle.EnemyBattleLv[typ])
+								cur--
+								if cur < -6 {
+									cur = -6
+								}
+								battle.EnemyBattleLv[typ] = int8(cur)
+							}
+							// type >= 10 可扩展为异常状态，此处仅实现能力下降
+						}
+						battle.PlayerHP -= enemyDamage
+						// 116 - n 回合内每次受到攻击造成伤害的 1/5 恢复自身体力
+						if battle.PlayerDefendHealRounds > 0 && enemyDamage > 0 {
+							heal := enemyDamage / 5
+							if heal > 0 {
+								newHP := battle.PlayerHP + heal
+								if newHP > battle.PlayerMaxHP {
+									newHP = battle.PlayerMaxHP
+								}
+								battle.PlayerHP = newHP
+							}
+						}
+						// 117 - n 回合内每次受到攻击 m% 概率使对手疲惫 1~3 回合
+						if battle.PlayerDefendFatigueRounds > 0 && enemyDamage > 0 &&
+							!sptboss.IsControlImmune(battle.EnemyID) && battle.EnemyStatus[gameskills.StatusIndexFatigue] == 0 {
+							if rand.Intn(100) < int(battle.PlayerDefendFatigueChance) {
+								battle.EnemyStatus[gameskills.StatusIndexFatigue] = byte(rand.Intn(3) + 1)
+							}
+						}
+						// 110 - n 回合内每次受到攻击时 m% 几率使对手 stat 等级 -1
+						if battle.PlayerDefendStatDropRounds > 0 && enemyDamage > 0 &&
+							!sptboss.IsStatDropImmune(battle.EnemyID) && battle.EnemyImmuneStatDropRounds == 0 {
+							if rand.Intn(100) < int(battle.PlayerDefendStatDropChance) {
+								stat := int(battle.PlayerDefendStatDropStat)
+								cur := int(battle.EnemyBattleLv[stat]) - 1
+								if cur < -6 {
+									cur = -6
+								}
+								battle.EnemyBattleLv[stat] = int8(cur)
+							}
+						}
+						// 172（敌方）- 若自身后出手则造成伤害的 1/n 回复体力
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 172 && !enemyFirst && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							div := 2
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								div = effArgs[0]
+							}
+							heal := enemyDamage / uint32(div)
+							if heal > 0 {
+								newHP := battle.EnemyHP + heal
+								if newHP > battle.EnemyMaxHP {
+									newHP = battle.EnemyMaxHP
+								}
+								battle.EnemyHP = newHP
+							}
+						}
+						// 458（敌方）- 若自身先出手则造成伤害的 n% 回复体力
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 458 && enemyFirst && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							pct := 50
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								pct = effArgs[0]
+							}
+							heal := enemyDamage * uint32(pct) / 100
+							if heal > 0 {
+								newHP := battle.EnemyHP + heal
+								if newHP > battle.EnemyMaxHP {
+									newHP = battle.EnemyMaxHP
+								}
+								battle.EnemyHP = newHP
+							}
+						}
+						// 459（敌方）- 附加对手防御/特防 n% 的固定伤害
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 459 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							pct := 50
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								pct = effArgs[0]
+							}
+							var defVal uint32
+							if enemySkillForTurn.Category == 1 {
+								defVal = uint32(playerStats.Defence)
+							} else {
+								defVal = uint32(playerStats.SpDef)
+							}
+							bonus := defVal * uint32(pct) / 100
+							if bonus > 0 && battle.PlayerHP > 0 {
+								if bonus > battle.PlayerHP {
+									bonus = battle.PlayerHP
+								}
+								battle.PlayerHP -= bonus
+							}
+						}
+						// 461（敌方）- 若自身体力低于 1/m 则下回合起必定暴击
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 461 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							div := 4
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								div = effArgs[0]
+							}
+							if battle.EnemyMaxHP > 0 && battle.EnemyHP > 0 && battle.EnemyHP < battle.EnemyMaxHP/uint32(div) {
+								battle.EnemyCritBuffRounds = 3
+							}
+						}
+						// 474（敌方）- 若自身先出手则 n% 几率自身 stat 提升 m 级
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 474 && enemyFirst && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statIdx, stages := 50, 0, 1
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statIdx = effArgs[1]
+							}
+							if len(effArgs) >= 3 && effArgs[2] > 0 {
+								stages = effArgs[2]
+							}
+							if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
+								cur := int(battle.EnemyBattleLv[statIdx])
+								cur += stages
+								if cur > 6 {
+									cur = 6
+								}
+								battle.EnemyBattleLv[statIdx] = int8(cur)
+							}
+						}
+						// 475（敌方）- 若伤害不足 m 则下 n 回合必定暴击
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 475 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							threshold, rounds := 100, 2
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								threshold = effArgs[0]
+							}
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								rounds = effArgs[1]
+							}
+							if enemyDamage < uint32(threshold) {
+								battle.EnemyCritBuffRounds = byte(rounds + 1)
+							}
+						}
+						// 476（敌方）- 若自身后出手则回复 n 点体力
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 476 && !enemyFirst && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							amount := uint32(100)
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								amount = uint32(effArgs[0])
+							}
+							newHP := battle.EnemyHP + amount
+							if newHP > battle.EnemyMaxHP {
+								newHP = battle.EnemyMaxHP
+							}
+							battle.EnemyHP = newHP
+						}
+						// 186（敌方）- 若自身后出手则 n% 几率自身 stat 提升 m 级
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 186 && !enemyFirst && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statIdx, stages := 50, 0, 1
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statIdx = effArgs[1]
+							}
+							if len(effArgs) >= 3 && effArgs[2] > 0 {
+								stages = effArgs[2]
+							}
+							if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
+								cur := int(battle.EnemyBattleLv[statIdx])
+								cur += stages
+								if cur > 6 {
+									cur = 6
+								}
+								battle.EnemyBattleLv[statIdx] = int8(cur)
+							}
+						}
+						// 122（敌方）- 若自身先出手则 n% 几率对手 stat 降低 m 级
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 122 && enemyFirst && enemyDamage > 0 &&
+							!sptboss.IsStatDropImmune(playerPetID) && battle.PlayerImmuneStatDropRounds == 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statIdx, stages := 50, 0, 1
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statIdx = effArgs[1]
+							}
+							if len(effArgs) >= 3 && effArgs[2] > 0 {
+								stages = effArgs[2]
+							}
+							if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
+								cur := int(battle.PlayerBattleLv[statIdx])
+								cur -= stages
+								if cur < -6 {
+									cur = -6
+								}
+								battle.PlayerBattleLv[statIdx] = int8(cur)
+							}
+						}
+						// 148（敌方）- 若自身后出手则 n% 几率对手 stat 降低 m 级
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 148 && !enemyFirst && enemyDamage > 0 &&
+							!sptboss.IsStatDropImmune(playerPetID) && battle.PlayerImmuneStatDropRounds == 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statIdx, stages := 50, 0, 1
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statIdx = effArgs[1]
+							}
+							if len(effArgs) >= 3 && effArgs[2] > 0 {
+								stages = effArgs[2]
+							}
+							if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
+								cur := int(battle.PlayerBattleLv[statIdx])
+								cur -= stages
+								if cur < -6 {
+									cur = -6
+								}
+								battle.PlayerBattleLv[statIdx] = int8(cur)
+							}
+						}
+						// 147（敌方）- 若自身后出手则 n% 几率令对手陷入异常状态
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 147 && !enemyFirst && enemyDamage > 0 &&
+							!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statusIdx := 50, gameskills.StatusIndexBurn
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statusIdx = effArgs[1]
+							}
+							if statusIdx >= 0 && statusIdx < 20 && battle.PlayerStatus[statusIdx] == 0 && rand.Intn(100) < chance {
+								battle.PlayerStatus[statusIdx] = 2
+							}
+						}
+						// 173（敌方）- 若自身先出手则 n% 几率令对手陷入异常状态
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 173 && enemyFirst && enemyDamage > 0 &&
+							!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statusIdx := 50, gameskills.StatusIndexBurn
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statusIdx = effArgs[1]
+							}
+							if statusIdx >= 0 && statusIdx < 20 && battle.PlayerStatus[statusIdx] == 0 && rand.Intn(100) < chance {
+								battle.PlayerStatus[statusIdx] = 2
+							}
+						}
+						// 115（敌方）- n% 概率附加速度的 1/m 点固定伤害
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 115 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, divisor := 30, 2
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								divisor = effArgs[1]
+							}
+							if rand.Intn(100) < chance {
+								bonus := uint32(enemyStats.Speed) / uint32(divisor)
+								if bonus > 0 && battle.PlayerHP > 0 {
+									if bonus > battle.PlayerHP {
+										bonus = battle.PlayerHP
+									}
+									battle.PlayerHP -= bonus
+								}
+							}
+						}
+						// 119（敌方）- 伤害为偶数时 30% 疲惫对手 +1 回合；奇数时 30% 自身速度 +1
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 119 && enemyDamage > 0 {
+							if enemyDamage%2 == 0 {
+								if !sptboss.IsControlImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 && rand.Intn(100) < 30 {
+									if battle.PlayerStatus[gameskills.StatusIndexFatigue] == 0 {
+										battle.PlayerStatus[gameskills.StatusIndexFatigue] = 1
+									}
+								}
+							} else {
+								if rand.Intn(100) < 30 {
+									cur := int(battle.EnemyBattleLv[gameskills.StatSpeed]) + 1
+									if cur > 6 {
+										cur = 6
+									}
+									battle.EnemyBattleLv[gameskills.StatSpeed] = int8(cur)
+								}
+							}
+						}
+						// 134（敌方）- 造成的伤害低于 n，则自身所有技能的 PP +m
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 134 && enemyDamage > 0 && !battle.EnemyPPInfinite {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							threshold, ppBonus := 100, 1
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								threshold = effArgs[0]
+							}
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								ppBonus = effArgs[1]
+							}
+							if enemyDamage < uint32(threshold) {
+								for i := 0; i < 4; i++ {
+									if battle.EnemySkillPP[i] > 0 {
+										newPP := int(battle.EnemySkillPP[i]) + ppBonus
+										if newPP > 255 {
+											newPP = 255
+										}
+										battle.EnemySkillPP[i] = byte(newPP)
+									}
+								}
+							}
+						}
+						// 188（敌方）- 若自身处于异常状态，则附加对应的反击效果
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 188 && enemyDamage > 0 && !sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
+							if battle.EnemyStatus[gameskills.StatusIndexBurn] > 0 && battle.PlayerStatus[gameskills.StatusIndexBurn] == 0 {
+								battle.PlayerStatus[gameskills.StatusIndexBurn] = byte(rand.Intn(2) + 1)
+								dmg := battle.PlayerMaxHP / 8
+								if dmg > battle.PlayerHP {
+									dmg = battle.PlayerHP
+								}
+								battle.PlayerHP -= dmg
+							} else if battle.EnemyStatus[gameskills.StatusIndexFreeze] > 0 && battle.PlayerStatus[gameskills.StatusIndexFreeze] == 0 {
+								battle.PlayerStatus[gameskills.StatusIndexFreeze] = byte(rand.Intn(2) + 1)
+								dmg := battle.PlayerMaxHP / 8
+								if dmg > battle.PlayerHP {
+									dmg = battle.PlayerHP
+								}
+								battle.PlayerHP -= dmg
+							} else if battle.EnemyStatus[gameskills.StatusIndexPoison] > 0 && battle.PlayerStatus[gameskills.StatusIndexPoison] == 0 {
+								battle.PlayerStatus[gameskills.StatusIndexPoison] = byte(rand.Intn(2) + 1)
+								dmg := battle.PlayerMaxHP / 8
+								if dmg > battle.PlayerHP {
+									dmg = battle.PlayerHP
+								}
+								battle.PlayerHP -= dmg
+							}
+						}
+						// 428（敌方）- 命中时附加 m 点固定伤害
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 428 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							bonus := uint32(50)
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								bonus = uint32(effArgs[0])
+							}
+							if bonus > 0 && battle.PlayerHP > 0 {
+								if bonus > battle.PlayerHP {
+									bonus = battle.PlayerHP
+								}
+								battle.PlayerHP -= bonus
+							}
+						}
+						// 464（敌方）- 命中时 m% 概率使对方烧伤
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 464 && enemyDamage > 0 &&
+							!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance := 30
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								chance = effArgs[0]
+							}
+							if rand.Intn(100) < chance && battle.PlayerStatus[gameskills.StatusIndexBurn] == 0 {
+								battle.PlayerStatus[gameskills.StatusIndexBurn] = byte(rand.Intn(2) + 1)
+								dmg := battle.PlayerMaxHP / 8
+								if dmg > battle.PlayerHP {
+									dmg = battle.PlayerHP
+								}
+								battle.PlayerHP -= dmg
+							}
+						}
+						// 181（敌方）- n% 概率使对手XX，每次使用m%增加，最高k%
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 181 && enemyHit &&
+							!sptboss.IsStatusImmune(playerPetID) && battle.PlayerImmuneStatusRounds == 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							statusIdx, baseChance, increment, maxChance := gameskills.StatusIndexBurn, 30, 10, 100
+							if len(effArgs) >= 1 {
+								statusIdx = effArgs[0]
+							}
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								baseChance = effArgs[1]
+							}
+							if len(effArgs) >= 3 && effArgs[2] > 0 {
+								increment = effArgs[2]
+							}
+							if len(effArgs) >= 4 && effArgs[3] > 0 {
+								maxChance = effArgs[3]
+							}
+							if battle.Enemy181CurrentChance == 0 {
+								battle.Enemy181CurrentChance = byte(baseChance)
+								battle.Enemy181StatusIdx = byte(statusIdx)
+								battle.Enemy181MaxChance = byte(maxChance)
+								battle.Enemy181Increment = byte(increment)
+							}
+							currentChance := int(battle.Enemy181CurrentChance)
+							if statusIdx >= 0 && statusIdx < 20 && rand.Intn(100) < currentChance {
+								if battle.PlayerStatus[statusIdx] == 0 {
+									battle.PlayerStatus[statusIdx] = byte(rand.Intn(2) + 2)
+								}
+							}
+							newChance := currentChance + increment
+							if newChance > maxChance {
+								newChance = maxChance
+							}
+							battle.Enemy181CurrentChance = byte(newChance)
+						}
+						// 441（敌方）- 每次攻击暴击率 +n%，最高 m%
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 441 && enemyHit {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							increment, maxBonus := 1, 8
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								increment = effArgs[0] / 6
+								if increment < 1 {
+									increment = 1
+								}
+							}
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								maxBonus = effArgs[1] / 6
+								if maxBonus < 1 {
+									maxBonus = 1
+								}
+							}
+							newBonus := int(battle.EnemyCritRateBonus) + increment
+							if newBonus > maxBonus {
+								newBonus = maxBonus
+							}
+							if newBonus > 16 {
+								newBonus = 16
+							}
+							battle.EnemyCritRateBonus = byte(newBonus)
+						}
+						// 490（敌方）- 若造成伤害超过 m，则自身速度 +n 级
+						if enemySkillForTurn != nil && enemySkillForTurn.EffectID == 490 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							threshold, stages := 200, 1
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								threshold = effArgs[0]
+							}
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								stages = effArgs[1]
+							}
+							if enemyDamage > uint32(threshold) {
+								cur := int(battle.EnemyBattleLv[gameskills.StatSpeed]) + stages
+								if cur > 6 {
+									cur = 6
+								}
+								battle.EnemyBattleLv[gameskills.StatSpeed] = int8(cur)
+							}
+						}
+						// 89（敌方）- 吸血：造成伤害时恢复自身 damage/divisor 体力
+						if battle.EnemyLifestealRounds > 0 && enemyDamage > 0 && battle.EnemyLifestealDivisor > 0 {
+							heal := enemyDamage / uint32(battle.EnemyLifestealDivisor)
+							if heal > 0 {
+								newHP := battle.EnemyHP + heal
+								if newHP > battle.EnemyMaxHP {
+									newHP = battle.EnemyMaxHP
+								}
+								battle.EnemyHP = newHP
+							}
+						}
+						// 104（敌方）- n 回合内每次直接攻击 m% 几率附带衰弱（随机能力-1）
+						if battle.EnemyWeaknessOnHitRounds > 0 && enemySkillForTurn.Category != 4 && enemyDamage > 0 &&
+							!sptboss.IsStatDropImmune(playerPetID) && battle.PlayerImmuneStatDropRounds == 0 {
+							if rand.Intn(100) < int(battle.EnemyWeaknessOnHitChance) {
+								stat := rand.Intn(6)
+								cur := int(battle.PlayerBattleLv[stat])
+								cur--
+								if cur < -6 {
+									cur = -6
+								}
+								battle.PlayerBattleLv[stat] = int8(cur)
+							}
+						}
+						// 109（敌方）- 造成伤害时 m% 几率令对手冻伤
+						if battle.EnemyFreezeOnDealDamageRounds > 0 && enemySkillForTurn.Category != 4 && enemyDamage > 0 &&
+							!sptboss.IsControlImmune(playerPetID) && battle.PlayerStatus[gameskills.StatusIndexFreeze] == 0 {
+							if rand.Intn(100) < int(battle.EnemyFreezeOnDealDamageChance) {
+								battle.PlayerStatus[gameskills.StatusIndexFreeze] = byte(rand.Intn(2) + 1)
+								dmg := battle.PlayerMaxHP / 8
+								if dmg > battle.PlayerHP {
+									dmg = battle.PlayerHP
+								}
+								battle.PlayerHP -= dmg
+							}
+						}
+						// 107（敌方）- 若本次攻击造成的伤害小于 n 则自身 xx 等级提升 1
+						if enemyHit && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 107 && enemySkillForTurn.Category != 4 && enemyDamage > 0 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							if len(effArgs) >= 2 {
+								thresh, statIdx := effArgs[0], effArgs[1]
+								if statIdx >= 0 && statIdx < 6 && enemyDamage < uint32(thresh) {
+									cur := int(battle.EnemyBattleLv[statIdx])
+									cur++
+									if cur > 6 {
+										cur = 6
+									}
+									battle.EnemyBattleLv[statIdx] = int8(cur)
+								}
+							}
+						}
+						// 66 - 击败回血（敌方版本）：当次攻击击败我方时恢复敌方最大体力的1/n
+						if playerHPBeforeDamage > 0 && battle.PlayerHP == 0 && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 66 {
+							div := 2
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								div = effArgs[0]
+							}
+							heal := battle.EnemyMaxHP / uint32(div)
+							if heal > 0 {
+								newHP := battle.EnemyHP + heal
+								if newHP > battle.EnemyMaxHP {
+									newHP = battle.EnemyMaxHP
+								}
+								battle.EnemyHP = newHP
+							}
+						}
+						// 67 - 击败减对方下只最大HP（敌方版本）：当次攻击击败我方时减少我方下次出战精灵的最大体力1/n
+						if playerHPBeforeDamage > 0 && battle.PlayerHP == 0 && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 67 {
+							div := 2
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								div = effArgs[0]
+							}
+							battle.EnemyKillReduceMaxHpDivisor = byte(div)
+						}
+						// 158（敌方）- 击败对手后 n% 几率自身 stat 提升 m 级
+						if playerHPBeforeDamage > 0 && battle.PlayerHP == 0 && enemySkillForTurn != nil && enemySkillForTurn.EffectID == 158 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							chance, statIdx, stages := 100, 0, 1
+							if len(effArgs) >= 1 {
+								chance = effArgs[0]
+							}
+							if len(effArgs) >= 2 {
+								statIdx = effArgs[1]
+							}
+							if len(effArgs) >= 3 && effArgs[2] > 0 {
+								stages = effArgs[2]
+							}
+							if statIdx >= 0 && statIdx < 6 && rand.Intn(100) < chance {
+								cur := int(battle.EnemyBattleLv[statIdx])
+								cur += stages
+								if cur > 6 {
+									cur = 6
+								}
+								battle.EnemyBattleLv[statIdx] = int8(cur)
+							}
+						}
+						// 73 - 先手反弹（敌方版本）：如果敌方先出手，则受攻击时反弹200%的伤害给我方
+						if battle.EnemyFirstStrikeReflectActive && battle.EnemyFirstStrikeReflectRounds > 0 && enemyDamage > 0 {
+							reflectDamage := enemyDamage * 2
+							if reflectDamage > battle.PlayerHP {
+								reflectDamage = battle.PlayerHP
+							}
+							battle.PlayerHP -= reflectDamage
+						}
+						if battle.PlayerHP > battle.PlayerMaxHP {
+							battle.PlayerHP = 0 // uint 下溢时置 0
+						}
 
-				// 回神(1028)：精灵体力降至 1/8 以下时，有3%几率体力回满
-				if playerTrait == 1028 && playerHPBeforeEnemy > battle.PlayerMaxHP/8 &&
-					battle.PlayerHP > 0 && battle.PlayerHP <= battle.PlayerMaxHP/8 {
-					if rand.Intn(100) < 3 {
-						battle.PlayerHP = battle.PlayerMaxHP
-					}
-				}
-				// 受到普通攻击时有3%几率使对方进入异常状态（1029-1034）；雷伊/哈莫雷特/奈尼芬多/盖亚免疫
-				if enemySkillForTurn.Category != 4 && playerTrait >= 1029 && playerTrait <= 1034 && !sptboss.IsStatusImmune(battle.EnemyID) {
-					if rand.Intn(100) < 3 {
-						statusIndex := -1
+						// 回神(1028)：精灵体力降至 1/8 以下时，有3%几率体力回满
+						if playerTrait == 1028 && playerHPBeforeEnemy > battle.PlayerMaxHP/8 &&
+							battle.PlayerHP > 0 && battle.PlayerHP <= battle.PlayerMaxHP/8 {
+							if rand.Intn(100) < 3 {
+								battle.PlayerHP = battle.PlayerMaxHP
+							}
+						}
+						// 受到普通攻击时有3%几率使对方进入异常状态（1029-1034）；雷伊/哈莫雷特/奈尼芬多/盖亚免疫
+						if enemySkillForTurn.Category != 4 && playerTrait >= 1029 && playerTrait <= 1034 && !sptboss.IsStatusImmune(battle.EnemyID) {
+							if rand.Intn(100) < 3 {
+								statusIndex := -1
+								switch playerTrait {
+								case 1029:
+									statusIndex = gameskills.StatusIndexParalysis
+								case 1030:
+									statusIndex = gameskills.StatusIndexPoison
+								case 1031:
+									statusIndex = gameskills.StatusIndexBurn
+								case 1032:
+									statusIndex = gameskills.StatusIndexFreeze
+								case 1033:
+									statusIndex = gameskills.StatusIndexFear
+								case 1034:
+									statusIndex = gameskills.StatusIndexSleep
+								}
+								if statusIndex >= 0 && statusIndex < len(battle.EnemyStatus) {
+									if battle.EnemyStatus[statusIndex] == 0 {
+										battle.EnemyStatus[statusIndex] = 2
+									}
+								}
+							}
+						}
+						// 受到特殊攻击时 5% 几率降低对方能力等级（1035-1038,1040）
+						if enemySkillForTurn.Category == 2 {
+							statIndex := -1
+							switch playerTrait {
+							case 1035:
+								statIndex = gameskills.StatAttack
+							case 1036:
+								statIndex = gameskills.StatDefence
+							case 1037:
+								statIndex = gameskills.StatSpAtk
+							case 1038:
+								statIndex = gameskills.StatSpDef
+							case 1040:
+								statIndex = gameskills.StatSpeed
+							}
+							if statIndex >= 0 && statIndex < len(battle.EnemyBattleLv) {
+								if rand.Intn(100) < 5 {
+									cur := int(battle.EnemyBattleLv[statIndex])
+									cur--
+									if sptboss.IsStatDropImmune(battle.EnemyID) && cur < 0 {
+										cur = 0
+									} else if cur < -6 {
+										cur = -6
+									}
+									battle.EnemyBattleLv[statIndex] = int8(cur)
+								}
+							}
+						}
+						// 受到任何攻击时 5% 几率提升自身能力等级（1041-1045）
+						boostStat := -1
 						switch playerTrait {
-						case 1029:
-							statusIndex = gameskills.StatusIndexParalysis
-						case 1030:
-							statusIndex = gameskills.StatusIndexPoison
-						case 1031:
-							statusIndex = gameskills.StatusIndexBurn
-						case 1032:
-							statusIndex = gameskills.StatusIndexFreeze
-						case 1033:
-							statusIndex = gameskills.StatusIndexFear
-						case 1034:
-							statusIndex = gameskills.StatusIndexSleep
+						case 1041:
+							boostStat = gameskills.StatAttack
+						case 1042:
+							boostStat = gameskills.StatDefence
+						case 1043:
+							boostStat = gameskills.StatSpAtk
+						case 1044:
+							boostStat = gameskills.StatSpDef
+						case 1045:
+							boostStat = gameskills.StatSpeed
 						}
-						if statusIndex >= 0 && statusIndex < len(battle.EnemyStatus) {
-							if battle.EnemyStatus[statusIndex] == 0 {
-								battle.EnemyStatus[statusIndex] = 2
+						if boostStat >= 0 && boostStat < len(battle.PlayerBattleLv) && enemySkillForTurn.Category != 4 {
+							if rand.Intn(100) < 5 {
+								cur := int(battle.PlayerBattleLv[boostStat])
+								cur++
+								if cur > 6 {
+									cur = 6
+								}
+								battle.PlayerBattleLv[boostStat] = int8(cur)
 							}
 						}
 					}
-				}
-				// 受到特殊攻击时 5% 几率降低对方能力等级（1035-1038,1040）
-				if enemySkillForTurn.Category == 2 {
-					statIndex := -1
-					switch playerTrait {
-					case 1035:
-						statIndex = gameskills.StatAttack
-					case 1036:
-						statIndex = gameskills.StatDefence
-					case 1037:
-						statIndex = gameskills.StatSpAtk
-					case 1038:
-						statIndex = gameskills.StatSpDef
-					case 1040:
-						statIndex = gameskills.StatSpeed
-					}
-					if statIndex >= 0 && statIndex < len(battle.EnemyBattleLv) {
-						if rand.Intn(100) < 5 {
-							cur := int(battle.EnemyBattleLv[statIndex])
-							cur--
-							if sptboss.IsStatDropImmune(battle.EnemyID) && cur < 0 {
-								cur = 0
-							} else if cur < -6 {
-								cur = -6
+
+					// 敌方技能附加效果（红韵/魅惑等）：对敌方自身和我方的能力等级、异常状态等进行修改
+					// 这里沿用 ApplyEffect 语义：
+					//   - 第一个 HP/status/battleLv 参数 = 出手方（此处为敌人）
+					//   - 第二个 HP/status/battleLv 参数 = 被攻击方（此处为玩家）
+					// 仅当本次命中或为自身必中强化类技能时才应用效果；后者由 MustHit 标记保证。
+					// 478 - 我方施加的“对手属性技能无效”：敌方使用 Category=4 时跳过效果
+					enemyStatusSkillInvalid := battle.EnemyStatusSkillInvalidRounds > 0 && enemySkillForTurn != nil && enemySkillForTurn.Category == 4
+					if enemyHit && enemySkillForTurn != nil && !enemyStatusSkillInvalid {
+						var enemyEffectRecoil uint32
+						defenderPetID := 0
+						if battle.ActivePetIndex >= 0 && battle.ActivePetIndex < len(user.Pets) {
+							defenderPetID = user.Pets[battle.ActivePetIndex].ID
+						}
+						var oldPlayerLvE [6]int8
+						var oldEnemyLvE [6]int8
+						var oldPlayerStatusE, oldEnemyStatusE [20]byte
+						if battle.EnemyStatusMirrorRounds > 0 {
+							oldPlayerLvE = battle.PlayerBattleLv
+							oldEnemyLvE = battle.EnemyBattleLv
+							oldPlayerStatusE = battle.PlayerStatus
+							oldEnemyStatusE = battle.EnemyStatus
+						}
+						_, enemyEffectRecoil = gameskills.ApplyEffect(enemySkillForTurn, enemyDamage,
+							&battle.EnemyHP, &battle.PlayerHP,
+							battle.EnemyMaxHP, battle.PlayerMaxHP,
+							&battle.EnemyBattleLv, &battle.PlayerBattleLv,
+							&battle.EnemyStatus, &battle.PlayerStatus, defenderPetID,
+							battle.PlayerImmuneStatDropRounds, battle.PlayerImmuneStatusRounds)
+						_ = enemyEffectRecoil
+						if battle.EnemyStatusMirrorRounds > 0 {
+							for i := 0; i < 6; i++ {
+								deltaE := int(battle.EnemyBattleLv[i]) - int(oldEnemyLvE[i])
+								deltaP := int(battle.PlayerBattleLv[i]) - int(oldPlayerLvE[i])
+								v := int(oldPlayerLvE[i]) + deltaE + deltaP
+								if v > 6 {
+									v = 6
+								}
+								if v < -6 {
+									v = -6
+								}
+								battle.PlayerBattleLv[i] = int8(v)
+								v = int(oldEnemyLvE[i]) + deltaE + deltaP
+								if v > 6 {
+									v = 6
+								}
+								if v < -6 {
+									v = -6
+								}
+								battle.EnemyBattleLv[i] = int8(v)
 							}
-							battle.EnemyBattleLv[statIndex] = int8(cur)
+							for i := 0; i < 20; i++ {
+								deltaE := int(battle.EnemyStatus[i]) - int(oldEnemyStatusE[i])
+								deltaP := int(battle.PlayerStatus[i]) - int(oldPlayerStatusE[i])
+								v := int(oldPlayerStatusE[i]) + deltaE + deltaP
+								if v < 0 {
+									v = 0
+								}
+								if v > 10 {
+									v = 10
+								}
+								battle.PlayerStatus[i] = byte(v)
+								v = int(oldEnemyStatusE[i]) + deltaE + deltaP
+								if v < 0 {
+									v = 0
+								}
+								if v > 10 {
+									v = 10
+								}
+								battle.EnemyStatus[i] = byte(v)
+							}
 						}
-					}
-				}
-				// 受到任何攻击时 5% 几率提升自身能力等级（1041-1045）
-				boostStat := -1
-				switch playerTrait {
-				case 1041:
-					boostStat = gameskills.StatAttack
-				case 1042:
-					boostStat = gameskills.StatDefence
-				case 1043:
-					boostStat = gameskills.StatSpAtk
-				case 1044:
-					boostStat = gameskills.StatSpDef
-				case 1045:
-					boostStat = gameskills.StatSpeed
-				}
-				if boostStat >= 0 && boostStat < len(battle.PlayerBattleLv) && enemySkillForTurn.Category != 4 {
-					if rand.Intn(100) < 5 {
-						cur := int(battle.PlayerBattleLv[boostStat])
-						cur++
-						if cur > 6 {
-							cur = 6
-						}
-						battle.PlayerBattleLv[boostStat] = int8(cur)
-					}
-				}
-			}
 
-			// 敌方技能附加效果（红韵/魅惑等）：对敌方自身和我方的能力等级、异常状态等进行修改
-			// 这里沿用 ApplyEffect 语义：
-			//   - 第一个 HP/status/battleLv 参数 = 出手方（此处为敌人）
-			//   - 第二个 HP/status/battleLv 参数 = 被攻击方（此处为玩家）
-			// 仅当本次命中或为自身必中强化类技能时才应用效果；后者由 MustHit 标记保证。
-			// 478 - 我方施加的“对手属性技能无效”：敌方使用 Category=4 时跳过效果
-			enemyStatusSkillInvalid := battle.EnemyStatusSkillInvalidRounds > 0 && enemySkillForTurn != nil && enemySkillForTurn.Category == 4
-			if enemyHit && enemySkillForTurn != nil && !enemyStatusSkillInvalid {
-				var enemyEffectRecoil uint32
-				defenderPetID := 0
-				if battle.ActivePetIndex >= 0 && battle.ActivePetIndex < len(user.Pets) {
-					defenderPetID = user.Pets[battle.ActivePetIndex].ID
-				}
-				var oldPlayerLvE [6]int8
-				var oldEnemyLvE [6]int8
-				var oldPlayerStatusE, oldEnemyStatusE [20]byte
-				if battle.EnemyStatusMirrorRounds > 0 {
-					oldPlayerLvE = battle.PlayerBattleLv
-					oldEnemyLvE = battle.EnemyBattleLv
-					oldPlayerStatusE = battle.PlayerStatus
-					oldEnemyStatusE = battle.EnemyStatus
-				}
-				_, enemyEffectRecoil = gameskills.ApplyEffect(enemySkillForTurn, enemyDamage,
-					&battle.EnemyHP, &battle.PlayerHP,
-					battle.EnemyMaxHP, battle.PlayerMaxHP,
-					&battle.EnemyBattleLv, &battle.PlayerBattleLv,
-					&battle.EnemyStatus, &battle.PlayerStatus, defenderPetID,
-					battle.PlayerImmuneStatDropRounds, battle.PlayerImmuneStatusRounds)
-				_ = enemyEffectRecoil
-				if battle.EnemyStatusMirrorRounds > 0 {
-					for i := 0; i < 6; i++ {
-						deltaE := int(battle.EnemyBattleLv[i]) - int(oldEnemyLvE[i])
-						deltaP := int(battle.PlayerBattleLv[i]) - int(oldPlayerLvE[i])
-						v := int(oldPlayerLvE[i]) + deltaE + deltaP
-						if v > 6 {
-							v = 6
+						// 敌方暴击率提升效果（SideEffect 58 系列）
+						if enemySkillForTurn.EffectID == 58 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							if len(effArgs) >= 1 {
+								rounds := effArgs[0]
+								if rounds < 0 {
+									rounds = 0
+								}
+								if rounds > 0 {
+									// +1 同理，保证敌方也能获得 param1[0] 个完整回合的必定暴击效果
+									battle.EnemyCritBuffRounds = byte(rounds + 1)
+								}
+							}
 						}
-						if v < -6 {
-							v = -6
+						// 敌方 32：n 回合暴击率增加 1/16
+						if enemySkillForTurn.EffectID == 32 {
+							effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+							rounds := 3
+							if len(effArgs) >= 1 && effArgs[0] > 0 {
+								rounds = effArgs[0]
+							}
+							if rounds > 10 {
+								rounds = 10
+							}
+							battle.EnemyCritRateBonusRounds = byte(rounds + 1)
 						}
-						battle.PlayerBattleLv[i] = int8(v)
-						v = int(oldEnemyLvE[i]) + deltaE + deltaP
-						if v > 6 {
-							v = 6
-						}
-						if v < -6 {
-							v = -6
-						}
-						battle.EnemyBattleLv[i] = int8(v)
 					}
-					for i := 0; i < 20; i++ {
-						deltaE := int(battle.EnemyStatus[i]) - int(oldEnemyStatusE[i])
-						deltaP := int(battle.PlayerStatus[i]) - int(oldPlayerStatusE[i])
-						v := int(oldPlayerStatusE[i]) + deltaE + deltaP
-						if v < 0 {
-							v = 0
-						}
-						if v > 10 {
-							v = 10
-						}
-						battle.PlayerStatus[i] = byte(v)
-						v = int(oldEnemyStatusE[i]) + deltaE + deltaP
-						if v < 0 {
-							v = 0
-						}
-						if v > 10 {
-							v = 10
-						}
-						battle.EnemyStatus[i] = byte(v)
-					}
-				}
 
-				// 敌方暴击率提升效果（SideEffect 58 系列）
-				if enemySkillForTurn.EffectID == 58 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					if len(effArgs) >= 1 {
-						rounds := effArgs[0]
-						if rounds < 0 {
-							rounds = 0
+					// 敌方若也配置了“不灭之火”效果，同样能在若干回合内令我方每回合受到固定伤害（478 时属性技能无效，不设置）
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 60 {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, perTurn := 0, 0
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							perTurn = effArgs[1]
+						}
+						if rounds > 0 && perTurn > 0 {
+							battle.PlayerFixedDotRounds = byte(rounds)
+							battle.PlayerFixedDotDamage = uint32(perTurn)
+						}
+					}
+					// 敌方 76：m% 几率在 n 回合内每回合造成 k 点固定伤害
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 76 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						chance, rounds, perTurn := 100, 0, 0
+						if len(effArgs) >= 1 {
+							chance = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							rounds = effArgs[1]
+						}
+						if len(effArgs) >= 3 {
+							perTurn = effArgs[2]
+						}
+						if rounds > 0 && perTurn > 0 && rand.Intn(100) < chance {
+							battle.PlayerFixedDotRounds = byte(rounds)
+							battle.PlayerFixedDotDamage = uint32(perTurn)
+						}
+					}
+					// 敌方 77：n 回合内每次使用技能恢复 m 点体力
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 77 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, amount := 0, 0
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							amount = effArgs[1]
+						}
+						if rounds > 0 && amount > 0 {
+							battle.EnemyRegenPerUseRounds = byte(rounds)
+							battle.EnemyRegenPerUseAmount = uint32(amount)
+						}
+					}
+					// 敌方 78：n 回合内物理攻击对敌方必定 miss
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 78 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds := 0
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
 						}
 						if rounds > 0 {
-							// +1 同理，保证敌方也能获得 param1[0] 个完整回合的必定暴击效果
-							battle.EnemyCritBuffRounds = byte(rounds + 1)
+							battle.EnemyPhysMissRounds = byte(rounds)
 						}
 					}
-				}
-				// 敌方 32：n 回合暴击率增加 1/16
-				if enemySkillForTurn.EffectID == 32 {
-					effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-					rounds := 3
-					if len(effArgs) >= 1 && effArgs[0] > 0 {
-						rounds = effArgs[0]
+					// 敌方 83：自身雄性下两回合必定先手；雌性下两回合必定暴击
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 83 && enemyHit {
+						enemyPet := petMgr.Get(battle.EnemyID)
+						if enemyPet != nil {
+							if enemyPet.Gender == 1 {
+								battle.EnemyMaleFirstStrikeRounds = 2
+							} else if enemyPet.Gender == 2 {
+								battle.EnemyFemaleCritRounds = 2
+							}
+						}
 					}
-					if rounds > 10 {
-						rounds = 10
+					// 敌方 84：n 回合内受到物理攻击时 m% 几率将对手麻痹
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 84 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance := 5, 50
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							chance = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyParalyzeOnPhysHitRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.EnemyParalyzeOnPhysHitChance = byte(chance)
+						}
 					}
-					battle.EnemyCritRateBonusRounds = byte(rounds + 1)
-				}
-			}
+					// 敌方 86/106：n 回合内属性（特殊）攻击对自身必定 miss
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && (enemySkillForTurn.EffectID == 86 || enemySkillForTurn.EffectID == 106) && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds := 0
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if rounds > 0 {
+							battle.EnemySpecialMissRounds = byte(rounds)
+						}
+					}
+					// 敌方 89：n 回合内每次造成伤害的 1/m 恢复体力
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 89 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, div := 0, 4
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							div = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyLifestealRounds = byte(rounds)
+							battle.EnemyLifestealDivisor = byte(div)
+						}
+					}
+					// 敌方 90：n 回合内自身造成的伤害为 m 倍
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 90 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, mult := 0, 2
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							mult = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyDamageMultRounds = byte(rounds)
+							battle.EnemyDamageMult = byte(mult)
+						}
+					}
+					// 敌方 92：n 回合内受到物理攻击时 m% 几率将对手冻伤
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 92 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance := 5, 50
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							chance = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyFreezeOnPhysHitRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.EnemyFreezeOnPhysHitChance = byte(chance)
+						}
+					}
+					// 敌方 98：n 回合内对雄性精灵的伤害为 m 倍
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 98 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, mult := 0, 2
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							mult = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyMaleDamageMultRounds = byte(rounds)
+							battle.EnemyMaleDamageMult = byte(mult)
+						}
+					}
+					// 敌方 104：n 回合内每次直接攻击 m% 几率附带衰弱
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 104 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance := 0, 50
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							chance = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyWeaknessOnHitRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.EnemyWeaknessOnHitChance = byte(chance)
+						}
+					}
+					// 敌方 91：n 回合内双方状态变化同时影响己方与对手
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 91 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds := 0
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if rounds > 0 {
+							battle.EnemyStatusMirrorRounds = byte(rounds)
+						}
+					}
+					// 敌方 127：n% 概率 m 回合内受到伤害减半
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 127 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						chance, rounds := 50, 3
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							chance = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							rounds = effArgs[1]
+						}
+						if chance > 100 {
+							chance = 100
+						}
+						if rand.Intn(100) < chance && rounds > 0 {
+							battle.EnemyDamageHalfRounds = byte(rounds)
+						}
+					}
+					// 敌方 146：n 回合内受物理攻击时 m% 使对方中毒
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 146 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, m := 5, 50
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							m = effArgs[1]
+						}
+						if m > 100 {
+							m = 100
+						}
+						if rounds > 0 {
+							battle.EnemyPoisonOnPhysHitRounds = byte(rounds)
+							battle.EnemyPoisonOnPhysHitChance = byte(m)
+						}
+					}
+					// 敌方 150：n 回合内对手（我方）每回合防、特防等级 m
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 150 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, m := 0, 1
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							m = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.PlayerDefSpDefRounds = byte(rounds)
+							if m < -6 {
+								m = -6
+							}
+							if m > 6 {
+								m = 6
+							}
+							battle.PlayerDefSpDefStages = int8(m)
+						}
+					}
+					// 敌方 108：n 回合内受到物理攻击时 m% 几率将对手烧伤
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 108 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance := 5, 50
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							chance = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyBurnOnPhysHitRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.EnemyBurnOnPhysHitChance = byte(chance)
+						}
+					}
+					// 敌方 109：n 回合内造成伤害时 m% 几率令对手冻伤
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 109 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance := 5, 50
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							chance = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyFreezeOnDealDamageRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.EnemyFreezeOnDealDamageChance = byte(chance)
+						}
+					}
+					// 敌方 77（已有状态）：每次使用技能恢复 m 点体力
+					if enemyHit && battle.EnemyRegenPerUseRounds > 0 && battle.EnemyRegenPerUseAmount > 0 {
+						heal := battle.EnemyRegenPerUseAmount
+						if heal > battle.EnemyMaxHP-battle.EnemyHP {
+							heal = battle.EnemyMaxHP - battle.EnemyHP
+						}
+						if heal > 0 {
+							battle.EnemyHP += heal
+						}
+					}
 
-			// 敌方若也配置了“不灭之火”效果，同样能在若干回合内令我方每回合受到固定伤害（478 时属性技能无效，不设置）
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 60 {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, perTurn := 0, 0
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					perTurn = effArgs[1]
-				}
-				if rounds > 0 && perTurn > 0 {
-					battle.PlayerFixedDotRounds = byte(rounds)
-					battle.PlayerFixedDotDamage = uint32(perTurn)
-				}
-			}
-			// 敌方 76：m% 几率在 n 回合内每回合造成 k 点固定伤害
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 76 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				chance, rounds, perTurn := 100, 0, 0
-				if len(effArgs) >= 1 {
-					chance = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					rounds = effArgs[1]
-				}
-				if len(effArgs) >= 3 {
-					perTurn = effArgs[2]
-				}
-				if rounds > 0 && perTurn > 0 && rand.Intn(100) < chance {
-					battle.PlayerFixedDotRounds = byte(rounds)
-					battle.PlayerFixedDotDamage = uint32(perTurn)
-				}
-			}
-			// 敌方 77：n 回合内每次使用技能恢复 m 点体力
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 77 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, amount := 0, 0
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					amount = effArgs[1]
-				}
-				if rounds > 0 && amount > 0 {
-					battle.EnemyRegenPerUseRounds = byte(rounds)
-					battle.EnemyRegenPerUseAmount = uint32(amount)
-				}
-			}
-			// 敌方 78：n 回合内物理攻击对敌方必定 miss
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 78 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds := 0
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if rounds > 0 {
-					battle.EnemyPhysMissRounds = byte(rounds)
-				}
-			}
-			// 敌方 83：自身雄性下两回合必定先手；雌性下两回合必定暴击
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 83 && enemyHit {
-				enemyPet := petMgr.Get(battle.EnemyID)
-				if enemyPet != nil {
-					if enemyPet.Gender == 1 {
-						battle.EnemyMaleFirstStrikeRounds = 2
-					} else if enemyPet.Gender == 2 {
-						battle.EnemyFemaleCritRounds = 2
+					// 敌方 Effect ID 39：n%降低对手所有技能m点PP值（478 时属性技能无效，不执行）
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 39 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						chance, ppReduction := 100, 1
+						if len(effArgs) >= 1 {
+							chance = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							ppReduction = effArgs[1]
+						}
+						if chance < 0 {
+							chance = 0
+						}
+						if chance > 100 {
+							chance = 100
+						}
+						if ppReduction < 0 {
+							ppReduction = 0
+						}
+						// 随机判定是否触发
+						if rand.Intn(100) < chance && ppReduction > 0 {
+							// 降低玩家所有技能的 PP（但不能低于 0）
+							for i := 0; i < 4; i++ {
+								if battle.PlayerSkillPP[i] > 0 {
+									if int(battle.PlayerSkillPP[i]) >= ppReduction {
+										battle.PlayerSkillPP[i] -= byte(ppReduction)
+									} else {
+										battle.PlayerSkillPP[i] = 0
+									}
+								}
+							}
+							// 检查玩家当前选择的技能（skillID）的 PP 是否为 0
+							// 如果玩家选择的技能 PP 为 0，则玩家下回合使用该技能时会因为 PP 为 0 而无法行动
+							// 这个效果会在下回合的 PP 检查中自然生效（已在第8431-8448行实现）
+						}
 					}
-				}
-			}
-			// 敌方 84：n 回合内受到物理攻击时 m% 几率将对手麻痹
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 84 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance := 5, 50
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					chance = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyParalyzeOnPhysHitRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
-					}
-					battle.EnemyParalyzeOnPhysHitChance = byte(chance)
-				}
-			}
-			// 敌方 86/106：n 回合内属性（特殊）攻击对自身必定 miss
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && (enemySkillForTurn.EffectID == 86 || enemySkillForTurn.EffectID == 106) && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds := 0
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if rounds > 0 {
-					battle.EnemySpecialMissRounds = byte(rounds)
-				}
-			}
-			// 敌方 89：n 回合内每次造成伤害的 1/m 恢复体力
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 89 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, div := 0, 4
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					div = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyLifestealRounds = byte(rounds)
-					battle.EnemyLifestealDivisor = byte(div)
-				}
-			}
-			// 敌方 90：n 回合内自身造成的伤害为 m 倍
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 90 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, mult := 0, 2
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					mult = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyDamageMultRounds = byte(rounds)
-					battle.EnemyDamageMult = byte(mult)
-				}
-			}
-			// 敌方 92：n 回合内受到物理攻击时 m% 几率将对手冻伤
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 92 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance := 5, 50
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					chance = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyFreezeOnPhysHitRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
-					}
-					battle.EnemyFreezeOnPhysHitChance = byte(chance)
-				}
-			}
-			// 敌方 98：n 回合内对雄性精灵的伤害为 m 倍
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 98 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, mult := 0, 2
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					mult = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyMaleDamageMultRounds = byte(rounds)
-					battle.EnemyMaleDamageMult = byte(mult)
-				}
-			}
-			// 敌方 104：n 回合内每次直接攻击 m% 几率附带衰弱
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 104 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance := 0, 50
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					chance = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyWeaknessOnHitRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
-					}
-					battle.EnemyWeaknessOnHitChance = byte(chance)
-				}
-			}
-			// 敌方 91：n 回合内双方状态变化同时影响己方与对手
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 91 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds := 0
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if rounds > 0 {
-					battle.EnemyStatusMirrorRounds = byte(rounds)
-				}
-			}
-			// 敌方 127：n% 概率 m 回合内受到伤害减半
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 127 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				chance, rounds := 50, 3
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					chance = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					rounds = effArgs[1]
-				}
-				if chance > 100 {
-					chance = 100
-				}
-				if rand.Intn(100) < chance && rounds > 0 {
-					battle.EnemyDamageHalfRounds = byte(rounds)
-				}
-			}
-			// 敌方 146：n 回合内受物理攻击时 m% 使对方中毒
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 146 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, m := 5, 50
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					m = effArgs[1]
-				}
-				if m > 100 {
-					m = 100
-				}
-				if rounds > 0 {
-					battle.EnemyPoisonOnPhysHitRounds = byte(rounds)
-					battle.EnemyPoisonOnPhysHitChance = byte(m)
-				}
-			}
-			// 敌方 150：n 回合内对手（我方）每回合防、特防等级 m
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 150 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, m := 0, 1
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					m = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.PlayerDefSpDefRounds = byte(rounds)
-					if m < -6 {
-						m = -6
-					}
-					if m > 6 {
-						m = 6
-					}
-					battle.PlayerDefSpDefStages = int8(m)
-				}
-			}
-			// 敌方 108：n 回合内受到物理攻击时 m% 几率将对手烧伤
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 108 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance := 5, 50
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					chance = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyBurnOnPhysHitRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
-					}
-					battle.EnemyBurnOnPhysHitChance = byte(chance)
-				}
-			}
-			// 敌方 109：n 回合内造成伤害时 m% 几率令对手冻伤
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 109 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance := 5, 50
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					chance = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyFreezeOnDealDamageRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
-					}
-					battle.EnemyFreezeOnDealDamageChance = byte(chance)
-				}
-			}
-			// 敌方 77（已有状态）：每次使用技能恢复 m 点体力
-			if enemyHit && battle.EnemyRegenPerUseRounds > 0 && battle.EnemyRegenPerUseAmount > 0 {
-				heal := battle.EnemyRegenPerUseAmount
-				if heal > battle.EnemyMaxHP-battle.EnemyHP {
-					heal = battle.EnemyMaxHP - battle.EnemyHP
-				}
-				if heal > 0 {
-					battle.EnemyHP += heal
-				}
-			}
 
-			// 敌方 Effect ID 39：n%降低对手所有技能m点PP值（478 时属性技能无效，不执行）
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 39 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				chance, ppReduction := 100, 1
-				if len(effArgs) >= 1 {
-					chance = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					ppReduction = effArgs[1]
-				}
-				if chance < 0 {
-					chance = 0
-				}
-				if chance > 100 {
-					chance = 100
-				}
-				if ppReduction < 0 {
-					ppReduction = 0
-				}
-				// 随机判定是否触发
-				if rand.Intn(100) < chance && ppReduction > 0 {
-					// 降低玩家所有技能的 PP（但不能低于 0）
-					for i := 0; i < 4; i++ {
-						if battle.PlayerSkillPP[i] > 0 {
-							if int(battle.PlayerSkillPP[i]) >= ppReduction {
-								battle.PlayerSkillPP[i] -= byte(ppReduction)
+					// 敌方多回合 BUFF/护盾（41-50）施加于自身
+					if enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						n := 0
+						if len(effArgs) >= 1 {
+							n = effArgs[0]
+						}
+						if n < 0 {
+							n = 0
+						}
+						switch enemySkillForTurn.EffectID {
+						case 41:
+							if len(effArgs) >= 2 {
+								n = effArgs[1]
+							}
+							if n > 0 {
+								battle.EnemyFireResistRounds = byte(n)
+							}
+						case 42:
+							if len(effArgs) >= 2 {
+								n = effArgs[1]
+							}
+							if n > 0 {
+								battle.EnemyElectricBoostRounds = byte(n)
+							}
+						case 44:
+							if n > 0 {
+								battle.EnemySpDefHalfRounds = byte(n)
+							}
+						case 46:
+							if n > 0 {
+								battle.EnemyBlockCount = byte(n)
+							}
+						case 47:
+							if n > 0 {
+								battle.EnemyImmuneStatDropRounds = byte(n)
+							}
+						case 48:
+							if n > 0 {
+								battle.EnemyImmuneStatusRounds = byte(n)
+							}
+						case 49:
+							if n > 0 {
+								battle.EnemyShieldPoints = uint32(n)
+							}
+						case 50:
+							if n > 0 {
+								battle.EnemyPhysDefHalfRounds = byte(n)
+							}
+						case 45:
+							if n > 0 {
+								battle.EnemyCopyDefRounds = byte(n)
+							}
+						case 51:
+							if n > 0 {
+								battle.EnemyCopyAtkRounds = byte(n)
+							}
+						case 57:
+							div := 5
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								div = effArgs[1]
+							}
+							if n > 0 {
+								battle.EnemyRegenRounds = byte(n)
+								battle.EnemyRegenDivisor = byte(div)
+							}
+						case 65:
+							mult, elemType := 2, 0
+							if len(effArgs) >= 2 {
+								mult = effArgs[1]
+							}
+							if len(effArgs) >= 3 {
+								elemType = effArgs[2]
+							}
+							if n > 0 && mult > 0 {
+								battle.EnemyElemPowerRounds = byte(n)
+								battle.EnemyElemPowerMult = byte(mult)
+								battle.EnemyElemPowerType = byte(elemType)
+							}
+						case 68:
+							if n > 0 {
+								battle.EnemyEndureRounds = byte(n)
+							}
+						case 52:
+							if n > 0 {
+								battle.EnemyEvasionRounds = byte(n)
+							}
+						case 53:
+							mult := 2
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								mult = effArgs[1]
+							}
+							if n > 0 {
+								battle.EnemyDamageMultRounds = byte(n)
+								battle.EnemyDamageMult = byte(mult)
+							}
+						case 54:
+							mult := 2
+							if len(effArgs) >= 2 && effArgs[1] > 0 {
+								mult = effArgs[1]
+							}
+							if n > 0 {
+								battle.EnemyDamageReductRounds = byte(n)
+								battle.EnemyDamageReduct = byte(mult)
+							}
+						case 55:
+							if n > 0 {
+								battle.EnemyTypeSwapRounds = byte(n)
+							}
+						case 56:
+							if n > 0 {
+								battle.EnemyTypeCopyRounds = byte(n)
+							}
+						case 62:
+							if n > 0 {
+								battle.EnemyDestinyBondRounds = byte(n)
+							}
+						case 59: // 牺牲强化下一只：当前精灵被击败时，下一只上场的精灵获得能力强化
+							// SideEffectArg: stat1 stages1 stat2 stages2 ... (例如 "0 2 2 1" 表示攻击+2级、特攻+1级)
+							// 如果没有参数，默认全能力+1级
+							battle.EnemySacrificeBuffActive = true
+							// 清空之前的强化记录
+							for i := 0; i < 6; i++ {
+								battle.EnemySacrificeBuffStats[i] = 0
+							}
+							if len(effArgs) >= 2 {
+								// 解析参数：stat stages 对
+								for i := 0; i+1 < len(effArgs); i += 2 {
+									stat := effArgs[i]
+									stages := effArgs[i+1]
+									if stat >= 0 && stat < 6 && stages > 0 {
+										battle.EnemySacrificeBuffStats[stat] = int8(stages)
+									}
+								}
 							} else {
-								battle.PlayerSkillPP[i] = 0
+								// 默认全能力+1级
+								for i := 0; i < 6; i++ {
+									battle.EnemySacrificeBuffStats[i] = 1
+								}
+							}
+						case 69: // 药剂反噬：下n回合对手使用体力药剂时效果变成减少相应的体力
+							if n > 0 {
+								battle.EnemyPotionReverseRounds = byte(n)
+							}
+						case 71: // 牺牲暴击：自己牺牲(体力降到0), 使下一只出战精灵在前两回合内必定致命一击
+							battle.EnemySacrificeCritActive = true
+						case 72: // Miss死亡：如果此回合miss，则立即死亡
+							battle.EnemyMissDeathActive = true
+						case 73: // 先手反弹：如果先出手，则受攻击时反弹200%的伤害给对手，持续n回合
+							if n > 0 {
+								battle.EnemyFirstStrikeReflectRounds = byte(n)
+								// 检查本回合是否先手：如果敌方先手（enemyFirst），则激活
+								if enemyFirst {
+									battle.EnemyFirstStrikeReflectActive = true
+								}
 							}
 						}
 					}
-					// 检查玩家当前选择的技能（skillID）的 PP 是否为 0
-					// 如果玩家选择的技能 PP 为 0，则玩家下回合使用该技能时会因为 PP 为 0 而无法行动
-					// 这个效果会在下回合的 PP 检查中自然生效（已在第8431-8448行实现）
-				}
-			}
-
-			// 敌方多回合 BUFF/护盾（41-50）施加于自身
-			if enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				n := 0
-				if len(effArgs) >= 1 {
-					n = effArgs[0]
-				}
-				if n < 0 {
-					n = 0
-				}
-				switch enemySkillForTurn.EffectID {
-				case 41:
-					if len(effArgs) >= 2 {
-						n = effArgs[1]
+					// 463（敌方）- n 回合内每回合所受的伤害减少 m 点
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 463 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, amount := 0, 0
+						if len(effArgs) >= 1 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							amount = effArgs[1]
+						}
+						if rounds > 0 && amount > 0 {
+							battle.EnemyDamageReducePerRoundRounds = byte(rounds)
+							battle.EnemyDamageReducePerRoundAmount = uint32(amount)
+						}
 					}
-					if n > 0 {
-						battle.EnemyFireResistRounds = byte(n)
-					}
-				case 42:
-					if len(effArgs) >= 2 {
-						n = effArgs[1]
-					}
-					if n > 0 {
-						battle.EnemyElectricBoostRounds = byte(n)
-					}
-				case 44:
-					if n > 0 {
-						battle.EnemySpDefHalfRounds = byte(n)
-					}
-				case 46:
-					if n > 0 {
-						battle.EnemyBlockCount = byte(n)
-					}
-				case 47:
-					if n > 0 {
-						battle.EnemyImmuneStatDropRounds = byte(n)
-					}
-				case 48:
-					if n > 0 {
-						battle.EnemyImmuneStatusRounds = byte(n)
-					}
-				case 49:
-					if n > 0 {
-						battle.EnemyShieldPoints = uint32(n)
-					}
-				case 50:
-					if n > 0 {
-						battle.EnemyPhysDefHalfRounds = byte(n)
-					}
-				case 45:
-					if n > 0 {
-						battle.EnemyCopyDefRounds = byte(n)
-					}
-				case 51:
-					if n > 0 {
-						battle.EnemyCopyAtkRounds = byte(n)
-					}
-				case 57:
-					div := 5
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						div = effArgs[1]
-					}
-					if n > 0 {
-						battle.EnemyRegenRounds = byte(n)
-						battle.EnemyRegenDivisor = byte(div)
-					}
-				case 65:
-					mult, elemType := 2, 0
-					if len(effArgs) >= 2 {
-						mult = effArgs[1]
-					}
-					if len(effArgs) >= 3 {
-						elemType = effArgs[2]
-					}
-					if n > 0 && mult > 0 {
-						battle.EnemyElemPowerRounds = byte(n)
-						battle.EnemyElemPowerMult = byte(mult)
-						battle.EnemyElemPowerType = byte(elemType)
-					}
-				case 68:
-					if n > 0 {
-						battle.EnemyEndureRounds = byte(n)
-					}
-				case 52:
-					if n > 0 {
-						battle.EnemyEvasionRounds = byte(n)
-					}
-				case 53:
-					mult := 2
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						mult = effArgs[1]
-					}
-					if n > 0 {
-						battle.EnemyDamageMultRounds = byte(n)
-						battle.EnemyDamageMult = byte(mult)
-					}
-				case 54:
-					mult := 2
-					if len(effArgs) >= 2 && effArgs[1] > 0 {
-						mult = effArgs[1]
-					}
-					if n > 0 {
-						battle.EnemyDamageReductRounds = byte(n)
-						battle.EnemyDamageReduct = byte(mult)
-					}
-				case 55:
-					if n > 0 {
-						battle.EnemyTypeSwapRounds = byte(n)
-					}
-				case 56:
-					if n > 0 {
-						battle.EnemyTypeCopyRounds = byte(n)
-					}
-				case 62:
-					if n > 0 {
-						battle.EnemyDestinyBondRounds = byte(n)
-					}
-				case 59: // 牺牲强化下一只：当前精灵被击败时，下一只上场的精灵获得能力强化
-					// SideEffectArg: stat1 stages1 stat2 stages2 ... (例如 "0 2 2 1" 表示攻击+2级、特攻+1级)
-					// 如果没有参数，默认全能力+1级
-					battle.EnemySacrificeBuffActive = true
-					// 清空之前的强化记录
-					for i := 0; i < 6; i++ {
-						battle.EnemySacrificeBuffStats[i] = 0
-					}
-					if len(effArgs) >= 2 {
-						// 解析参数：stat stages 对
-						for i := 0; i+1 < len(effArgs); i += 2 {
-							stat := effArgs[i]
-							stages := effArgs[i+1]
-							if stat >= 0 && stat < 6 && stages > 0 {
-								battle.EnemySacrificeBuffStats[stat] = int8(stages)
+					// 110（敌方）- n 回合内每次受到攻击时 m% 几率使对手 stat 等级 -1
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 110 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance, stat := 0, 50, 0
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							chance = effArgs[1]
+						}
+						if len(effArgs) >= 3 {
+							stat = effArgs[2]
+						}
+						if rounds > 0 {
+							battle.EnemyDefendStatDropRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
 							}
-						}
-					} else {
-						// 默认全能力+1级
-						for i := 0; i < 6; i++ {
-							battle.EnemySacrificeBuffStats[i] = 1
-						}
-					}
-				case 69: // 药剂反噬：下n回合对手使用体力药剂时效果变成减少相应的体力
-					if n > 0 {
-						battle.EnemyPotionReverseRounds = byte(n)
-					}
-				case 71: // 牺牲暴击：自己牺牲(体力降到0), 使下一只出战精灵在前两回合内必定致命一击
-					battle.EnemySacrificeCritActive = true
-				case 72: // Miss死亡：如果此回合miss，则立即死亡
-					battle.EnemyMissDeathActive = true
-				case 73: // 先手反弹：如果先出手，则受攻击时反弹200%的伤害给对手，持续n回合
-					if n > 0 {
-						battle.EnemyFirstStrikeReflectRounds = byte(n)
-						// 检查本回合是否先手：如果敌方先手（enemyFirst），则激活
-						if enemyFirst {
-							battle.EnemyFirstStrikeReflectActive = true
+							battle.EnemyDefendStatDropChance = byte(chance)
+							if stat < 0 || stat > 5 {
+								stat = 0
+							}
+							battle.EnemyDefendStatDropStat = byte(stat)
 						}
 					}
-				}
-			}
-			// 463（敌方）- n 回合内每回合所受的伤害减少 m 点
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 463 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, amount := 0, 0
-				if len(effArgs) >= 1 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					amount = effArgs[1]
-				}
-				if rounds > 0 && amount > 0 {
-					battle.EnemyDamageReducePerRoundRounds = byte(rounds)
-					battle.EnemyDamageReducePerRoundAmount = uint32(amount)
-				}
-			}
-			// 110（敌方）- n 回合内每次受到攻击时 m% 几率使对手 stat 等级 -1
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 110 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance, stat := 0, 50, 0
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					chance = effArgs[1]
-				}
-				if len(effArgs) >= 3 {
-					stat = effArgs[2]
-				}
-				if rounds > 0 {
-					battle.EnemyDefendStatDropRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
+					// 116（敌方）- n 回合内每次受到攻击造成伤害的 1/5 恢复自身体力
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 116 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds := 0
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if rounds > 0 {
+							battle.EnemyDefendHealRounds = byte(rounds)
+						}
 					}
-					battle.EnemyDefendStatDropChance = byte(chance)
-					if stat < 0 || stat > 5 {
-						stat = 0
+					// 117（敌方）- n 回合内每次受到攻击 m% 概率使对手疲惫 1~3 回合
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 117 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, chance := 0, 30
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							chance = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemyDefendFatigueRounds = byte(rounds)
+							if chance > 100 {
+								chance = 100
+							}
+							battle.EnemyDefendFatigueChance = byte(chance)
+						}
 					}
-					battle.EnemyDefendStatDropStat = byte(stat)
-				}
-			}
-			// 116（敌方）- n 回合内每次受到攻击造成伤害的 1/5 恢复自身体力
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 116 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds := 0
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if rounds > 0 {
-					battle.EnemyDefendHealRounds = byte(rounds)
-				}
-			}
-			// 117（敌方）- n 回合内每次受到攻击 m% 概率使对手疲惫 1~3 回合
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 117 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, chance := 0, 30
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					chance = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemyDefendFatigueRounds = byte(rounds)
-					if chance > 100 {
-						chance = 100
+					// 123（敌方）- n 回合内受到任何伤害时自身 XX 提高 m 级
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 123 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, stat, stages := 0, 0, 1
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 {
+							stat = effArgs[1]
+						}
+						if len(effArgs) >= 3 && effArgs[2] > 0 {
+							stages = effArgs[2]
+						}
+						if rounds > 0 && stat >= 0 && stat < 6 {
+							battle.EnemyHurtStatBoostRounds = byte(rounds)
+							battle.EnemyHurtStatBoostStat = byte(stat)
+							battle.EnemyHurtStatBoostStages = int8(stages)
+						}
 					}
-					battle.EnemyDefendFatigueChance = byte(chance)
-				}
-			}
-			// 123（敌方）- n 回合内受到任何伤害时自身 XX 提高 m 级
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 123 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, stat, stages := 0, 0, 1
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 {
-					stat = effArgs[1]
-				}
-				if len(effArgs) >= 3 && effArgs[2] > 0 {
-					stages = effArgs[2]
-				}
-				if rounds > 0 && stat >= 0 && stat < 6 {
-					battle.EnemyHurtStatBoostRounds = byte(rounds)
-					battle.EnemyHurtStatBoostStat = byte(stat)
-					battle.EnemyHurtStatBoostStages = int8(stages)
-				}
-			}
-			// 125（敌方）- n 回合内被攻击时减少受到的伤害上限 m
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 125 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, cap := 0, 0
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					cap = effArgs[1]
-				}
-				if rounds > 0 && cap > 0 {
-					battle.EnemyDamageCapRounds = byte(rounds)
-					battle.EnemyDamageCap = uint32(cap)
-				}
-			}
-			// 126（敌方）- n 回合内每回合自身攻击和速度 +m 级
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 126 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds, stages := 0, 1
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if len(effArgs) >= 2 && effArgs[1] > 0 {
-					stages = effArgs[1]
-				}
-				if rounds > 0 {
-					battle.EnemySpeedBoostRounds = byte(rounds)
-					battle.EnemySpeedBoostStages = int8(stages)
-				}
-			}
-			// 128（敌方）- n 回合内接受的物理伤害转化为体力恢复
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 128 && enemyHit {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds := 0
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if rounds > 0 {
-					battle.EnemyPhysDmgToHealRounds = byte(rounds)
-				}
-			}
-			// 471（敌方）- 先出手时 n 回合内免疫异常状态
-			if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 471 && enemyHit && enemyFirst {
-				effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
-				rounds := 0
-				if len(effArgs) >= 1 && effArgs[0] > 0 {
-					rounds = effArgs[0]
-				}
-				if rounds > 0 {
-					battle.EnemyImmuneStatusRounds = byte(rounds)
-				}
-			}
+					// 125（敌方）- n 回合内被攻击时减少受到的伤害上限 m
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 125 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, cap := 0, 0
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							cap = effArgs[1]
+						}
+						if rounds > 0 && cap > 0 {
+							battle.EnemyDamageCapRounds = byte(rounds)
+							battle.EnemyDamageCap = uint32(cap)
+						}
+					}
+					// 126（敌方）- n 回合内每回合自身攻击和速度 +m 级
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 126 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds, stages := 0, 1
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if len(effArgs) >= 2 && effArgs[1] > 0 {
+							stages = effArgs[1]
+						}
+						if rounds > 0 {
+							battle.EnemySpeedBoostRounds = byte(rounds)
+							battle.EnemySpeedBoostStages = int8(stages)
+						}
+					}
+					// 128（敌方）- n 回合内接受的物理伤害转化为体力恢复
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 128 && enemyHit {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds := 0
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if rounds > 0 {
+							battle.EnemyPhysDmgToHealRounds = byte(rounds)
+						}
+					}
+					// 471（敌方）- 先出手时 n 回合内免疫异常状态
+					if enemySkillForTurn != nil && !enemyStatusSkillInvalid && enemySkillForTurn.EffectID == 471 && enemyHit && enemyFirst {
+						effArgs := gameskills.ParseSideEffectArg(enemySkillForTurn.SideEffectArg)
+						rounds := 0
+						if len(effArgs) >= 1 && effArgs[0] > 0 {
+							rounds = effArgs[0]
+						}
+						if rounds > 0 {
+							battle.EnemyImmuneStatusRounds = byte(rounds)
+						}
+					}
 
-			// 敌方出手结束后，同样结算一次多回合固定伤害（若存在）
-			applyFixedDotAfterAttack(&battle.PlayerHP, &battle.PlayerFixedDotDamage, &battle.PlayerFixedDotRounds)
+					// 敌方出手结束后，同样结算一次多回合固定伤害（若存在）
+					applyFixedDotAfterAttack(&battle.PlayerHP, &battle.PlayerFixedDotDamage, &battle.PlayerFixedDotRounds)
+				}
 			}
 		}
-	}
 	}
 	// 盖亚/雷伊先手：先执行敌方回合，若我方仍存活再执行我方出招；否则我方本回合未出招
 	if isGaiyaFirst {
@@ -14653,8 +18056,54 @@ afterEnemyTurn:
 						body8004 := buildBossMonster8004Body(0, 0, 0, uint32(entry.RewardItemID), 1)
 						ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, 0, body8004)
 					}
-				} else if _, ok := sptboss.GetByPetID(battle.EnemyID); ok {
+				} else if battle.BattleMapID == sptboss.MapIDYiNengWang && battle.EnemyID == 1000 {
+					// 地图 677 异能王：击败六重试炼(region 0~5)或终极试炼(region 6)后完成任务并发放对应之魂/精元（首次）
+					region := battle.BossRegion
+					var taskID int
+					var itemID int
+					if sptboss.IsYiNengSealBoss(battle.BattleMapID, region) {
+						taskID = sptboss.YiNengSealTaskID(region)
+						itemID = sptboss.YiNengSealItemID(region)
+					} else if sptboss.IsYiNengUltimateBoss(battle.BattleMapID, region) {
+						taskID = sptboss.YiNengUltimateTaskID
+						itemID = sptboss.YiNengUltimateItemID
+					} else {
+						taskID = 0
+						itemID = 0
+					}
+					if taskID != 0 && itemID != 0 {
+						taskKey := strconv.Itoa(taskID)
+						wasComplete := false
+						if user.Tasks != nil {
+							if t, ok := user.Tasks[taskKey]; ok {
+								wasComplete = t.Status == "3"
+							}
+						}
+						completeTaskIfNeeded(user, taskID)
+						if !wasComplete {
+							if user.Items == nil {
+								user.Items = make(map[string]userdb.Item)
+							}
+							itemKey := strconv.Itoa(itemID)
+							if it, has := user.Items[itemKey]; has {
+								it.Count++
+								user.Items[itemKey] = it
+							} else {
+								user.Items[itemKey] = userdb.Item{Count: 1, ExpireTime: 0x057E40}
+							}
+							body8004 := buildBossMonster8004Body(0, 0, 0, uint32(itemID), 1)
+							ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, 0, body8004)
+							// 推送 2202 任务完成，客户端 TasksManager 更新后面板才会显示「挑战真身」按钮
+							body2202 := buildTaskCompleteResponse(uint32(taskID), 0, user)
+							ctx.GameServer.SendResponse(ctx.ClientData, 2202, ctx.UserID, 0, body2202)
+							logger.Info(fmt.Sprintf("[2405] 地图677 击败 region=%d，完成任务 %d，发放道具 %d，推送 2202", region, taskID, itemID))
+						}
+					}
+				} else if _, ok := sptboss.GetByPetID(battle.EnemyID); ok &&
+					!sptboss.IsXuanWuGuardianBoss(battle.BattleMapID, battle.BossRegion) &&
+					!sptboss.IsQingLongGuardianBoss(battle.BattleMapID, battle.BossRegion) {
 					// SPT BOSS 无奖励精灵/精元，仅记录击败成就
+					// 玄武六守护兽(401/0~5)与青龙四守护兽(403/0~3)不记录到 DefeatedSPTBossIds，避免影响其他地图同精灵首次奖励
 					alreadyDefeated := false
 					for _, id := range user.DefeatedSPTBossIds {
 						if id == battle.EnemyID {
@@ -14712,12 +18161,12 @@ afterEnemyTurn:
 							itemKey := strconv.Itoa(rewardItemID)
 							hasSoul := false
 							hasPet := false
-							
+
 							// 检查背包中是否已有该精元物品
 							if _, has := user.Items[itemKey]; has {
 								hasSoul = true
 							}
-							
+
 							// 检查背包中是否已有对应的精灵
 							if soulRewardPetID, ok := darkPortalSoulRewardPetIDs[rewardItemID]; ok {
 								// 检查背包中的精灵
@@ -14737,7 +18186,7 @@ afterEnemyTurn:
 									}
 								}
 							}
-							
+
 							// 如果背包中已有精元或对应的精灵，则不给予奖励，但仍记录击败成就
 							if !hasSoul && !hasPet {
 								user.DefeatedSPTBossIds = append(user.DefeatedSPTBossIds, battle.EnemyID)
@@ -14836,6 +18285,44 @@ afterEnemyTurn:
 					logger.Info(fmt.Sprintf("[2405] 谱尼战胜利: 发放碎片 ItemID=%d (door=%d)", fragItemID, door))
 				}
 
+			}
+
+			// 雷伊体能训练结算：若本场为雷伊特训战斗且玩家获胜，则对应项目 today/current 计数 +1
+			if battle.IsLeiyiTrain && winnerID == uint32(ctx.UserID) {
+				idx := battle.LeiyiTrainIndex
+				if idx >= 0 && idx < 6 {
+					// 同步日期与上限，逻辑与 2393 一致
+					cfg := DefaultRewardConfigUnpacked()
+					if ctx.GameServer.UserDB != nil {
+						if data, err := ctx.GameServer.UserDB.LoadRewardConfig(); err == nil && len(data) > 0 {
+							_ = json.Unmarshal(data, &cfg)
+						}
+					}
+					today := int(time.Now().Unix() / 86400)
+					if user.LeiyiLastDay != today {
+						user.LeiyiLastDay = today
+						for i := 0; i < 6; i++ {
+							user.LeiyiToday[i] = 0
+						}
+					}
+					max := cfg.LeiyiTrain.MaxPerAttr[idx]
+					if max <= 0 {
+						max = 10
+					}
+					// 初始化总次数上限
+					if user.LeiyiTotal[idx] <= 0 {
+						user.LeiyiTotal[idx] = max
+					}
+					// 不超过总上限的情况下累加
+					if user.LeiyiCurrent[idx] < user.LeiyiTotal[idx] {
+						user.LeiyiCurrent[idx]++
+					}
+					if user.LeiyiToday[idx] < user.LeiyiTotal[idx] {
+						user.LeiyiToday[idx]++
+					}
+					logger.Info(fmt.Sprintf("[雷伊特训] 训练完成: UID=%d index=%d today=%v current=%v total=%v",
+						ctx.UserID, idx, user.LeiyiToday, user.LeiyiCurrent, user.LeiyiTotal))
+				}
 			}
 
 			// 保存数据
@@ -15017,6 +18504,9 @@ afterEnemyTurn:
 				logger.Info(fmt.Sprintf("[2414] 勇者之塔战后推送下一层(先于2506): curLevel=%d bossIDs=%v seq=%d+广播", nextLevel, nextBossIDs, ctx.SeqID))
 			}
 		}
+		// 在战斗结束前，将当前出战精灵的体力同步回背包数据，保证背包与战场血量一致
+		syncActivePetHPFromBattle(ctx, battle, user)
+
 		overBody := buildFightOverInfo(0, winnerID)
 		ctx.GameServer.SendResponse(ctx.ClientData, 2506, ctx.UserID, ctx.SeqID, overBody)
 		pushMapOgreListAfterFightOver(ctx, battle.BattleMapID == 500)
@@ -15088,8 +18578,10 @@ func handleUsePetItem(ctx *gameserver.HandlerContext) {
 		user.Items[itemKey] = item
 	}
 
-	// 简化：统一按 30 点固定体力药处理（可按 itemID 精细化）
-	healHP := int32(30)
+	// 根据 items.xml 中的 HP / PP 字段计算回复效果
+	eff := GetBattleItemEffect(int(itemID))
+	healHP := int32(eff.HP)
+	ppDelta := eff.PP
 
 	// 在战斗中优先使用 BattleState 的 HP；否则退回到宠物当前 HP
 	currentHP := int32(0)
@@ -15119,13 +18611,61 @@ func handleUsePetItem(ctx *gameserver.HandlerContext) {
 		}
 	}
 
-	// 回写战斗中的 HP
+	// 回写战斗中的 HP / PP
 	if inBattle && battle.IsActive {
 		if currentHP < 0 {
 			currentHP = 0
 		}
 		battle.PlayerHP = uint32(currentHP)
 		battle.PlayerMaxHP = maxHP
+
+		// 道具 PP 恢复效果（仅战斗内，对当前出战精灵的全部技能生效）
+		if ppDelta > 0 {
+			petMgr := gamepets.GetInstance()
+			skillMgr := gameskills.GetInstance()
+
+			activeIdx := 0
+			if battle.ActivePetIndex > 0 && battle.ActivePetIndex < len(user.Pets) {
+				activeIdx = battle.ActivePetIndex
+			}
+
+			// 确保 BattleState 中已经初始化技能与 PP
+			initPlayerSkillPP(battle, user, activeIdx, petMgr, skillMgr)
+
+			for i := 0; i < 4; i++ {
+				if battle.PlayerSkillIDs[i] == 0 {
+					continue
+				}
+				curPP := int(battle.PlayerSkillPP[i])
+				if curPP < 0 {
+					curPP = 0
+				}
+				maxPP := 35
+				if sk := skillMgr.Get(int(battle.PlayerSkillIDs[i])); sk != nil && sk.MaxPP > 0 {
+					maxPP = sk.MaxPP
+				}
+				newPP := curPP + ppDelta
+				if newPP > maxPP {
+					newPP = maxPP
+				}
+				if newPP < 0 {
+					newPP = 0
+				}
+				battle.PlayerSkillPP[i] = byte(newPP)
+			}
+		}
+
+		// 状态解除（RemoveAllMonStat=解除异常，RemoveBtLvDown=解除能力等级下降）
+		if eff.RemoveAllMonStat != 0 {
+			for i := range battle.PlayerStatus {
+				battle.PlayerStatus[i] = 0
+			}
+		}
+		if eff.RemoveBtLvDown != 0 {
+			for i := range battle.PlayerBattleLv {
+				battle.PlayerBattleLv[i] = 0
+			}
+		}
 	}
 	ctx.GameServer.BattleMu.Unlock()
 
@@ -15162,9 +18702,8 @@ func handleUsePetItem(ctx *gameserver.HandlerContext) {
 		skillMgr := gameskills.GetInstance()
 		enemySkill, enemySkillID := pickEnemySkill(skillMgr, curBattle.EnemyID, curBattle.EnemyLevel)
 		if enemySkill == nil || enemySkillID == 0 {
-			// 敌人本回合不出招
-			ctx.GameServer.BattleMu.Unlock()
-			return
+			// 敌人本回合不出招：仍需推送一帧 2505（双 AttackValue，占位），否则客户端 UseSkillInfo 解析将失败
+			enemySkillID = 0
 		}
 
 		// 控制类异常：畏缩/睡眠/麻痹 时敌方本回合无法行动（与 2405 一致）
@@ -15188,6 +18727,9 @@ func handleUsePetItem(ctx *gameserver.HandlerContext) {
 
 		enemyDamageCalc := uint32(0)
 		enemyDamage := uint32(0)
+		// 记录玩家在敌人攻击“之前”的体力（即吃完药后的体力），用于构造我方占位 AttackValue
+		playerHPBeforeEnemy := int32(curBattle.PlayerHP)
+
 		if !enemyFlinched && !enemyParalyzed {
 			// 敌人属性
 			enemyEV := gamepets.EVStats{}
@@ -15214,84 +18756,128 @@ func handleUsePetItem(ctx *gameserver.HandlerContext) {
 			}
 			playerStatsForDef := petMgr.GetStats(playerPetID, playerLevel, playerDV, playerEVForDef, playerNature)
 
-			enemyPower := uint32(enemySkill.Power)
-			if enemyPower == 0 {
-				enemyPower = 40
-			}
-
-			// 敌方攻防（按技能类别），并应用强化弱化倍率
-			enemyAtk := float64(enemyStats.Attack)
-			enemyDef := float64(playerStatsForDef.Defence)
-			enemyAtkStage, enemyDefStage := 0, 1
-			if enemySkill.Category == 2 {
-				enemyAtk = float64(enemyStats.SpAtk)
-				enemyDef = float64(playerStatsForDef.SpDef)
-				enemyAtkStage, enemyDefStage = 2, 3
-			}
-			enemyAtk *= gamebattle.GetStatMultiplier(int(curBattle.EnemyBattleLv[enemyAtkStage]))
-			enemyDef *= gamebattle.GetStatMultiplier(int(curBattle.PlayerBattleLv[enemyDefStage]))
-			if enemyDef < 1 {
-				enemyDef = 1
-			}
-
-			enemyBaseDamage := math.Floor(((float64(curBattle.EnemyLevel)*0.4 + 2.0) * float64(enemyPower) * enemyAtk / enemyDef / 50.0) + 2.0)
-
-			enemyStab := 1.0
-			if enemyPetDef := petMgr.Get(curBattle.EnemyID); enemyPetDef != nil && (enemySkill.Type == enemyPetDef.Type || (enemyPetDef.Type2 > 0 && enemySkill.Type == enemyPetDef.Type2)) {
-				enemyStab = 1.5
-			}
-
-			enemyTypeMod := 1.0
-			if len(user.Pets) > 0 {
-				if attackerPetDef := petMgr.Get(user.Pets[activeIdx].ID); attackerPetDef != nil {
-					enemyTypeMod = gamebattle.GetTypeMultiplierDual(enemySkill.Type, attackerPetDef.Type, attackerPetDef.Type2)
+			// 纯变化/属性技能（Category=4）不应造成直接伤害，只生效附加效果。
+			// 为避免用药回合中错误显示扣血，这里对 Category=4 直接跳过伤害计算，保持 enemyDamageCalc=0。
+			if enemySkill.Category != 4 {
+				enemyPower := uint32(enemySkill.Power)
+				if enemyPower == 0 {
+					enemyPower = 40
 				}
-			}
 
-			enemyRandomMod := float64(rand.Intn(255-217+1)+217) / 255.0
-			enemyFinalDamage := uint32(enemyBaseDamage * enemyStab * enemyTypeMod * enemyRandomMod)
-			if curBattle.EnemyStatus[gameskills.StatusIndexBurn] > 0 {
-				enemyFinalDamage = enemyFinalDamage / 2
+				// 敌方攻防（按技能类别），并应用强化弱化倍率
+				enemyAtk := float64(enemyStats.Attack)
+				enemyDef := float64(playerStatsForDef.Defence)
+				enemyAtkStage, enemyDefStage := 0, 1
+				if enemySkill.Category == 2 {
+					enemyAtk = float64(enemyStats.SpAtk)
+					enemyDef = float64(playerStatsForDef.SpDef)
+					enemyAtkStage, enemyDefStage = 2, 3
+				}
+				enemyAtk *= gamebattle.GetStatMultiplier(int(curBattle.EnemyBattleLv[enemyAtkStage]))
+				enemyDef *= gamebattle.GetStatMultiplier(int(curBattle.PlayerBattleLv[enemyDefStage]))
+				if enemyDef < 1 {
+					enemyDef = 1
+				}
+
+				enemyBaseDamage := math.Floor(((float64(curBattle.EnemyLevel)*0.4 + 2.0) * float64(enemyPower) * enemyAtk / enemyDef / 50.0) + 2.0)
+
+				enemyStab := 1.0
+				if enemyPetDef := petMgr.Get(curBattle.EnemyID); enemyPetDef != nil && (enemySkill.Type == enemyPetDef.Type || (enemyPetDef.Type2 > 0 && enemySkill.Type == enemyPetDef.Type2)) {
+					enemyStab = 1.5
+				}
+
+				enemyTypeMod := 1.0
+				if len(user.Pets) > 0 {
+					if attackerPetDef := petMgr.Get(user.Pets[activeIdx].ID); attackerPetDef != nil {
+						enemyTypeMod = gamebattle.GetTypeMultiplierDual(enemySkill.Type, attackerPetDef.Type, attackerPetDef.Type2)
+					}
+				}
+
+				enemyRandomMod := float64(rand.Intn(255-217+1)+217) / 255.0
+				enemyFinalDamage := uint32(enemyBaseDamage * enemyStab * enemyTypeMod * enemyRandomMod)
+				if curBattle.EnemyStatus[gameskills.StatusIndexBurn] > 0 {
+					enemyFinalDamage = enemyFinalDamage / 2
+					if enemyFinalDamage < 1 {
+						enemyFinalDamage = 1
+					}
+				}
 				if enemyFinalDamage < 1 {
 					enemyFinalDamage = 1
 				}
-			}
-			if enemyFinalDamage < 1 {
-				enemyFinalDamage = 1
-			}
-			enemyDamageCalc = enemyFinalDamage // 理论伤害，用于客户端显示
-			if enemyFinalDamage > curBattle.PlayerHP {
-				enemyFinalDamage = curBattle.PlayerHP
-			}
+				enemyDamageCalc = enemyFinalDamage // 理论伤害，用于客户端显示
+				if enemyFinalDamage > curBattle.PlayerHP {
+					enemyFinalDamage = curBattle.PlayerHP
+				}
 
-			enemyDamage = enemyFinalDamage
+				enemyDamage = enemyFinalDamage
 
-			// 更新玩家 HP
-			curBattle.PlayerHP -= enemyDamage
-			if curBattle.PlayerHP > curBattle.PlayerMaxHP {
-				curBattle.PlayerHP = 0
+				// 更新玩家 HP（敌人攻击后）
+				if enemyDamage > 0 {
+					if enemyDamage >= curBattle.PlayerHP {
+						curBattle.PlayerHP = 0
+					} else {
+						curBattle.PlayerHP -= enemyDamage
+					}
+				}
 			}
 		}
 
-		opponentUID := curBattle.OpponentUserID
+		// 将当前战斗状态快照出来，用于构造 2505（吃药后敌方攻击已结算，HP 为实际剩余值）
+		playerHPAfterEnemy := int32(curBattle.PlayerHP)
+		playerMaxHPFor2505 := curBattle.PlayerMaxHP
+		playerStatusFor2505 := curBattle.PlayerStatus
+		playerBattleLvFor2505 := curBattle.PlayerBattleLv
 		enemyStatusFor2505 := curBattle.EnemyStatus // 敌方异常状态和强化弱化跟随精灵，需正确下发
 		enemyBattleLvFor2505 := curBattle.EnemyBattleLv
+		opponentUID := curBattle.OpponentUserID
 		ctx.GameServer.BattleMu.Unlock()
 
-		// 构造 2505，通知前端敌人攻击一次（status/battleLv 用敌方实际值）
-		body2505 := make([]byte, 0, 80)
+		// 规范化 HP，避免 remainHp 超出 maxHp
+		if playerMaxHPFor2505 == 0 {
+			playerMaxHPFor2505 = 1
+		}
+		if playerHPBeforeEnemy > int32(playerMaxHPFor2505) {
+			playerHPBeforeEnemy = int32(playerMaxHPFor2505)
+		}
+		if playerHPAfterEnemy > int32(playerMaxHPFor2505) {
+			playerHPAfterEnemy = int32(playerMaxHPFor2505)
+		}
+
+		// AttackValue1：我方占位帧（skillID=0，仅用于让 UseSkillInfo 能正确解析两个 AttackValue）
+		// lostHP 固定为 0，gainHP 使用本次吃药回复量，remainHp 为吃药后但敌人行动前的体力
+		playerGainHP := int32(healHP)
+		if playerGainHP < 0 {
+			playerGainHP = 0
+		}
+		playerAv := buildAttackValue(
+			uint32(ctx.UserID), 0, 0,
+			0, playerGainHP,
+			playerHPBeforeEnemy, playerMaxHPFor2505,
+			0, 0, 0,
+			playerStatusFor2505, playerBattleLvFor2505,
+		)
+
+		// AttackValue2：敌方真实攻击帧（与 2405 一致，userID=对方/0，lostHP 为对我方造成的伤害）
 		enemyUserID := uint32(0)
 		if opponentUID != 0 {
 			enemyUserID = uint32(opponentUID)
 		}
-
-		body2505 = append(body2505, buildAttackValue(
-			enemyUserID, enemySkillID, 1,
+		enemyAtkTimes := uint32(1)
+		if enemySkillID == 0 || enemyFlinched || enemyParalyzed || enemyDamageCalc == 0 {
+			enemyAtkTimes = 0
+		}
+		enemyAv := buildAttackValue(
+			enemyUserID, enemySkillID, enemyAtkTimes,
 			enemyDamageCalc, 0,
-			int32(curBattle.EnemyHP), curBattle.EnemyMaxHP,
+			int32(playerHPAfterEnemy), playerMaxHPFor2505,
 			0, 0, 0,
 			enemyStatusFor2505, enemyBattleLvFor2505,
-		)...)
+		)
+
+		// NOTE_USE_SKILL(2505)：必须包含两个 AttackValue，否则前端 UseSkillInfo 解析会溢出导致战斗卡死
+		body2505 := make([]byte, 0, len(playerAv)+len(enemyAv))
+		body2505 = append(body2505, playerAv...)
+		body2505 = append(body2505, enemyAv...)
 
 		ctx.GameServer.SendResponse(ctx.ClientData, 2505, ctx.UserID, ctx.SeqID, body2505)
 		if opponentUID != 0 {
@@ -15419,6 +19005,15 @@ func handleChangePet(ctx *gameserver.HandlerContext) {
 
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 
+	// 大乱斗场景下，仅允许切换本场战斗队伍中的精灵
+	allowedIndexes := getPetWarBattleIndexes(ctx.GameServer, ctx.UserID)
+	allowedCatchTimes := make(map[uint32]struct{}, len(allowedIndexes))
+	for _, index := range allowedIndexes {
+		if index >= 0 && index < len(user.Pets) {
+			allowedCatchTimes[uint32(user.Pets[index].CatchTime)] = struct{}{}
+		}
+	}
+
 	// 打印所有精灵信息
 	logger.Info(fmt.Sprintf("[2407] 玩家精灵列表: 共%d只", len(user.Pets)))
 	for i, pet := range user.Pets {
@@ -15430,10 +19025,25 @@ func handleChangePet(ctx *gameserver.HandlerContext) {
 	var pickedIndex int = -1
 	if reqCatchTime != 0 {
 		for i := range user.Pets {
+			if len(allowedCatchTimes) > 0 {
+				if _, ok := allowedCatchTimes[uint32(user.Pets[i].CatchTime)]; !ok {
+					continue
+				}
+			}
 			if uint32(user.Pets[i].CatchTime) == reqCatchTime {
 				picked = &user.Pets[i]
 				pickedIndex = i
 				logger.Info(fmt.Sprintf("[2407] 找到匹配的精灵: index=%d PetID=%d", i, user.Pets[i].ID))
+				break
+			}
+		}
+	}
+	if picked == nil && len(allowedIndexes) > 0 {
+		for _, index := range allowedIndexes {
+			if index >= 0 && index < len(user.Pets) {
+				picked = &user.Pets[index]
+				pickedIndex = index
+				logger.Info(fmt.Sprintf("[2407] 大乱斗未找到匹配精灵，使用本场队伍首只: PetID=%d", user.Pets[index].ID))
 				break
 			}
 		}
@@ -15489,8 +19099,8 @@ func handleChangePet(ctx *gameserver.HandlerContext) {
 
 	// 更新战斗状态中的当前出战精灵下标，而不改变 user.Pets 的顺序，
 	// 这样战斗结束后背包首发仍然与客户端显示一致。
-	playerWasDead := false  // 上一只精灵是否被击败（强制切换 vs 主动切换）
-	var opponentUID int64   // PvP 时对方 UID，用于推送 2407 使对方客户端更新“对方换宠”显示
+	playerWasDead := false // 上一只精灵是否被击败（强制切换 vs 主动切换）
+	var opponentUID int64  // PvP 时对方 UID，用于推送 2407 使对方客户端更新“对方换宠”显示
 	ctx.GameServer.BattleMu.Lock()
 	if battle, exists := ctx.GameServer.BattleStates[ctx.UserID]; exists && battle != nil && battle.IsActive {
 		playerWasDead = (battle.PlayerHP == 0) // 在更新前保存：被击败后切换视为新战斗开始
@@ -15975,7 +19585,7 @@ func handleCatchMonster(ctx *gameserver.HandlerContext) {
 			if enemyDef < 1 {
 				enemyDef = 1
 			}
-			enemyBaseDamage := math.Floor(((float64(curBattle.EnemyLevel)*0.4+2.0)*float64(enemyPower)*enemyAtk/enemyDef/50.0) + 2.0)
+			enemyBaseDamage := math.Floor(((float64(curBattle.EnemyLevel)*0.4 + 2.0) * float64(enemyPower) * enemyAtk / enemyDef / 50.0) + 2.0)
 			enemyStab := 1.0
 			if enemyPetDef := petMgr.Get(curBattle.EnemyID); enemyPetDef != nil && (enemySkill.Type == enemyPetDef.Type || (enemyPetDef.Type2 > 0 && enemySkill.Type == enemyPetDef.Type2)) {
 				enemyStab = 1.5
@@ -16170,6 +19780,8 @@ func registerNonoHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(9026, handleNonoAddExp)        // 增加NONO经验
 	gs.RegisterCommandHandler(9027, handleNonoIsInfo)        // NONO是否有信息
 	gs.RegisterCommandHandler(80001, handleNieoLogin)        // 超能NONO登录
+	gs.RegisterCommandHandler(9032, handleGetNonoPartyExp)   // 诺诺派对经验
+	gs.RegisterCommandHandler(9033, handleGetNonoPartyItem)  // 诺诺派对道具
 }
 
 // handleNonoOpen CMD 9001 开启NONO
@@ -16209,7 +19821,162 @@ func handleNonoChangeName(ctx *gameserver.HandlerContext) {
 
 // handleNonoChipMixture CMD 9004 NONO芯片合成
 func handleNonoChipMixture(ctx *gameserver.HandlerContext) {
-	ctx.GameServer.SendResponse(ctx.ClientData, 9004, ctx.UserID, ctx.SeqID, []byte{})
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user == nil {
+		ctx.GameServer.SendResponse(ctx.ClientData, 9004, ctx.UserID, ctx.SeqID, make([]byte, 4))
+		return
+	}
+
+	// 请求格式推断自前端抓包：
+	// mixId(4) + count(4) + [itemId(4) + itemNum(4)]*count
+	if len(ctx.Body) < 8 {
+		ctx.GameServer.SendResponse(ctx.ClientData, 9004, ctx.UserID, ctx.SeqID, make([]byte, 4))
+		return
+	}
+	mixID := int(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	matCount := int(binary.BigEndian.Uint32(ctx.Body[4:8]))
+	type material struct {
+		itemID uint32
+		count  int
+	}
+	materials := make([]material, 0, matCount)
+	off := 8
+	for i := 0; i < matCount && off+8 <= len(ctx.Body); i++ {
+		itemID := binary.BigEndian.Uint32(ctx.Body[off : off+4])
+		cnt := int(binary.BigEndian.Uint32(ctx.Body[off+4 : off+8]))
+		if cnt <= 0 {
+			cnt = 1
+		}
+		materials = append(materials, material{itemID: itemID, count: cnt})
+		off += 8
+	}
+
+	if user.Items == nil {
+		user.Items = make(map[string]userdb.Item)
+	}
+
+	// 校验材料是否足够
+	for _, m := range materials {
+		key := strconv.Itoa(int(m.itemID))
+		it, ok := user.Items[key]
+		if !ok || it.Count < m.count {
+			// 材料不足：返回失败，不修改背包
+			body := make([]byte, 4)
+			binary.BigEndian.PutUint32(body[0:4], 0)
+			ctx.GameServer.SendResponse(ctx.ClientData, 9004, ctx.UserID, ctx.SeqID, body)
+			return
+		}
+	}
+
+	// 读取 GM 权重配置中的芯片合成规则
+	cfg := GetWeightsConfig()
+	matched := make([]*ChipMixtureRule, 0)
+	if len(cfg.ChipMixtureRules) > 0 {
+		// 先按「三种材料道具 ID」匹配（与 GM 配置的 mat1/mat2/mat3 对应），顺序无关
+		reqIDs := make([]int, 0, len(materials))
+		for _, m := range materials {
+			reqIDs = append(reqIDs, int(m.itemID))
+		}
+		sort.Ints(reqIDs)
+
+		for i := range cfg.ChipMixtureRules {
+			r := &cfg.ChipMixtureRules[i]
+			if r.Mat1 > 0 || r.Mat2 > 0 || r.Mat3 > 0 {
+				mats := []int{r.Mat1, r.Mat2, r.Mat3}
+				sort.Ints(mats)
+				if len(reqIDs) >= 3 && reqIDs[0] == mats[0] && reqIDs[1] == mats[1] && reqIDs[2] == mats[2] {
+					matched = append(matched, r)
+				}
+			}
+		}
+		// 兼容旧配置：若未设置 mat1-3，则按配方 ID 匹配（允许为同一 mixId 配多条不同奖励）
+		if len(matched) == 0 && mixID > 0 {
+			for i := range cfg.ChipMixtureRules {
+				if cfg.ChipMixtureRules[i].ID == mixID {
+					matched = append(matched, &cfg.ChipMixtureRules[i])
+				}
+			}
+		}
+	}
+
+	success := uint32(0)
+
+	// 仅当存在对应规则时才真正消耗材料与判定奖励
+	if len(matched) > 0 {
+		// 扣除材料
+		for _, m := range materials {
+			key := strconv.Itoa(int(m.itemID))
+			it := user.Items[key]
+			it.Count -= m.count
+			if it.Count <= 0 {
+				delete(user.Items, key)
+			} else {
+				user.Items[key] = it
+			}
+		}
+
+		// 多个规则：允许配置多种奖励道具及各自几率，总和不超过 100。
+		// 实现方式：对所有匹配规则的 SuccessRate 求和并截断到 100，然后按权重随机选出其中一个奖励。
+		totalRate := 0
+		for _, r := range matched {
+			rate := r.SuccessRate
+			if rate < 0 {
+				rate = 0
+			}
+			if rate > 100 {
+				rate = 100
+			}
+			totalRate += rate
+		}
+		if totalRate > 100 {
+			totalRate = 100
+		}
+
+		if totalRate > 0 {
+			roll := rand.Intn(100)
+			if roll < totalRate {
+				// 命中成功区间：在 matched 中按 SuccessRate 选出具体奖励规则
+				cursor := 0
+				var picked *ChipMixtureRule
+				for _, r := range matched {
+					rate := r.SuccessRate
+					if rate < 0 {
+						rate = 0
+					}
+					if rate > 100 {
+						rate = 100
+					}
+					if rate == 0 {
+						continue
+					}
+					if roll < cursor+rate {
+						picked = r
+						break
+					}
+					cursor += rate
+				}
+				if picked != nil && picked.RewardItemID > 0 && picked.RewardCount > 0 {
+					success = 1
+					key := strconv.Itoa(picked.RewardItemID)
+					it := user.Items[key]
+					it.Count += picked.RewardCount
+					if it.ExpireTime == 0 {
+						it.ExpireTime = 0x057E40
+					}
+					user.Items[key] = it
+				}
+			}
+		}
+
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+		}
+	}
+
+	// 响应: result(4) - 1 表示合成成功，0 表示失败/无规则
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], success)
+	ctx.GameServer.SendResponse(ctx.ClientData, 9004, ctx.UserID, ctx.SeqID, body)
 }
 
 // handleNonoCure CMD 9007 NONO治疗
@@ -16408,7 +20175,7 @@ func pushNonoFollowState(ctx *gameserver.HandlerContext, user *userdb.GameData) 
 	body := make([]byte, 36)
 	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
 	binary.BigEndian.PutUint32(body[4:8], uint32(user.Nono.SuperNono)) // superStage 1-5
-	binary.BigEndian.PutUint32(body[8:12], 1)                         // state=1 跟随状态
+	binary.BigEndian.PutUint32(body[8:12], 1)                          // state=1 跟随状态
 	nickBytes := []byte(user.Nono.Nick)
 	if len(nickBytes) > 16 {
 		nickBytes = nickBytes[:16]
@@ -16465,7 +20232,7 @@ func handleNonoFollowOrHoom(ctx *gameserver.HandlerContext) {
 		body = make([]byte, 36)
 		binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
 		binary.BigEndian.PutUint32(body[4:8], uint32(user.Nono.SuperNono)) // superStage 1-5
-		binary.BigEndian.PutUint32(body[8:12], 1)                         // state=1 跟随状态
+		binary.BigEndian.PutUint32(body[8:12], 1)                          // state=1 跟随状态
 		nickBytes := []byte(user.Nono.Nick)
 		if len(nickBytes) > 16 {
 			nickBytes = nickBytes[:16]
@@ -16641,6 +20408,47 @@ func handleNonoIsInfo(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(ctx.ClientData, 9027, ctx.UserID, ctx.SeqID, body)
 }
 
+// handleGetNonoPartyExp CMD 9032 GET_NONOPARTY_EXP 诺诺派对经验
+// 前端 MapProcess_425 只读一个 uint32 并弹“你获得了 X 点积累经验”，这里直接把经验加入 ExpPool 并返回本次增加量。
+func handleGetNonoPartyExp(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user.ExpPool < 0 {
+		user.ExpPool = 0
+	}
+	const add = 5000
+	user.ExpPool += add
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], add)
+	ctx.GameServer.SendResponse(ctx.ClientData, 9032, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[9032] 诺诺派对经验: UID=%d +%d 当前ExpPool=%d", ctx.UserID, add, user.ExpPool))
+}
+
+// handleGetNonoPartyItem CMD 9033 GET_NONOPARTY_ITEM 诺诺派对道具
+// MapProcess_425 中用 param=1/2 触发不同奖励，这里简单给少量赛尔豆或固定道具。
+// 请求: type(4)；响应内容前端不读取（只是用 2601/Alert 提示），因此返回空包即可。
+func handleGetNonoPartyItem(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	var t uint32
+	if len(ctx.Body) >= 4 {
+		t = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	switch t {
+	case 1:
+		user.Coins += 1000
+	case 2:
+		user.Coins += 2000
+	default:
+	}
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 9033, ctx.UserID, ctx.SeqID, []byte{})
+	logger.Info(fmt.Sprintf("[9033] 诺诺派对道具: UID=%d type=%d Coins=%d", ctx.UserID, t, user.Coins))
+}
+
 // handleNieoLogin CMD 80001 超能NONO登录/状态检查
 func handleNieoLogin(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
@@ -16706,7 +20514,9 @@ func registerItemHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2605, handleItemList)              // 物品列表
 	gs.RegisterCommandHandler(2606, handleMultiItemBuy)          // 批量购买
 	gs.RegisterCommandHandler(2607, handleItemExpend)            // 消耗物品
+	gs.RegisterCommandHandler(2608, handleGetLasEgg)             // GET_LAS_EGG 领取精元蛋（里奥斯精元）
 	gs.RegisterCommandHandler(2609, handleEquipUpdate)           // 装备升级
+	gs.RegisterCommandHandler(2610, handleEatSpecialMedicine)    // 吃特效药
 	gs.RegisterCommandHandler(2901, handleExchangeClothComplete) // 兑换服装完成
 }
 
@@ -16758,9 +20568,14 @@ func handleItemBuy(ctx *gameserver.HandlerContext) {
 		item.Count += int(count)
 		user.Items[itemKey] = item
 	} else {
+		level := 0
+		if itemID >= 100001 && itemID <= 200000 {
+			level = 1
+		}
 		user.Items[itemKey] = userdb.Item{
 			Count:      int(count),
 			ExpireTime: 0x057E40,
+			Level:      level,
 		}
 	}
 	// 服装/套装（100000-199999）需同时加入 Clothes，否则“我的服装”中不显示
@@ -16891,9 +20706,14 @@ func handleMultiItemBuy(ctx *gameserver.HandlerContext) {
 			item.Count++
 			user.Items[itemKey] = item
 		} else {
+			level := 0
+			if itemID >= 100001 && itemID <= 200000 {
+				level = 1
+			}
 			user.Items[itemKey] = userdb.Item{
 				Count:      1,
 				ExpireTime: 0x057E40,
+				Level:      level,
 			}
 		}
 		// 服装/套装（100000-199999）需同时加入 Clothes
@@ -17007,7 +20827,54 @@ func handleItemExpend(ctx *gameserver.HandlerContext) {
 
 // handleEquipUpdate CMD 2609 装备升级
 func handleEquipUpdate(ctx *gameserver.HandlerContext) {
-	ctx.GameServer.SendResponse(ctx.ClientData, 2609, ctx.UserID, ctx.SeqID, []byte{})
+	// 请求: itemId(4)
+	var itemID uint32
+	if len(ctx.Body) >= 4 {
+		itemID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	itemKey := strconv.FormatUint(uint64(itemID), 10)
+
+	result := uint32(0)
+	if it, ok := user.Items[itemKey]; ok && it.Count > 0 {
+		// 仅对装备类道具开放强化（100001-199999），等级 1..3
+		if itemID >= 100001 && itemID <= 199999 {
+			if it.Level <= 0 {
+				it.Level = 1
+			}
+			if it.Level < 3 {
+				// 简化版费用：下一级 * 1000 赛尔豆
+				nextLv := it.Level + 1
+				cost := nextLv * 1000
+				if user.Coins >= cost {
+					user.Coins -= cost
+					it.Level = nextLv
+					user.Items[itemKey] = it
+					if ctx.GameServer.UserDB != nil {
+						ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+					}
+					result = 1
+				}
+			}
+		}
+	}
+
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint32(body[0:4], result)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2609, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleEatSpecialMedicine CMD 2610 吃特效药
+// 请求: catchTime(4) + itemId(4)
+// 响应 EatSpecialMedicineInfo: catchTime(4) + effectID(2) + leftCount(1) （若 catchTime=0 则无后续字段）
+// 当前先实现为“无效果占位”：返回 catchTime=0，表示本次未生效
+func handleEatSpecialMedicine(ctx *gameserver.HandlerContext) {
+	// 协议预留：未来可以根据 itemId/catchTime 查找配置并更新对应精灵状态
+	body := make([]byte, 4)
+	// catchTime=0 表示未应用任何特效药，AS 构造函数会直接结束
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2610, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2610] 吃特效药: UID=%d (暂未生效，占位实现)", ctx.UserID))
 }
 
 // handleExchangeClothComplete CMD 2901 兑换服装完成
@@ -17063,19 +20930,46 @@ func handleEscapeFight(ctx *gameserver.HandlerContext) {
 		return
 	}
 
+	// 在退出战斗前，将当前出战精灵的体力同步回背包，保持与战场血量一致
+	ctx.GameServer.BattleMu.RLock()
+	battle, _ = ctx.GameServer.BattleStates[ctx.UserID]
+	opponentUID := int64(0)
+	if battle != nil {
+		opponentUID = battle.OpponentUserID
+	}
+	ctx.GameServer.BattleMu.RUnlock()
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if battle != nil && user != nil {
+		syncActivePetHPFromBattle(ctx, battle, user)
+	}
+
 	// 结束战斗
 	overBody := buildFightOverInfo(0, 0)
 	ctx.GameServer.SendResponse(ctx.ClientData, 2506, ctx.UserID, ctx.SeqID, overBody)
 	pushMapOgreListAfterFightOver(ctx, false)
 
-	// 清理战斗状态（如果有的话）
+	// PvP / 精灵王 / 精灵大乱斗：逃跑时也需要通知对手结束战斗并清理双方状态，
+	// 否则对方客户端可能停留在战斗界面或“等待对方”状态。
 	ctx.GameServer.BattleMu.Lock()
 	delete(ctx.GameServer.BattleStates, ctx.UserID)
+	if opponentUID != 0 {
+		delete(ctx.GameServer.BattleStates, opponentUID)
+	}
 	ctx.GameServer.BattleMu.Unlock()
-
-	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
-	if ctx.GameServer.UserDB != nil {
-		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	if opponentUID != 0 {
+		if otherClient := ctx.GameServer.GetClientByUserID(opponentUID); otherClient != nil {
+			opponentOverBody := buildFightOverInfo(0, uint32(opponentUID))
+			ctx.GameServer.SendResponse(otherClient, 2506, opponentUID, 0, opponentOverBody)
+			userOpp := ctx.GameServer.GetOrCreateUser(opponentUID)
+			mapID := userOpp.MapID
+			if mapID == 0 {
+				mapID = 1
+			}
+			ctx.GameServer.SetOgreFightEndTime(opponentUID)
+			ctx.GameServer.ClearPlayerOgreSlots(opponentUID, mapID)
+			ogreBody := ctx.GameServer.BuildMapOgreListFromSlots(nil)
+			ctx.GameServer.SendResponse(otherClient, 2004, opponentUID, 0, ogreBody)
+		}
 	}
 }
 
@@ -17140,7 +21034,7 @@ func handlePetShow(ctx *gameserver.HandlerContext) {
 	}
 
 	// 确定要展示的精灵
-	var petID, catchTime, petDV uint32 = 7, 0, 31
+	var petID, catchTime, petDV, petShiny uint32 = 7, 0, 31, 0
 
 	// 如果指定了 catchTime，查找对应的精灵
 	if reqCatchTime > 0 {
@@ -17223,13 +21117,14 @@ func handlePetShow(ctx *gameserver.HandlerContext) {
 	}
 
 	// 构建响应
-	body := make([]byte, 24)
+	body := make([]byte, 28)
 	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
 	binary.BigEndian.PutUint32(body[4:8], catchTime)
 	binary.BigEndian.PutUint32(body[8:12], petID)
 	binary.BigEndian.PutUint32(body[12:16], reqFlag)
 	binary.BigEndian.PutUint32(body[16:20], petDV)
-	binary.BigEndian.PutUint32(body[20:24], 0) // skinID = 0
+	binary.BigEndian.PutUint32(body[20:24], petShiny) // shiny，占位，当前未实现持久化异色
+	binary.BigEndian.PutUint32(body[24:28], 0)        // skinID = 0，暂不区分皮肤
 
 	ctx.GameServer.SendResponse(ctx.ClientData, 2305, ctx.UserID, ctx.SeqID, body)
 	if user.MapID > 0 {
@@ -18156,22 +22051,115 @@ func handleUsePetItemOutOfFight(ctx *gameserver.HandlerContext) {
 		user.Items[itemKey] = it
 	}
 
-	// 学习力清零
-	switch itemID {
-	case 300037: // atk -> 0
-		picked.EVAttack = 0
-	case 300038: // def -> 0
-		picked.EVDefence = 0
-	case 300039: // sa -> 0
-		picked.EVSpAtk = 0
-	case 300040: // sd -> 0
-		picked.EVSpDef = 0
-	case 300041: // sp -> 0
-		picked.EVSpeed = 0
-	case 300042: // hp -> 0
+	eff := GetOutOfFightItemEffect(int(itemID))
+
+	// LimitPetClass 校验（若道具限定精灵，则仅对指定精灵生效）
+	if eff.LimitPetClass != "" {
+		allowed := false
+		for _, part := range strings.Fields(eff.LimitPetClass) {
+			var cid int
+			if _, err := fmt.Sscanf(part, "%d", &cid); err == nil && picked.ID == cid {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			// 道具限定精灵不匹配，回滚已扣道具
+			it.Count++
+			user.Items[itemKey] = it
+			ctx.GameServer.SendResponse(ctx.ClientData, 2326, ctx.UserID, ctx.SeqID, []byte{})
+			return
+		}
+	}
+
+	// 1) 学习力遗忘（EvRemove：1=HP 2=ATK 3=DEF 4=SA 5=SD 6=SP 7=全能）
+	if eff.EvRemove > 0 {
+		switch eff.EvRemove {
+		case 1:
+			picked.EVHP = 0
+		case 2:
+			picked.EVAttack = 0
+		case 3:
+			picked.EVDefence = 0
+		case 4:
+			picked.EVSpAtk = 0
+		case 5:
+			picked.EVSpDef = 0
+		case 6:
+			picked.EVSpeed = 0
+		case 7: // 全能学习力遗忘
+			picked.EVHP = 0
+			picked.EVAttack = 0
+			picked.EVDefence = 0
+			picked.EVSpAtk = 0
+			picked.EVSpDef = 0
+			picked.EVSpeed = 0
+		}
+	}
+
+	// 2) 性格重塑/转换（MonNatureReset=随机，Nature=指定，NatureSet=按概率随机）
+	if eff.MonNatureReset != 0 {
+		// 随机性格 0~24（赛尔号常见范围）
+		picked.Nature = rand.Intn(25)
+	} else if eff.Nature > 0 {
+		picked.Nature = eff.Nature
+	} else if eff.NatureSet != "" {
+		parts := strings.Fields(eff.NatureSet)
+		probs := strings.Fields(eff.NatureProbs)
+		if len(parts) > 0 {
+			weights := make([]int, len(parts))
+			total := 0
+			for i := range parts {
+				w := 1
+				if i < len(probs) {
+					if v, err := strconv.Atoi(probs[i]); err == nil {
+						w = v
+					}
+				}
+				if w < 0 {
+					w = 0
+				}
+				weights[i] = w
+				total += w
+			}
+			if total <= 0 {
+				total = 1
+				weights[0] = 1
+			}
+			r := rand.Intn(total)
+			for i, w := range weights {
+				r -= w
+				if r < 0 {
+					var nid int
+					if _, err := fmt.Sscanf(parts[i], "%d", &nid); err == nil {
+						picked.Nature = nid
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 3) 精灵还原（MonAttrReset：等级1+EV清零+随机性格+DV）
+	if eff.MonAttrReset != 0 {
+		picked.Level = 1
+		picked.Exp = 0
 		picked.EVHP = 0
-	default:
-		// 其他道具暂不处理（但仍扣道具并成功返回）
+		picked.EVAttack = 0
+		picked.EVDefence = 0
+		picked.EVSpAtk = 0
+		picked.EVSpDef = 0
+		picked.EVSpeed = 0
+		picked.Nature = rand.Intn(25)
+		picked.DV = rand.Intn(32)
+	}
+
+	// 4) 降级秘药（DecreMonLv：等级-1，不低于1）
+	if eff.DecreMonLv > 0 && picked.Level > 1 {
+		picked.Level--
+		if picked.Level < 1 {
+			picked.Level = 1
+		}
 	}
 
 	// 统一裁剪一次，避免出现历史脏数据（总510/单项255）
@@ -18477,6 +22465,61 @@ func handleGetMoreUserInfo(ctx *gameserver.HandlerContext) {
 	logger.Info(fmt.Sprintf("[2052] 获取详细用户信息: targetID=%d", targetID))
 }
 
+// handleRequestCount CMD 2053 请求计数（邀请人数）
+// 对齐 Flash: GetRegisterCode.count / CopyRegisterCodePanel.onCount
+// 请求: userId(4)（可选，默认当前用户）
+// 响应: userId(4) + inviteCount(4)
+//   - Flash 端只使用第二个字段作为「邀请人数」显示
+func handleRequestCount(ctx *gameserver.HandlerContext) {
+	targetID := ctx.UserID
+	if len(ctx.Body) >= 4 {
+		targetID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+
+	var inviteCount uint32
+	if ctx.GameServer.UserDB != nil {
+		if data := ctx.GameServer.UserDB.GetOrCreateGameData(targetID); data != nil {
+			if data.NewInviteeCnt > 0 {
+				inviteCount = uint32(data.NewInviteeCnt)
+			}
+		}
+	}
+
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(targetID))
+	binary.BigEndian.PutUint32(body[4:8], inviteCount)
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2053, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2053] 请求计数: targetID=%d inviteCount=%d", targetID, inviteCount))
+}
+
+// handleTaskActivityValue CMD 2192/2196/2289 任务/活动值查询
+// 最小完整协议：cmd(4) + count(4) + value(4)
+func handleTaskActivityValue(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.CmdID))
+	binary.BigEndian.PutUint32(body[4:8], 1)
+	binary.BigEndian.PutUint32(body[8:12], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, body)
+}
+
+// handlePetExtraValue CMD 2361 精灵扩展值/扩展列表
+// 最小完整协议：count(4) + value(4)
+func handlePetExtraValue(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 8)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2361, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleActivityExtValue CMD 45512/45524 活动扩展值查询
+// 最小完整协议：cmd(4) + count(4) + value(4)
+func handleActivityExtValue(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.CmdID))
+	binary.BigEndian.PutUint32(body[4:8], 1)
+	binary.BigEndian.PutUint32(body[8:12], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, body)
+}
+
 // handleFitmentUsering CMD 10006 正在使用的家具（基地）
 // 对齐 Lua: room_handlers.handleFitmentUsering
 // 请求: targetUserId(4) (可选，默认使用当前用户)
@@ -18524,4 +22567,1884 @@ func handleFitmentUsering(ctx *gameserver.HandlerContext) {
 
 	ctx.GameServer.SendResponse(ctx.ClientData, 10006, ctx.UserID, ctx.SeqID, body)
 	logger.Info(fmt.Sprintf("[10006] 正在使用的家具: owner=%d visitor=%d count=%d", targetUserID, ctx.UserID, len(fitments)))
+}
+
+// handleBuyFitment CMD 10004 购买家具（基地）
+// 请求: itemID(4) + count(4)
+// 响应: coins(4) + itemID(4) + count(4)
+//
+// 客户端 BuyCmdListener.onFitmentBuy 读取 3 个 uint32，并将 itemID 加入本地仓库展示。
+func handleBuyFitment(ctx *gameserver.HandlerContext) {
+	itemID := uint32(0)
+	count := uint32(1)
+	if len(ctx.Body) >= 8 {
+		itemID = binary.BigEndian.Uint32(ctx.Body[0:4])
+		count = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+	if count == 0 {
+		count = 1
+	}
+	if itemID == 0 {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 10004, ctx.UserID, ctx.SeqID, 10017)
+		return
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 10004, ctx.UserID, ctx.SeqID, 10017)
+		return
+	}
+
+	unitPrice := GetItemPrice(int(itemID))
+	if unitPrice < 0 {
+		unitPrice = 0
+	}
+	totalCost := unitPrice * int(count)
+	if totalCost > 0 && user.Coins < totalCost {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 10004, ctx.UserID, ctx.SeqID, 10017)
+		return
+	}
+	if totalCost > 0 {
+		user.Coins -= totalCost
+	}
+
+	// 记录到 AllFitments（仓库家具列表），用于后续 10007/10008 等实现时可直接复用。
+	// 结构无数量字段，按条目数表示拥有数量。
+	for i := uint32(0); i < count; i++ {
+		user.AllFitments = append(user.AllFitments, userdb.Fitment{ID: int(itemID)})
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(user.Coins))
+	binary.BigEndian.PutUint32(body[4:8], itemID)
+	binary.BigEndian.PutUint32(body[8:12], count)
+	ctx.GameServer.SendResponse(ctx.ClientData, 10004, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[10004] 购买家具: userID=%d itemID=%d count=%d cost=%d coins=%d", ctx.UserID, itemID, count, totalCost, user.Coins))
+}
+
+// handleMapSimpleAck 为大量活动地图按钮提供最小可用响应。
+// 这类 CMD 多用于活动状态推进、领奖、打点或单步交互；先回传原始包体避免客户端卡死。
+func handleMapSimpleAck(ctx *gameserver.HandlerContext) {
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[%d] 地图活动最小响应: uid=%d bodyLen=%d", ctx.CmdID, ctx.UserID, len(ctx.Body)))
+}
+
+// handleGenericActivityAction 通用活动动作记录器。
+// 对仍未单独建模的活动 CMD，先把参数序列持久到内存态，供后续查询/流程判断使用，
+// 比纯 ACK 更接近真实服务端行为。
+func handleGenericActivityAction(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	keyBase := uint32(ctx.CmdID) * 1000
+	for index := 0; index+4 <= len(ctx.Body); index += 4 {
+		argIndex := uint32(index / 4)
+		values[keyBase+argIndex] = binary.BigEndian.Uint32(ctx.Body[index : index+4])
+	}
+	values[keyBase+999]++
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[%d] 通用活动动作记录: uid=%d bodyLen=%d", ctx.CmdID, ctx.UserID, len(ctx.Body)))
+}
+
+// handleChristmasActivityAction 2018 圣诞主题活动系列命令（43300/43305/43306）。
+func handleChristmasActivityAction(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+		if len(ctx.Body) >= 8 {
+			a := binary.BigEndian.Uint32(ctx.Body[0:4])
+			b := binary.BigEndian.Uint32(ctx.Body[4:8])
+			switch ctx.CmdID {
+			case 43300:
+				values[43300000+a] = b
+				if a == 17 {
+					values[104641] = (values[104641] & ^uint32(0x0F)) | (b - 5)
+				}
+				if a == 18 {
+					values[104641] = (values[104641] & ^uint32(0x0F)) | b
+				}
+			case 43305:
+				values[43305000+a] = b
+				values[43305999]++
+				switch a {
+				case 18:
+					switch {
+					case b == 1:
+						values[104641] = (values[104641] & ^uint32(0x0F)) | 1
+					case b == 2:
+						values[104641] = (values[104641] & ^uint32(0x0F)) | 2
+					case b == 3:
+						values[104641] = (values[104641] & ^uint32(0x0F)) | 3
+					case b >= 4 && b <= 8:
+						bit := uint32(14 + (b - 3))
+						values[104641] |= 1 << bit
+						values[104641] = (values[104641] & ^uint32(0x0F)) | 4
+					case b == 9:
+						values[104641] = (values[104641] & ^uint32(0x0F)) | 5
+					case b == 10:
+						values[104641] = (values[104641] & ^uint32(0x0F)) | 6
+					}
+				case 19:
+					switch b {
+					case 1:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 1
+					case 2:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 2
+					case 3:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 3
+					case 4:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 4
+					case 5:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 5
+					case 6:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 6
+					case 7:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 7
+					case 8:
+						values[10575] = (values[10575] & ^uint32(0x0F)) | 8
+					}
+				}
+			case 43306:
+				values[43306000+a] = b
+				values[43306999]++
+				if a == 4 && b >= 1 && b <= 6 {
+					values[10575] |= 1 << (b + 3)
+				}
+			}
+		}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, ctx.CmdID, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[%d] 圣诞活动动作: uid=%d bodyLen=%d", ctx.CmdID, ctx.UserID, len(ctx.Body)))
+}
+
+// handleZLWSStoryAction 逐鹿纹饰类剧情阶段记录（45693）。
+func handleZLWSStoryAction(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		step := binary.BigEndian.Uint32(ctx.Body[4:8])
+		values[45693000+group] = step
+		values[45693999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45693, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45693] 逐鹿纹饰剧情记录: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap45743Action 仙女龙剧情阶段推进（11721/11722）。
+// 前端通过 14573(step) / 14574(taskType) 查询阶段：
+// [21,0] 结束前置场景并回主会场；
+// [22,1] 接取果实收集任务；
+// [22,2] 寒月光照完成；
+// [22,3] 钻石砸晕守果 NPC，结束该分支。
+func handleMap45743Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch group {
+		case 21:
+			if action == 0 {
+				values[14573] = 0
+				values[14574] = 0
+			}
+		case 22:
+			switch action {
+			case 1:
+				values[14573] = 1
+				values[14574] = 1
+			case 2:
+				if values[14573] < 2 {
+					values[14573] = 2
+				}
+				if values[14574] == 0 {
+					values[14574] = 1
+				}
+			case 3:
+				if values[14573] < 3 {
+					values[14573] = 3
+				}
+				values[14574] = 0
+			}
+		}
+		values[45743999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45743, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45743] 仙女龙剧情动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap45745Action 丰收节收获比赛剧情推进（11739）。
+// 该流程是多阶段串联，前端主要依赖 callback + 后续查询值刷新界面；
+// 这里按已观察到的参数组合维护阶段态，避免退化为通用记录器。
+func handleMap45745Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+
+		values[45745000+group] = action
+		switch group {
+		case 21:
+			if action == 1 {
+				values[14573] = 1
+				values[14574] = 21
+			} else if action == 2 {
+				values[14573] = 4
+				values[14574] = 0
+			}
+		case 22:
+			values[14573] = 2
+			values[14574] = 22
+			if action > values[45745022] {
+				values[45745022] = action
+			}
+			values[45745200+action] = 1
+			values[45745299]++
+			if values[45745299] >= 5 {
+				values[14573] = 3
+				values[14574] = 0
+			}
+		case 23:
+			values[14573] = 5
+			values[14574] = 23
+			values[45745023]++
+			if values[45745023] < 5 {
+				values[45745023]++
+			}
+			if values[45745023] >= 5 {
+				values[14573] = 6
+				values[14574] = 0
+			}
+		case 24:
+			if action == 1 {
+				values[14573] = 3
+				values[14574] = 24
+			} else if action == 2 {
+				if values[14573] < 6 {
+					values[14573] = 6
+				}
+				values[14574] = 0
+			}
+		case 25:
+			if action == 2 {
+				if values[14573] < 7 {
+					values[14573] = 7
+				}
+				values[14574] = 0
+				values[45745025] = 1
+				values[45745024] = 0
+			}
+		}
+		values[45745999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45745, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45745] 丰收节剧情动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap45508Action Map 1035 熔炉点击进度。
+// 前端仅传一个槽位编号并在回包后刷新，服务端记录四个槽位完成态即可。
+func handleMap45508Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 4 {
+		slot := binary.BigEndian.Uint32(ctx.Body[0:4])
+		if slot >= 1 && slot <= 4 {
+			values[45508000+slot] = 1
+		}
+		values[45508999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45508, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45508] 熔炉交互: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap11171FightTrigger Map 11171 首次触发战斗/解符文。
+// 3845: 五位海盗击退 bitset。
+// 3846: 四个符文位按字节记录，0=未触发,1=已触发待完成,2=已完成。
+func handleMap11171FightTrigger(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 4 {
+		index := binary.BigEndian.Uint32(ctx.Body[0:4])
+		switch {
+		case index >= 1 && index <= 5:
+			values[3845] |= 1 << (index - 1)
+		case index >= 6 && index <= 9:
+			shift := (index - 6) * 8
+			mask := uint32(0xFF) << shift
+			current := (values[3846] >> shift) & 0xFF
+			if current < 1 {
+				current = 1
+			}
+			values[3846] = (values[3846] & ^mask) | ((current & 0xFF) << shift)
+		}
+		values[45627999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45627, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45627] 11171 战斗触发: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap11171DiamondAction Map 11171 钻石跳过动作。
+// 8476/8477/8478 分别对应海盗、符文、最终海盗三阶段的直接完成。
+func handleMap11171DiamondAction(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		productID := binary.BigEndian.Uint32(ctx.Body[0:4])
+		index := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch productID {
+		case 8476:
+			if index >= 1 && index <= 5 {
+				values[3845] |= 1 << (index - 1)
+			}
+		case 8477:
+			if index >= 1 && index <= 4 {
+				shift := (index - 1) * 8
+				mask := uint32(0xFF) << shift
+				values[3846] = (values[3846] & ^mask) | (2 << shift)
+			}
+		case 8478:
+			if index >= 1 && index <= 8 {
+				values[3847] |= 1 << (index - 1)
+			}
+		}
+		values[45628000+productID]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45628, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45628] 11171 钻石动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap1708Action Map 1708 剧情外常态奖励/标记。
+// 105807 的 bit23~26 对应 4 个普通奖励点，55~61 为剧情外动作记录。
+func handleMap1708Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		if group == 26 {
+			switch action {
+			case 4:
+				values[105807] |= 1 << 22
+			case 5:
+				values[105807] |= 1 << 23
+			case 6:
+				values[105807] |= 1 << 24
+			case 7:
+				values[105807] |= 1 << 25
+			default:
+				values[45850000+action]++
+			}
+			values[45850999]++
+		}
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45850, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45850] 1708 剧情动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap45641Action 四九战将问答/套装升级。
+// KTool.getMultiValue([3915]) 读取当前完成题数。
+// send(45641,3,0) -> 答对一题；send(45641,6,3/4) -> 一键升级不同套件阶段。
+func handleMap45641Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch group {
+		case 3:
+			if action == 0 && values[3915] < 5 {
+				values[3915]++
+			}
+		case 6:
+			values[45641000+action] = 1
+			if values[3915] < 5 {
+				values[3915] = 5
+			}
+		}
+		values[45641999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45641, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45641] 四九战将问答动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap45674Action 夏令营/竞技场等场景点击打点。
+func handleMap45674Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		values[45674000+group] = action
+		values[45674999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45674, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45674] 场景打点动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap45677Action 星芒领悟单次完成动作。
+func handleMap45677Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		values[45677000+group] = action
+		values[45677999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 45677, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[45677] 星芒领悟动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap11685Action Map 11685 战场推进。
+// 查询键：104440,16870,16871,16872,16873,16868。
+func handleMap11685Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		if group == 21 {
+			switch action {
+			case 1:
+				values[16872] |= 1 << 20
+				boxState := (values[16872] >> 28) & 0x0F
+				if boxState == 0 {
+					values[16872] = (values[16872] & ^(uint32(0x0F) << 28)) | (1 << 28)
+				}
+			case 2, 3, 4, 5:
+				values[16872] = (values[16872] & ^(uint32(0x0F) << 28)) | (action << 28)
+				if action == 4 {
+					values[16871] += 10
+				}
+				if action == 5 {
+					values[16872] &^= 1 << 20
+				}
+			case 6:
+				values[16872] = (values[16872] &^ 0xFF) | 11
+				if values[16870] > 0 {
+					values[16870]--
+				}
+				blood := (values[16873] >> 12) & 0x0F
+				if blood < 3 {
+					blood++
+				}
+				values[16873] = (values[16873] & ^(uint32(0x0F) << 12)) | (blood << 12)
+				if blood >= 3 {
+					values[16872] &^= 0xFF
+				}
+			case 7:
+				values[16872] = (values[16872] &^ (0xFF << 8)) | (11 << 8)
+				if values[16870] > 0 {
+					values[16870]--
+				}
+				blood := (values[16873] >> 16) & 0x0F
+				if blood < 3 {
+					blood++
+				}
+				values[16873] = (values[16873] & ^(uint32(0x0F) << 16)) | (blood << 16)
+				if blood >= 3 {
+					values[16872] &^= (0xFF << 8)
+				}
+			case 8:
+				if values[16870] < 10 {
+					values[16870]++
+				}
+			case 9, 10:
+				if values[16870] > 0 {
+					values[16870]--
+				}
+				if action == 9 {
+					values[16872] = (values[16872] &^ 0xFF) | 11
+				}
+				if action == 10 {
+					values[16872] = (values[16872] &^ (0xFF << 8)) | (11 << 8)
+				}
+				values[43298000+action]++
+			}
+		} else if group == 20 {
+			if action >= 2 && action <= 10 {
+				values[16871] = action - 2
+				if action == 2 {
+					values[104440] = uint32(time.Now().Unix())
+					values[16868] = 0
+				}
+			} else if action == 11 {
+				values[16871] = 100
+				start := values[104440]
+				if start > 0 {
+					now := uint32(time.Now().Unix())
+					if now > start {
+						values[16868] += now - start
+					}
+				}
+			} else {
+				values[16871] = action
+			}
+			values[43298020]++
+		}
+		values[43298999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 43298, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[43298] 11685 战场动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap11689Action Map 11689 篝火节昼夜任务推进。
+// 查询键：16880,16881,104453,16882,16883,16886。
+func handleMap11689Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch group {
+		case 1:
+			if action >= 1 && action <= 5 {
+				values[16880] |= 1 << (10 + action)
+				values[16880] |= 1 << (4 + action)
+			}
+			if action == 6 {
+				values[16880] |= 1 << 10
+				values[16880] = (values[16880] & ^uint32(0x0F)) | 1
+			}
+			if action == 7 {
+				values[16880] |= 1 << 11
+				values[16880] = (values[16880] & ^uint32(0x0F)) | 2
+			}
+		case 2:
+			switch {
+			case action >= 1 && action <= 3:
+				shift := action * 4
+				values[16881] = (values[16881] & ^(uint32(0x0F) << shift)) | (1 << shift)
+			case action >= 4 && action <= 6:
+				bit := action - 3
+				values[16881] |= 1 << (bit - 1)
+				values[16880] |= 1 << 11
+			case action >= 8 && action <= 10:
+				shift := (action - 7) * 4
+				values[16881] = (values[16881] & ^(uint32(0x0F) << shift)) | (2 << shift)
+				if action == 10 {
+					values[16881] |= 0x07
+				}
+			case action == 11:
+				values[104453]++
+			}
+		case 3:
+			values[16882] = action
+			values[43299003]++
+		case 4:
+			values[16883] = action
+			values[43299004]++
+		case 5:
+			values[16886] |= 1 << (action - 1)
+			values[43299005]++
+		case 6:
+			values[43299000+group] = action
+			values[16886] |= 1 << (action + 3)
+		}
+		values[43299999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 43299, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[43299] 11689 篝火节动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap11488Action Map 11488 五怪击破完成标记。
+// 查询键 102713 的前 5 bit 表示五个目标完成态。
+func handleMap11488Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		if group == 2 && action == 5 {
+			values[102713] |= 0x1F
+		}
+		values[43711999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 43711, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[43711] 11488 完成标记: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap42306Action 2018 十一问答/收集活动链。
+// 关键查询键为 100719。
+func handleMap42306Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch group {
+		case 6:
+			shift := (action - 1) * 4
+			if action >= 1 && action <= 4 {
+				current := (values[100719] >> shift) & 0x0F
+				if current == 0 {
+					values[100719] = (values[100719] & ^(uint32(0x0F) << shift)) | (1 << shift)
+				}
+			}
+		case 8:
+			values[100719] = (values[100719] & ^(uint32(0x0F) << 12)) | (2 << 12)
+		case 5:
+			if action >= 1 && action <= 4 {
+				shift := (action - 1) * 4
+				values[100719] = (values[100719] & ^(uint32(0x0F) << shift)) | (2 << shift)
+			}
+		}
+		values[42306999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 42306, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[42306] 十一活动动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap42374Action 特定活动计时上报。
+func handleMap42374Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 16 {
+		a := binary.BigEndian.Uint32(ctx.Body[0:4])
+		b := binary.BigEndian.Uint32(ctx.Body[4:8])
+		c := binary.BigEndian.Uint32(ctx.Body[8:12])
+		d := binary.BigEndian.Uint32(ctx.Body[12:16])
+		values[42374000+a] = b
+		values[42374100+a] = c
+		values[42374200+a] = d
+		if a == 137 && b == 1 && c == 1 {
+			rank := uint32(1)
+			if d >= 240 {
+				rank = 3
+			}
+			if d >= 300 {
+				rank = 5
+			}
+			if d >= 420 {
+				rank = 8
+			}
+			if d >= 600 {
+				rank = 12
+			}
+			values[42374300+a] = rank
+		}
+		values[42374999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, 4)
+	rank := uint32(1)
+	if len(ctx.Body) >= 16 {
+		a := binary.BigEndian.Uint32(ctx.Body[0:4])
+		storyValueCacheMu.RLock()
+		if values := storyValueCache[ctx.UserID]; values != nil {
+			if value, ok := values[42374300+a]; ok && value > 0 {
+				rank = value
+			}
+		}
+		storyValueCacheMu.RUnlock()
+	}
+	binary.BigEndian.PutUint32(body[0:4], rank)
+	ctx.GameServer.SendResponse(ctx.ClientData, 42374, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[42374] 活动计时动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap42383Action Map 11899/11900 交互记录。
+func handleMap42383Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		values[42383000+group] = action
+		values[42383999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 42383, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[42383] 场景交互动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap43192Action 帝魂收集流程。
+func handleMap43192Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch group {
+		case 5:
+			if action >= 1 && action <= 10 {
+				values[15228] |= 1 << (action - 1)
+			}
+		case 6:
+			values[5352] |= 1 << 5
+		case 7:
+			values[5352] &^= 1 << 5
+		}
+		values[43192999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 43192, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[43192] 帝魂流程动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap43202Action Map 1207 单次离场/跳转打点。
+func handleMap43202Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		values[43202000+group] = action
+		values[43202999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 43202, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[43202] 1207 场景动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap46216Action Map 11202 挖矿完成动作。
+func handleMap46216Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		if group == 3 && action == 0 {
+			values[46216003]++
+		}
+		values[46216999]++
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 46216, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[46216] 挖矿完成动作: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+func buildValuePairsBody(ctx *gameserver.HandlerContext) []byte {
+	count := len(ctx.Body) / 4
+	body := make([]byte, 4+count*8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(count))
+	for index := 0; index < count; index++ {
+		key := binary.BigEndian.Uint32(ctx.Body[index*4 : index*4+4])
+		offset := 4 + index*8
+		binary.BigEndian.PutUint32(body[offset:offset+4], key)
+		binary.BigEndian.PutUint32(body[offset+4:offset+8], getStoryValue(ctx, key))
+	}
+	return body
+}
+
+func getStoryValue(ctx *gameserver.HandlerContext, key uint32) uint32 {
+	storyValueCacheMu.RLock()
+	if values, ok := storyValueCache[ctx.UserID]; ok {
+		if value, exists := values[key]; exists {
+			storyValueCacheMu.RUnlock()
+			return value
+		}
+	}
+	storyValueCacheMu.RUnlock()
+
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	if user == nil {
+		return 0
+	}
+
+	switch key {
+	case 586:
+		return 1
+	case 587:
+		return 1
+	case 588:
+		return 1
+	case 615:
+		return 0
+	case 616:
+		return 0
+	case 617:
+		return 0
+	case 618:
+		return 0
+	case 619:
+		return 0
+	case 11098:
+		return 0
+	case 124338:
+		return 0
+	case 263:
+		return 0
+	case 13910:
+		return 0
+	case 13911:
+		return 0
+	case 13912:
+		return 0
+	case 14573:
+		return 0
+	case 14574:
+		return 0
+	case 3845:
+		return 0
+	case 3846:
+		return 0
+	case 3847:
+		return 0
+	case 3915:
+		return 0
+	case 5352:
+		return 0
+	case 16868:
+		return 0
+	case 16870:
+		return 0
+	case 16871:
+		return 0
+	case 16872:
+		return 0
+	case 16873:
+		return 0
+	case 16880:
+		return 0
+	case 16881:
+		return 0
+	case 16882:
+		return 0
+	case 16883:
+		return 0
+	case 16886:
+		return 0
+	case 100719:
+		return 0
+	case 15228:
+		return 0
+	case 11591:
+		return 0
+	case 11592:
+		return 0
+	case 100445:
+		return 0
+	case 2797:
+		return 0
+	case 100326:
+		return 0
+	case 102713:
+		return 0
+	case 104641:
+		return 0
+	case 104440:
+		return 0
+	case 104453:
+		return 0
+	case 10575:
+		return 0
+	case 105807:
+		return 0
+	}
+
+	if user.MiningCount != nil {
+		if value, ok := user.MiningCount[int(key)]; ok {
+			return uint32(value)
+		}
+	}
+
+	return 0
+}
+
+// handleWheelStoryAction CMD 42215 命运之轮剧情流程推进。
+// [1,2,0] 初始化；[1,3,tmp] 推进一层；[1,4,0] 离开重置。
+func handleWheelStoryAction(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+
+	if len(ctx.Body) >= 12 {
+		action := binary.BigEndian.Uint32(ctx.Body[4:8])
+		param := binary.BigEndian.Uint32(ctx.Body[8:12])
+		switch action {
+		case 2:
+			if values[588] == 0 {
+				values[588] = 1
+			}
+			if values[586] == 0 {
+				values[586] = 1
+			}
+			if values[587] == 0 {
+				values[587] = 1
+			}
+		case 3:
+			if param == 2 {
+				values[588] = 2
+				values[100326] = 42
+				values[615] = 0
+				values[616] = 1
+				values[617] = 261
+				values[618] = 0
+				values[619] = 0
+				if values[586] == 0 {
+					values[586] = 21
+				}
+			} else {
+				if values[588] == 0 {
+					values[588] = 1
+				}
+				values[586]++
+				if values[586] == 0 {
+					values[586] = 1
+				}
+				values[587] = param + 1
+				values[616] = (values[586]-1)%4 + 1
+				values[617] = 261 + ((values[586] - 1) % 3)
+				values[618] = 0
+				values[619] = 0
+			}
+		case 4:
+			delete(storyValueCache, ctx.UserID)
+		}
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 42215, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[42215] 命运之轮流程推进: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap1189Click CMD 41259 地图 1189 点击隐藏点位后累计次数。
+func handleMap1189Click(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	values[11098]++
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 41259, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[41259] 地图1189点击累计: uid=%d total=%d", ctx.UserID, getCachedStoryValue(ctx.UserID, 11098)))
+}
+
+// handleMap1202Pickup CMD 41254 地图 1202 抢箱子。
+// 前端只读取第二个 uint，25 表示已被抢，否则视为成功。
+func handleMap1202Pickup(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	nowMinute := uint32(time.Now().Minute())
+	values[13910] = nowMinute
+	groupID := uint32(29)
+	if len(ctx.Body) >= 4 {
+		groupID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	result := uint32(0)
+	if groupID == 28 {
+		if values[13911] >= 2 {
+			result = 25
+		} else {
+			values[13911]++
+		}
+	} else {
+		if values[13912] >= 3 {
+			result = 25
+		} else {
+			values[13912]++
+		}
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	binary.BigEndian.PutUint32(body[4:8], result)
+	ctx.GameServer.SendResponse(ctx.ClientData, 41254, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[41254] 地图1202抢箱子: uid=%d group=%d result=%d", ctx.UserID, groupID, result))
+}
+
+// handleMap1717Action CMD 41900 设置位集 124338 的指定 bit。
+func handleMap1717Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	bitset := values[124338]
+	if len(ctx.Body) >= 8 {
+		bit := binary.BigEndian.Uint32(ctx.Body[4:8])
+		if bit < 32 {
+			bitset |= 1 << bit
+		}
+	}
+	values[124338] = bitset
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 41900, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[41900] 地图1717/1718位集更新: uid=%d value=%d", ctx.UserID, bitset))
+}
+
+// handleMap10806Reward CMD 41582 10806/10807 新春爆竹奖励。
+func handleMap10806Reward(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	mode := uint32(0)
+	if len(ctx.Body) >= 4 {
+		mode = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
+	switch mode {
+	case 1:
+		if values[11591] < 5 {
+			values[11591]++
+		}
+	case 2:
+		values[11592] = 1
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 41582, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[41582] 10806/10807奖励: uid=%d mode=%d", ctx.UserID, mode))
+}
+
+// handleMap10314Reward CMD 47007 10314 地图领奖。
+func handleMap10314Reward(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	values[47007] = 1
+	storyValueCacheMu.Unlock()
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 47007, ctx.UserID, ctx.SeqID, nil)
+	logger.Info(fmt.Sprintf("[47007] 地图10314领奖: uid=%d", ctx.UserID))
+}
+
+// handleMap11180Action CMD 42240 11180/11181 采集与领奖。
+func handleMap11180Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		action := binary.BigEndian.Uint32(ctx.Body[0:4])
+		param := binary.BigEndian.Uint32(ctx.Body[4:8])
+		if action == 1 {
+			values[100445] = uint32(time.Now().Unix())
+			values[42240] = param
+		} else if action == 2 {
+			values[263] = 0
+			values[100445] = 0
+		}
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 42240, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[42240] 11180/11181采集流程: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap41129Action CMD 41129 动态剧情地图战斗触发。
+func handleMap41129Action(ctx *gameserver.HandlerContext) {
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 41129, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[41129] 动态剧情战斗触发: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleChangeHistoryChoice CMD 43587 记录 10845/10846/10847 的历史选择。
+func handleChangeHistoryChoice(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		storyID := binary.BigEndian.Uint32(ctx.Body[0:4])
+		choice := binary.BigEndian.Uint32(ctx.Body[4:8])
+			values[43587000+storyID] = choice
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 43587, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[43587] 改变历史选择: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap47284Action CMD 47284 记录剧情阶段完成。
+func handleMap47284Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	if len(ctx.Body) >= 8 {
+		group := binary.BigEndian.Uint32(ctx.Body[0:4])
+		step := binary.BigEndian.Uint32(ctx.Body[4:8])
+		values[472840+step] = group
+	}
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 47284, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[47284] 剧情阶段记录: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMap47288Action CMD 47288 注入/采矿阶段推进。
+func handleMap47288Action(ctx *gameserver.HandlerContext) {
+	storyValueCacheMu.Lock()
+	values := storyValueCache[ctx.UserID]
+	if values == nil {
+		values = map[uint32]uint32{}
+		storyValueCache[ctx.UserID] = values
+	}
+	values[2797] += 10
+	storyValueCacheMu.Unlock()
+
+	body := make([]byte, len(ctx.Body))
+	copy(body, ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 47288, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[47288] 极炼魔晶注入进度: uid=%d total=%d", ctx.UserID, getCachedStoryValue(ctx.UserID, 2797)))
+}
+
+func getCachedStoryValue(userID int64, key uint32) uint32 {
+	storyValueCacheMu.RLock()
+	defer storyValueCacheMu.RUnlock()
+	if values, ok := storyValueCache[userID]; ok {
+		return values[key]
+	}
+	return 0
+}
+
+// handlePetBargeList CMD 2309 稀有/BOSS 精灵状态列表。
+// 包体: count(4) + N * [monID(4), encounterCount(4), isCatched(4), isKilled(4)]
+// 地图 58/61/62 只看 isKillList 是否为空；地图 669 只看 isCatchedList 中目标宠物是否为 1。
+// 最小可用实现返回请求中的宠物 ID，默认未捕获、未击杀、遇敌次数 0。
+// handlePetBargeListSimple CMD 2309 稀有/BOSS 精灵状态列表的简易实现（当前未注册使用）。
+func handlePetBargeListSimple(ctx *gameserver.HandlerContext) {
+	count := len(ctx.Body) / 4
+	if count <= 0 {
+		body := make([]byte, 4)
+		ctx.GameServer.SendResponse(ctx.ClientData, 2309, ctx.UserID, ctx.SeqID, body)
+		logger.Info(fmt.Sprintf("[2309] 精灵驳船列表: uid=%d count=0", ctx.UserID))
+		return
+	}
+
+	body := make([]byte, 4+count*16)
+	binary.BigEndian.PutUint32(body[0:4], uint32(count))
+	for index := 0; index < count; index++ {
+		monID := binary.BigEndian.Uint32(ctx.Body[index*4 : index*4+4])
+		offset := 4 + index*16
+		binary.BigEndian.PutUint32(body[offset:offset+4], monID)
+		binary.BigEndian.PutUint32(body[offset+4:offset+8], 0)
+		binary.BigEndian.PutUint32(body[offset+8:offset+12], 0)
+		binary.BigEndian.PutUint32(body[offset+12:offset+16], 0)
+	}
+
+	ctx.GameServer.SendResponse(ctx.ClientData, 2309, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2309] 精灵驳船列表: uid=%d count=%d", ctx.UserID, count))
+}
+
+// handleFreshLeaveFightLevel CMD 2430 刷新离开战斗层级。
+func handleFreshLeaveFightLevel(ctx *gameserver.HandlerContext) {
+	ctx.GameServer.SendResponse(ctx.ClientData, 2430, ctx.UserID, ctx.SeqID, nil)
+	logger.Info(fmt.Sprintf("[2430] 刷新离开战斗层级: uid=%d", ctx.UserID))
+}
+
+// handleMLFightBoss CMD 2442 迷宫/机械类地图 Boss 交互。
+func handleMLFightBoss(ctx *gameserver.HandlerContext) {
+        body := make([]byte, 8+len(ctx.Body))
+        binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+        binary.BigEndian.PutUint32(body[4:8], uint32(len(ctx.Body)))
+        copy(body[8:], ctx.Body)
+        ctx.GameServer.SendResponse(ctx.ClientData, 2442, ctx.UserID, ctx.SeqID, body)
+        logger.Info(fmt.Sprintf("[2442] ML 挑战 Boss: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMLBossState CMD 2444 米咔Boss状态
+func handleMLBossState(ctx *gameserver.HandlerContext) {
+        body := make([]byte, 8)
+        binary.BigEndian.PutUint32(body[0:4], 0)
+        binary.BigEndian.PutUint32(body[4:8], 0)
+        ctx.GameServer.SendResponse(ctx.ClientData, 2444, ctx.UserID, ctx.SeqID, body)
+        logger.Info(fmt.Sprintf("[2444] ML Boss状态: uid=%d", ctx.UserID))
+}
+
+// handleMLStepPos CMD 2445 迷宫步进位置上报。
+func handleMLStepPos(ctx *gameserver.HandlerContext) {
+        body := make([]byte, 8+len(ctx.Body))
+        binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+        binary.BigEndian.PutUint32(body[4:8], uint32(len(ctx.Body)))
+        copy(body[8:], ctx.Body)
+        ctx.GameServer.SendResponse(ctx.ClientData, 2445, ctx.UserID, ctx.SeqID, body)
+        logger.Info(fmt.Sprintf("[2445] ML 步进位置: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+}
+
+// handleMLGetPrize CMD 2446 迷宫领取奖励。
+func handleMLGetPrize(ctx *gameserver.HandlerContext) {
+        body := make([]byte, 12)
+        binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+        binary.BigEndian.PutUint32(body[4:8], 1)
+        binary.BigEndian.PutUint32(body[8:12], 1)
+        ctx.GameServer.SendResponse(ctx.ClientData, 2446, ctx.UserID, ctx.SeqID, body)
+        logger.Info(fmt.Sprintf("[2446] ML 领取奖励: uid=%d", ctx.UserID))
+}
+
+// handleSkillSort CMD 2328 技能排序
+func handleSkillSort(ctx *gameserver.HandlerContext) {
+        if len(ctx.Body) >= 8 {
+                catchTime := int(binary.BigEndian.Uint32(ctx.Body[0:4]))
+                skillCount := int(binary.BigEndian.Uint32(ctx.Body[4:8]))
+                if skillCount > 0 && len(ctx.Body) >= 8+skillCount*4 {
+                        user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+                        for index := range user.Pets {
+                                if user.Pets[index].CatchTime != catchTime {
+                                        continue
+                                }
+                                newSkills := make([]int, 0, skillCount)
+                                for i := 0; i < skillCount; i++ {
+                                        off := 8 + i*4
+                                        newSkills = append(newSkills, int(binary.BigEndian.Uint32(ctx.Body[off:off+4])))
+                                }
+                                user.Pets[index].Skills = newSkills
+                                if ctx.GameServer.UserDB != nil {
+                                        ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+                                }
+                                break
+                        }
+                }
+        }
+        body := make([]byte, 4)
+        ctx.GameServer.SendResponse(ctx.ClientData, 2328, ctx.UserID, ctx.SeqID, body)
+}
+
+// handleGetNoNoPartyReward CMD 9331 诺诺派对奖励。
+func handleGetNoNoPartyReward(ctx *gameserver.HandlerContext) {
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	binary.BigEndian.PutUint32(body[4:8], 1)
+	ctx.GameServer.SendResponse(ctx.ClientData, 9331, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[9331] 诺诺派对奖励: uid=%d", ctx.UserID))
+}
+
+// handleStartPetWar CMD 2431 开始精灵大乱斗
+// 客户端发送此命令开始精灵大乱斗匹配（需要携带3只以上精灵）
+// 匹配成功后双方收到2503/2504进入战斗，支持多精灵同时出战
+func handleStartPetWar(ctx *gameserver.HandlerContext) {
+	uid := ctx.UserID
+
+	// 检查用户是否有至少3只精灵（大乱斗要求）
+	user := ctx.GameServer.GetOrCreateUser(uid)
+	if len(user.Pets) < 3 {
+		// 精灵不足，返回错误（这里暂时返回成功让客户端处理提示）
+		logger.Warning(fmt.Sprintf("[2431] 精灵不足无法参加大乱斗: UID=%d, 精灵数量=%d", uid, len(user.Pets)))
+	}
+
+	// 回复4字节0作为ACK
+	ack := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2431, uid, ctx.SeqID, ack)
+
+	// 加入匹配队列
+	petWarQueueMu.Lock()
+	defer petWarQueueMu.Unlock()
+
+	// 尝试匹配对手
+	var opponent petWarQueueEntry
+	var idx = -1
+	for i, e := range petWarQueue {
+		if e.UserID != uid {
+			opponent = e
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		// 没有可匹配对手，入队等待
+		petWarQueue = append(petWarQueue, petWarQueueEntry{
+			UserID: uid,
+			Mode:   0,
+			Type:   0,
+		})
+		logger.Info(fmt.Sprintf("[2431] 精灵大乱斗排队: UID=%d 等待对手", uid))
+		return
+	}
+
+	// 匹配成功：从队列移除对手
+	petWarQueue = append(petWarQueue[:idx], petWarQueue[idx+1:]...)
+	opponentUID := opponent.UserID
+
+	// 在锁外完成后续较重操作
+	go func(player1UID, player2UID int64) {
+		player1Client := ctx.GameServer.GetClientByUserID(player1UID)
+		player2Client := ctx.GameServer.GetClientByUserID(player2UID)
+		if player1Client == nil || player2Client == nil {
+			logger.Warning(fmt.Sprintf("[2431] 精灵大乱斗匹配失败: 一方已下线 UID=%d vs UID=%d", player1UID, player2UID))
+			return
+		}
+
+		player1 := ctx.GameServer.GetOrCreateUser(player1UID)
+		player2 := ctx.GameServer.GetOrCreateUser(player2UID)
+		player1Indexes := choosePetWarIndexes(player1)
+		player2Indexes := choosePetWarIndexes(player2)
+
+		// 构建多精灵2503包体（双方从全部背包随机抽取 3 只参战）
+		setPetWarBattleStates(ctx.GameServer, player1UID, player2UID, player1Indexes, player2Indexes)
+		body2503P1, body2503P2 := buildPetWarNoteReadyToFight(ctx.GameServer, player1UID, player2UID, player1Indexes, player2Indexes)
+		ctx.GameServer.SendResponse(player1Client, 2503, player1UID, 0, body2503P1)
+		ctx.GameServer.SendResponse(player2Client, 2503, player2UID, 0, body2503P2)
+
+		// 构建2504开始战斗包
+		body2504P1, body2504P2 := buildPetWarNoteStartFight(ctx.GameServer, player1UID, player2UID, player1Indexes, player2Indexes)
+		if len(body2504P1) > 0 {
+			ctx.GameServer.SendResponse(player1Client, 2504, player1UID, 0, body2504P1)
+		}
+		if len(body2504P2) > 0 {
+			ctx.GameServer.SendResponse(player2Client, 2504, player2UID, 0, body2504P2)
+		}
+
+		// 发送2301完整宠物信息（双方各发送自己的第一只精灵）
+		player1Pets := getPetWarPetList(player1, player1Indexes)
+		player2Pets := getPetWarPetList(player2, player2Indexes)
+		if len(player1Pets) > 0 {
+			petInfoBody1 := buildFullPetInfo(player1Pets[0])
+			ctx.GameServer.SendResponse(player1Client, 2301, player1UID, 0, petInfoBody1)
+		}
+		if len(player2Pets) > 0 {
+			petInfoBody2 := buildFullPetInfo(player2Pets[0])
+			ctx.GameServer.SendResponse(player2Client, 2301, player2UID, 0, petInfoBody2)
+		}
+
+		logger.Info(fmt.Sprintf("[2431] 精灵大乱斗匹配成功: UID=%d vs UID=%d", player1UID, player2UID))
+	}(opponentUID, uid)
+}
+
+// buildPetWarNoteReadyToFight 构建精灵大乱斗的2503包体（多精灵版本）
+// 格式：userCount(4) + [FighetUserInfo(20) + petCount(4) + SimplePetInfo(76)*N] * 2
+// 每位玩家发送自己的所有精灵
+func buildPetWarNoteReadyToFight(gs *gameserver.GameServer, player1UID, player2UID int64, player1Indexes, player2Indexes []int) (p1Body, p2Body []byte) {
+	petMgr := gamepets.GetInstance()
+	skillMgr := gameskills.GetInstance()
+
+	buildFightUserInfo := func(uid uint32, nick string) []byte {
+		b := make([]byte, 20)
+		binary.BigEndian.PutUint32(b[0:4], uid)
+		nb := []byte(nick)
+		if len(nb) > 16 {
+			nb = nb[:16]
+		}
+		copy(b[4:20], nb)
+		return b
+	}
+
+	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32, skinID uint32, shiny uint32) []byte {
+		b := make([]byte, 76)
+		binary.BigEndian.PutUint32(b[0:4], petID)
+		binary.BigEndian.PutUint32(b[4:8], level)
+		binary.BigEndian.PutUint32(b[8:12], hp)
+		binary.BigEndian.PutUint32(b[12:16], maxHp)
+		valid := uint32(0)
+		for _, s := range skills {
+			if s[0] != 0 {
+				valid++
+			}
+		}
+		binary.BigEndian.PutUint32(b[16:20], valid)
+		off := 20
+		for i := 0; i < 4; i++ {
+			var sid, pp uint32
+			if i < len(skills) {
+				sid, pp = skills[i][0], skills[i][1]
+			}
+			binary.BigEndian.PutUint32(b[off:off+4], sid)
+			binary.BigEndian.PutUint32(b[off+4:off+8], pp)
+			off += 8
+		}
+		binary.BigEndian.PutUint32(b[52:56], catchTime)
+		binary.BigEndian.PutUint32(b[56:60], 0)
+		binary.BigEndian.PutUint32(b[60:64], 0)
+		binary.BigEndian.PutUint32(b[64:68], 0)
+		binary.BigEndian.PutUint32(b[68:72], petID)
+		binary.BigEndian.PutUint32(b[72:76], shiny)
+		return b
+	}
+
+	getUserPets := func(uid int64, indexes []int) (pets []struct {
+		petID     int
+		level     int
+		catchTime uint32
+		hp, maxHp int
+		skills    [][2]uint32
+		nick      string
+	}) {
+		u := gs.GetOrCreateUser(uid)
+		selectedPets := getPetWarPetList(u, indexes)
+		nick := u.Nick
+		if nick == "" {
+			nick = fmt.Sprintf("用户%d", uid)
+		}
+                for _, pet := range selectedPets {
+			level := pet.Level
+			if level <= 0 {
+				level = 5
+			}
+			ev := pet.GetEVStats()
+			nature := pet.Nature
+			st := petMgr.GetStats(pet.ID, level, nature, ev, 0)
+			hp, maxHp := st.HP, st.MaxHP
+			if maxHp <= 0 {
+				maxHp = 1
+			}
+			if hp < 0 {
+				hp = 0
+			}
+			if hp > maxHp {
+				hp = maxHp
+			}
+
+			// 获取技能列表 - 使用与buildNoteReadyToFightInfoPvP相同的方式
+			var skills [][2]uint32
+			raw := petMgr.GetSkillsForLevel(pet.ID, level)
+			for _, sid := range raw {
+				if sid <= 0 {
+					continue
+				}
+				pp := uint32(20)
+				if sk := skillMgr.Get(sid); sk != nil {
+					if sk.PP > 0 {
+						pp = uint32(sk.PP)
+					} else if sk.MaxPP > 0 {
+						pp = uint32(sk.MaxPP)
+					}
+				}
+				skills = append(skills, [2]uint32{uint32(sid), pp})
+				if len(skills) >= 4 {
+					break
+				}
+			}
+			if len(skills) == 0 {
+				skills = append(skills, [2]uint32{10001, 20})
+			}
+
+			pets = append(pets, struct {
+				petID     int
+				level     int
+				catchTime uint32
+				hp, maxHp int
+				skills    [][2]uint32
+				nick      string
+			}{
+				petID:     pet.ID,
+				level:     level,
+				catchTime: uint32(pet.CatchTime),
+				hp:        hp,
+				maxHp:     maxHp,
+				skills:    skills,
+				nick:      nick,
+			})
+		}
+		return
+	}
+
+	// 先为双方获取本场大乱斗可用的精灵列表
+	pets1 := getUserPets(player1UID, player1Indexes)
+	pets2 := getUserPets(player2UID, player2Indexes)
+
+	if len(pets1) == 0 || len(pets2) == 0 {
+		return nil, nil
+	}
+
+	// 计算包体大小：userCount(4) + [userInfo(20) + petCount(4) + petInfo(76)*count] * 2
+	size := 4 + (20 + 4 + 76*len(pets1)) + (20 + 4 + 76*len(pets2))
+	p1Body = make([]byte, size)
+	off := 0
+
+	// userCount = 2
+	binary.BigEndian.PutUint32(p1Body[off:off+4], 2)
+	off += 4
+
+	// 玩家1信息
+	copy(p1Body[off:off+20], buildFightUserInfo(uint32(player1UID), pets1[0].nick))
+	off += 20
+	binary.BigEndian.PutUint32(p1Body[off:off+4], uint32(len(pets1)))
+	off += 4
+	for _, p := range pets1 {
+		copy(p1Body[off:off+76], buildSimplePetInfo(uint32(p.petID), uint32(p.level), uint32(p.hp), uint32(p.maxHp), p.catchTime, p.skills, uint32(p.petID), 0))
+		off += 76
+	}
+
+	// 玩家2信息
+	copy(p1Body[off:off+20], buildFightUserInfo(uint32(player2UID), pets2[0].nick))
+	off += 20
+	binary.BigEndian.PutUint32(p1Body[off:off+4], uint32(len(pets2)))
+	off += 4
+	for _, p := range pets2 {
+		copy(p1Body[off:off+76], buildSimplePetInfo(uint32(p.petID), uint32(p.level), uint32(p.hp), uint32(p.maxHp), p.catchTime, p.skills, uint32(p.petID), 0))
+		off += 76
+	}
+
+	// 为玩家2构建包体时交换顺序
+	size = len(p1Body)
+	p2Body = make([]byte, size)
+	copy(p2Body, p1Body)
+	// 交换两个玩家数据块的位置
+	block1Size := 20 + 4 + 76*len(pets1)
+	block2Size := 20 + 4 + 76*len(pets2)
+	offset1 := 4
+	offset2 := 4 + block1Size
+	// 将玩家2数据块复制到位置1，玩家1数据块复制到位置2
+	temp := make([]byte, block1Size)
+	copy(temp, p2Body[offset1:offset1+block1Size])
+	copy(p2Body[offset1:offset1+block2Size], p2Body[offset2:offset2+block2Size])
+	copy(p2Body[offset1+block2Size:offset1+block2Size+block1Size], temp)
+
+	return p1Body, p2Body
+}
+
+// buildPetWarNoteStartFight 构建精灵大乱斗的2504包体
+// 格式：isCanAuto(4) + [FightPetInfo]*2
+// FightPetInfo: userID(4) + petID(4) + petName(16) + catchTime(4) + hp(4) + maxHp(4) + level(4) + catchable(4) + battleLv(6)
+func buildPetWarNoteStartFight(gs *gameserver.GameServer, player1UID, player2UID int64, player1Indexes, player2Indexes []int) (p1Body, p2Body []byte) {
+	petMgr := gamepets.GetInstance()
+
+	// 获取用户首发精灵信息（仅使用本场大乱斗随机到的三只）
+	getFirstPet := func(uid int64, indexes []int) (petID, level, hp, maxHp, catchTime uint32, petName string) {
+		u := gs.GetOrCreateUser(uid)
+		pets := getPetWarPetList(u, indexes)
+		if len(pets) > 0 {
+			pet := pets[0]
+			petID = uint32(pet.ID)
+			level = uint32(pet.Level)
+			catchTime = uint32(pet.CatchTime)
+			if catchTime == 0 {
+				catchTime = 0x69686700 + uint32(pet.ID)
+			}
+			petName = pet.Name
+			if petName == "" {
+				petName = fmt.Sprintf("Pet%d", pet.ID)
+			}
+			if len(petName) > 16 {
+				petName = petName[:16]
+			}
+
+			// 计算HP
+			ev := pet.GetEVStats()
+			nature := pet.Nature
+			stats := petMgr.GetStats(pet.ID, int(level), nature, ev, 0)
+			hp, maxHp = uint32(stats.HP), uint32(stats.MaxHP)
+			if maxHp <= 0 {
+				maxHp = 1
+			}
+			if hp < 0 {
+				hp = 0
+			}
+			if hp > maxHp {
+				hp = maxHp
+			}
+		}
+		return
+	}
+
+	p1PetID, p1Lv, p1Hp, p1MaxHp, p1CatchTime, p1Name := getFirstPet(player1UID, player1Indexes)
+	p2PetID, p2Lv, p2Hp, p2MaxHp, p2CatchTime, p2Name := getFirstPet(player2UID, player2Indexes)
+
+	// 构建单个 FightPetInfo
+	buildFightPetInfo := func(userID, petID, level, hp, maxHp, catchTime uint32, petName string) []byte {
+		b := make([]byte, 46) // 4+4+16+4+4+4+4+4+6
+		binary.BigEndian.PutUint32(b[0:4], userID)
+		binary.BigEndian.PutUint32(b[4:8], petID)
+		nameBytes := []byte(petName)
+		if len(nameBytes) > 16 {
+			nameBytes = nameBytes[:16]
+		}
+		copy(b[8:24], nameBytes)
+		binary.BigEndian.PutUint32(b[24:28], catchTime)
+		binary.BigEndian.PutUint32(b[28:32], hp)
+		binary.BigEndian.PutUint32(b[32:36], maxHp)
+		binary.BigEndian.PutUint32(b[36:40], level)
+		binary.BigEndian.PutUint32(b[40:44], 0) // catchable = false
+		// battleLv (6 bytes) - 默认全0
+		return b
+	}
+
+	// 玩家1收到的包：[自己, 对方]
+	p1Body = make([]byte, 0, 4+46*2)
+	tmp4 := make([]byte, 4)
+	binary.BigEndian.PutUint32(tmp4, 1) // isCanAuto = true
+	p1Body = append(p1Body, tmp4...)
+	p1Body = append(p1Body, buildFightPetInfo(uint32(player1UID), p1PetID, p1Lv, p1Hp, p1MaxHp, p1CatchTime, p1Name)...)
+	p1Body = append(p1Body, buildFightPetInfo(uint32(player2UID), p2PetID, p2Lv, p2Hp, p2MaxHp, p2CatchTime, p2Name)...)
+
+	// 玩家2收到的包：[自己, 对方]
+	p2Body = make([]byte, 0, 4+46*2)
+	binary.BigEndian.PutUint32(tmp4, 1) // isCanAuto = true
+	p2Body = append(p2Body, tmp4...)
+	p2Body = append(p2Body, buildFightPetInfo(uint32(player2UID), p2PetID, p2Lv, p2Hp, p2MaxHp, p2CatchTime, p2Name)...)
+	p2Body = append(p2Body, buildFightPetInfo(uint32(player1UID), p1PetID, p1Lv, p1Hp, p1MaxHp, p1CatchTime, p1Name)...)
+
+	return p1Body, p2Body
+}
+
+// setPetWarBattleStates 初始化精灵大乱斗战斗状态（多精灵）
+func setPetWarBattleStates(gs *gameserver.GameServer, player1UID, player2UID int64, player1Indexes, player2Indexes []int) {
+	petMgr := gamepets.GetInstance()
+
+        getPetsInfo := func(uid int64, indexes []int) (petIDs []int, hps, maxHps []int) {
+                u := gs.GetOrCreateUser(uid)
+                for _, pet := range getPetWarPetList(u, indexes) {
+			lv := pet.Level
+			if lv <= 0 {
+				lv = 5
+			}
+			ev := pet.GetEVStats()
+			nature := pet.Nature
+			st := petMgr.GetStats(pet.ID, lv, nature, ev, 0)
+			hp, maxHp := st.HP, st.MaxHP
+			if maxHp <= 0 {
+				maxHp = 1
+			}
+			if hp < 0 {
+				hp = 0
+			}
+			if hp > maxHp {
+				hp = maxHp
+			}
+			petIDs = append(petIDs, pet.ID)
+			hps = append(hps, hp)
+			maxHps = append(maxHps, maxHp)
+		}
+		return
+	}
+
+        p1PetIDs, p1Hps, p1MaxHps := getPetsInfo(player1UID, player1Indexes)
+        p2PetIDs, p2Hps, p2MaxHps := getPetsInfo(player2UID, player2Indexes)
+
+	// 获取首发精灵信息
+	p1FirstPetID, p1FirstHp, p1FirstMaxHp := 7, 0, 0
+	if len(p1PetIDs) > 0 {
+		p1FirstPetID = p1PetIDs[0]
+		p1FirstHp = p1Hps[0]
+		p1FirstMaxHp = p1MaxHps[0]
+	}
+
+	p2FirstPetID, p2FirstHp, p2FirstMaxHp := 7, 0, 0
+	if len(p2PetIDs) > 0 {
+		p2FirstPetID = p2PetIDs[0]
+		p2FirstHp = p2Hps[0]
+		p2FirstMaxHp = p2MaxHps[0]
+	}
+
+	gs.BattleMu.Lock()
+	defer gs.BattleMu.Unlock()
+
+	// 玩家1的战斗状态
+	gs.BattleStates[player1UID] = &gameserver.BattleState{
+		PlayerHP:        uint32(p1FirstHp),
+		PlayerMaxHP:     uint32(p1FirstMaxHp),
+		EnemyHP:         uint32(p2FirstHp),
+		EnemyMaxHP:      uint32(p2FirstMaxHp),
+		EnemyID:         p2FirstPetID,
+		EnemyLevel:      5,
+		TotalPlayerPets: len(p1PetIDs),
+		DeadPlayerPets:  0,
+		IsActive:        true,
+                OpponentUserID:  player2UID,
+                AllowedPetIndexes: append([]int(nil), player1Indexes...),
+	}
+
+	// 玩家2的战斗状态
+	gs.BattleStates[player2UID] = &gameserver.BattleState{
+		PlayerHP:        uint32(p2FirstHp),
+		PlayerMaxHP:     uint32(p2FirstMaxHp),
+		EnemyHP:         uint32(p1FirstHp),
+		EnemyMaxHP:      uint32(p1FirstMaxHp),
+		EnemyID:         p1FirstPetID,
+		EnemyLevel:      5,
+		TotalPlayerPets: len(p2PetIDs),
+		DeadPlayerPets:  0,
+		IsActive:        true,
+                OpponentUserID:  player1UID,
+                AllowedPetIndexes: append([]int(nil), player2Indexes...),
+        }
 }

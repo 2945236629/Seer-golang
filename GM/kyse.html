@@ -6,50 +6,65 @@
     <title>KYSE 赛尔号 GM 管理系统</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        /* 扁平式 UI：纯色、无渐变、无阴影、简洁边框 */
-        :root { --kyse-primary: #1f2937; --kyse-primary-light: #374151; --kyse-primary-dark: #111827; --kyse-success: #059669; --kyse-danger: #dc2626; --kyse-border: #e5e7eb; --kyse-bg: #f3f4f6; --kyse-sidebar-width: 256px; }
+        /* KOSE 风格：深色侧栏、扁平化、简洁边框 */
+        :root { --kyse-primary: #2B2E33; --kyse-primary-light: #393D42; --kyse-primary-dark: #1f2226; --kyse-success: #059669; --kyse-danger: #dc2626; --kyse-border: #e5e7eb; --kyse-bg: #F8F9FA; --kyse-sidebar-width: 240px; --kyse-accent: #2563eb; }
         * { box-sizing: border-box; }
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Roboto, sans-serif; background: var(--kyse-bg); -webkit-font-smoothing: antialiased; }
+        html, body { height: 100%; margin: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Roboto, sans-serif; background: var(--kyse-bg); -webkit-font-smoothing: antialiased; }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #e5e7eb; }
         ::-webkit-scrollbar-thumb { background: #9ca3af; }
-        .kyse-layout { display: flex; height: 100vh; overflow: hidden; }
-        .kyse-sidebar { width: var(--kyse-sidebar-width); background: #fff; border-right: 1px solid var(--kyse-border); display: flex; flex-direction: column; flex-shrink: 0; }
-        .kyse-sidebar .logo { padding: 20px; border-bottom: 1px solid var(--kyse-border); }
+        .kyse-layout { display: flex; height: 100vh; min-height: 0; overflow: hidden; }
+        /* 深色侧栏 */
+        .kyse-sidebar { width: var(--kyse-sidebar-width); background: var(--kyse-primary); border-right: none; display: flex; flex-direction: column; flex-shrink: 0; }
+        .kyse-sidebar .logo { padding: 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
         .kyse-sidebar .logo-inner { display: flex; align-items: center; gap: 12px; }
-        .kyse-sidebar .logo-icon { width: 36px; height: 36px; background: var(--kyse-primary); border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; font-weight: 700; }
-        .kyse-sidebar .logo h2 { margin: 0; font-size: 1.125rem; font-weight: 700; color: #111827; }
-        .kyse-sidebar .logo p { margin: 2px 0 0; font-size: 12px; color: #6b7280; }
-        .kyse-nav { padding: 8px 0; }
-        .kyse-nav-item { padding: 10px 16px; margin: 2px 12px; cursor: pointer; transition: background 0.15s; border-radius: 4px; color: #4b5563; font-weight: 500; border: none; background: transparent; width: 100%; text-align: left; font-size: 14px; }
-        .kyse-nav-item:hover { background: #f3f4f6; color: #111827; }
-        .kyse-nav-item.active { background: var(--kyse-primary); color: #fff; }
-        .kyse-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
-        .kyse-header { background: #fff; border-bottom: 1px solid var(--kyse-border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-        .kyse-header h3 { margin: 0; font-size: 1rem; font-weight: 600; color: #111827; }
-        .kyse-header-actions { display: flex; align-items: center; gap: 8px; }
-        .kyse-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 4px; font-weight: 500; border: 1px solid transparent; cursor: pointer; transition: background 0.15s, border-color 0.15s; font-size: 14px; }
-        .kyse-btn-primary { background: var(--kyse-primary); color: #fff; }
-        .kyse-btn-primary:hover { background: var(--kyse-primary-dark); color: #fff; }
+        .kyse-sidebar .logo-icon { width: 36px; height: 36px; background: rgba(255,255,255,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; }
+        .kyse-sidebar .logo-icon svg { width: 20px; height: 20px; opacity: 0.9; }
+        .kyse-sidebar .logo h2 { margin: 0; font-size: 1.25rem; font-weight: 700; color: #fff; }
+        .kyse-sidebar .logo p { margin: 2px 0 0; font-size: 12px; color: rgba(255,255,255,0.65); }
+        .kyse-nav { padding: 12px 0; flex: 1; overflow-y: auto; }
+        .kyse-nav-group { margin-bottom: 8px; }
+        .kyse-nav-group-title { padding: 8px 16px 6px; font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+        .kyse-nav-group-title:hover { color: rgba(255,255,255,0.8); }
+        .kyse-nav-group-title .caret { font-size: 10px; transition: transform 0.2s; }
+        .kyse-nav-group.collapsed .kyse-nav-group-title .caret { transform: rotate(-90deg); }
+        .kyse-nav-group.collapsed .kyse-nav-items { display: none; }
+        .kyse-nav-items { padding: 0 8px; }
+        .kyse-nav-item { padding: 10px 12px; margin: 2px 0; cursor: pointer; transition: background 0.15s; border-radius: 6px; color: rgba(255,255,255,0.85); font-weight: 500; border: none; background: transparent; width: 100%; text-align: left; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+        .kyse-nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .kyse-nav-item.active { background: var(--kyse-primary-light); color: #fff; border-left: 3px solid var(--kyse-accent); padding-left: 9px; }
+        .kyse-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+        .kyse-header { background: #fff; border-bottom: 1px solid var(--kyse-border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .kyse-header h3 { margin: 0; font-size: 1.125rem; font-weight: 600; color: #111827; }
+        .kyse-header-actions { display: flex; align-items: center; gap: 10px; }
+        .kyse-btn-ghost { background: #fff; color: #6b7280; border: 1px solid #d1d5db; padding: 6px 12px; font-size: 13px; }
+        .kyse-btn-ghost:hover { background: #f9fafb; color: #374151; border-color: #9ca3af; }
+        .kyse-btn-ghost.text-success { color: var(--kyse-success); border-color: transparent; }
+        .kyse-btn-ghost.text-success:hover { color: #047857; }
+        .kyse-status-pill { padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; background: var(--kyse-accent); color: #fff; display: inline-flex; align-items: center; gap: 6px; }
+        .kyse-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 6px; font-weight: 500; border: 1px solid transparent; cursor: pointer; transition: background 0.15s, border-color 0.15s; font-size: 14px; }
+        .kyse-btn-primary { background: var(--kyse-accent); color: #fff; }
+        .kyse-btn-primary:hover { background: #1d4ed8; color: #fff; }
         .kyse-btn-success { background: var(--kyse-success); color: #fff; }
         .kyse-btn-success:hover { background: #047857; color: #fff; }
         .kyse-btn-danger { background: var(--kyse-danger); color: #fff; }
         .kyse-btn-danger:hover { background: #b91c1c; color: #fff; }
         .kyse-btn-secondary { background: #fff; color: #374151; border-color: var(--kyse-border); }
         .kyse-btn-secondary:hover { background: #f9fafb; border-color: #9ca3af; }
-        .kyse-content { flex: 1; overflow: auto; padding: 20px; background: var(--kyse-bg); }
+        .kyse-content { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px; background: var(--kyse-bg); -webkit-overflow-scrolling: touch; }
         .content-section { display: none; }
         .content-section.active { display: block; }
-        .page-block { background: #fff; border-radius: 4px; border: 1px solid var(--kyse-border); overflow: hidden; margin-bottom: 20px; }
+        .page-block { background: #fff; border-radius: 4px; border: 1px solid var(--kyse-border); overflow: visible; margin-bottom: 20px; max-width: 100%; }
         .page-block-header { background: var(--kyse-primary); color: #fff; padding: 12px 20px; font-size: 1rem; font-weight: 600; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
         .page-block-header.collapsible { cursor: pointer; user-select: none; }
         .page-block-header.collapsible:hover { background: var(--kyse-primary-light); }
         .page-block-header .collapse-icon { transition: transform 0.3s ease; display: inline-block; margin-right: 8px; font-size: 14px; }
         .page-block-header.collapsed .collapse-icon { transform: rotate(-90deg); }
-        .page-block-body { padding: 20px; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.3s ease; }
-        .page-block-body:not(.collapsed) { max-height: 5000px; }
-        .page-block-body.collapsed { max-height: 0; padding: 0 20px; opacity: 0; }
-        .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+        .page-block-body { padding: 20px; overflow: visible; transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.3s ease; }
+        .page-block-body:not(.collapsed) { max-height: 50000px; }
+        .page-block-body.collapsed { max-height: 0; padding: 0 20px; opacity: 0; overflow: hidden; }
+        .stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; max-width: 100%; }
         @media (max-width: 992px) { .stat-cards { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 576px) { .stat-cards { grid-template-columns: 1fr; } }
         .stat-card { background: #fff; border-radius: 4px; border: 1px solid var(--kyse-border); overflow: hidden; }
@@ -68,7 +83,7 @@
         .item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
         .item-box { border: 1px solid var(--kyse-border); border-radius: 4px; padding: 10px; text-align: center; background: #fff; }
         .pet-card { border: 1px solid var(--kyse-border); border-radius: 4px; padding: 12px; margin-bottom: 8px; background: #fff; }
-        .scroll-panel { max-height: 400px; overflow-y: auto; }
+        .scroll-panel { max-height: min(65vh, 600px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
         .kyse-input { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; background: #fff; }
         .kyse-input:focus { outline: none; border-color: var(--kyse-primary); }
         #dashboardDatabaseInfo { color: #6b7280; font-size: 13px; }
@@ -78,15 +93,16 @@
         .weights-table th, .weights-table td { padding: 10px 12px; border-bottom: 1px solid var(--kyse-border); text-align: left; }
         .weights-table th { background: #f9fafb; font-weight: 600; color: #374151; font-size: 13px; }
         .weights-table tbody tr:hover { background: #f9fafb; }
-        /* 数据框宽度比内容宽约 2 字符，避免数字/括号被截断；number 需预留 spinner 空间 */
-        .weights-table input.form-control-sm[type="number"] { min-width: 7ch; width: 7ch; box-sizing: border-box; padding-right: 4px; }
+        /* 所有页面块内容不做高度裁剪，确保功能完整显示 */
+        /* 數據框寬度比內容寬約 2 字符，避免數字/括號被截斷；number 需預留 spinner 空間 */
+        .weights-table input.form-control-sm[type="number"] { min-width: 10ch; width: 10ch; box-sizing: border-box; padding-right: 4px; }
         .weights-table input.form-control-sm[type="text"] { min-width: calc(12ch + 6ch); box-sizing: border-box; }
         .weights-table .num-cell { white-space: nowrap; }
         .num-spin { display: inline-flex; align-items: center; gap: 4px; }
         .num-spin input { width: 96px; min-width: 96px; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; text-align: center; background: #fff; box-sizing: border-box; }
         .num-spin button { width: 28px; height: 28px; padding: 0; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer; font-size: 14px; line-height: 1; }
         .num-spin button:hover { background: #f3f4f6; border-color: #9ca3af; }
-        .weights-fusion-scroll { max-height: 400px; overflow-y: auto; }
+        .weights-fusion-scroll { max-height: min(65vh, 600px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
         .weights-sub-block { margin-bottom: 16px; border: 1px solid var(--kyse-border); border-radius: 4px; overflow: hidden; }
         .weights-sub-block .weights-sub-header { background: #f9fafb; color: #374151; font-size: 14px; }
         .weights-sub-block .weights-sub-header:hover { background: #f3f4f6; }
@@ -100,6 +116,42 @@
         .modal-body { padding: 16px; }
         .modal-footer { border-top: 1px solid var(--kyse-border); padding: 12px 16px; }
         .form-control, .form-select { border-radius: 4px; border: 1px solid #d1d5db; }
+        /* 地图配置卡片式列表 */
+        .maps-config-block { background: var(--kyse-primary); border-radius: 8px; overflow: hidden; margin-bottom: 20px; max-width: 100%; }
+        .maps-config-header { padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+        .maps-config-header .title { color: #fff; font-size: 1rem; font-weight: 600; }
+        .maps-config-header .sub { color: rgba(255,255,255,0.7); font-size: 13px; margin-left: 8px; }
+        .maps-config-header .actions { display: flex; gap: 8px; }
+        .maps-config-body { background: #fff; padding: 16px 20px; }
+        .maps-search-wrap { margin-bottom: 16px; position: relative; }
+        .maps-search-wrap input { padding-left: 36px; }
+        .maps-search-wrap::before { content: '🔍'; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.6; }
+        .maps-list { display: flex; flex-direction: column; gap: 10px; }
+        .maps-list-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #fff; border: 1px solid var(--kyse-border); border-radius: 8px; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+        .maps-list-item:hover { background: #f9fafb; border-color: #d1d5db; }
+        .maps-list-item .left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+        .maps-list-item .map-tag { background: var(--kyse-primary); color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+        .maps-list-item .map-name { font-weight: 600; color: #111827; font-size: 14px; }
+        .maps-list-item .right { display: flex; align-items: center; gap: 16px; flex-shrink: 0; color: #6b7280; font-size: 13px; }
+        .maps-list-item .monster-count::before { content: '⊞'; margin-right: 4px; opacity: 0.7; }
+        .maps-list-item .refresh-info { color: var(--kyse-success); }
+        .maps-pagination { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--kyse-border); flex-wrap: wrap; gap: 12px; }
+        .maps-pagination .info { color: #6b7280; font-size: 13px; }
+        .maps-pagination .controls { display: flex; align-items: center; gap: 8px; }
+        .maps-pagination .page-btn { padding: 6px 12px; border: 1px solid var(--kyse-border); background: #fff; border-radius: 4px; cursor: pointer; font-size: 13px; color: #374151; }
+        .maps-pagination .page-btn:hover { background: #f3f4f6; }
+        .maps-pagination .page-btn.active { background: var(--kyse-primary); color: #fff; border-color: var(--kyse-primary); }
+        .maps-pagination .page-input { width: 48px; padding: 4px 8px; text-align: center; font-size: 13px; }
+        /* 功能窗口内容随窗口大小自由缩放 */
+        .content-section.active .row { max-width: 100%; }
+        .content-section.active .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .content-section.active .page-block-body { max-width: 100%; }
+        .kyse-content { box-sizing: border-box; }
+        @media (max-width: 768px) {
+            .kyse-content { padding: 12px; }
+            .kyse-header { padding: 10px 16px; flex-wrap: wrap; gap: 8px; }
+            .maps-config-header, .maps-config-body { padding: 12px 16px; }
+        }
     </style>
 </head>
 <body>
@@ -107,35 +159,47 @@
         <aside class="kyse-sidebar">
             <div class="logo">
                 <div class="logo-inner">
-                    <div class="logo-icon">K</div>
+                    <div class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
                     <div>
                         <h2>KYSE</h2>
-                        <p>赛尔号 GM 管理</p>
+                        <p>配置管理系统</p>
                     </div>
                 </div>
             </div>
             <nav class="kyse-nav">
-                <div class="kyse-nav-item active" data-section="dashboard" onclick="showSection('dashboard')">仪表盘</div>
-                <div class="kyse-nav-item" data-section="users" onclick="showSection('users')">用户管理</div>
-                <div class="kyse-nav-item" data-section="pets" onclick="showSection('pets')">精灵管理</div>
-                <div class="kyse-nav-item" data-section="gacha" onclick="showSection('gacha')">扭蛋机</div>
-                <div class="kyse-nav-item" data-section="weights" onclick="showSection('weights')">权重管理</div>
-                <div class="kyse-nav-item" data-section="buffs" onclick="showSection('buffs'); loadBuffItems(); loadRewards();">BUFF / 奖励</div>
-                <div class="kyse-nav-item" data-section="fusion" onclick="showSection('fusion')">精灵融合管理</div>
-                <div class="kyse-nav-item" data-section="freshfight" onclick="showSection('freshfight'); loadFreshFight();">试炼之塔</div>
-                <div class="kyse-nav-item" data-section="fightlevel" onclick="showSection('fightlevel'); loadFightLevel();">勇者之塔</div>
-                <div class="kyse-nav-item" data-section="darkportal" onclick="showSection('darkportal'); loadDarkPortal();">暗黑武斗场</div>
-                <div class="kyse-nav-item" data-section="sptboss" onclick="showSection('sptboss'); loadSPTBoss();">SPT BOSS</div>
-                <div class="kyse-nav-item" data-section="boss_effect" onclick="showSection('boss_effect'); loadBossEffect();">BOSS 多效果</div>
-                <div class="kyse-nav-item" data-section="maps" onclick="showSection('maps')">地图管理</div>
+                <div class="kyse-nav-group" id="navGroupGm">
+                    <div class="kyse-nav-group-title" onclick="toggleNavGroup('navGroupGm')"><span class="caret">^</span> GM管理</div>
+                    <div class="kyse-nav-items">
+                        <div class="kyse-nav-item active" data-section="dashboard" onclick="showSection('dashboard')">仪表盘</div>
+                        <div class="kyse-nav-item" data-section="users" onclick="showSection('users')">玩家管理</div>
+                        <div class="kyse-nav-item" data-section="pets" onclick="showSection('pets')">精灵管理</div>
+                    </div>
+                </div>
+                <div class="kyse-nav-group" id="navGroupConfig">
+                    <div class="kyse-nav-group-title" onclick="toggleNavGroup('navGroupConfig')"><span class="caret">^</span> 配置管理</div>
+                    <div class="kyse-nav-items">
+                        <div class="kyse-nav-item" data-section="maps" onclick="showSection('maps')">地图怪物</div>
+                        <div class="kyse-nav-item" data-section="tasks" onclick="showSection('tasks'); loadTaskConfigs();">任务配置</div>
+                        <div class="kyse-nav-item" data-section="buffs" onclick="showSection('buffs'); loadBuffItems(); loadRewards();">特殊物品</div>
+                        <div class="kyse-nav-item" data-section="weights" onclick="showSection('weights')">权重管理</div>
+                        <div class="kyse-nav-item" data-section="gacha" onclick="showSection('gacha')">商店配置</div>
+                        <div class="kyse-nav-item" data-section="fusion" onclick="showSection('fusion')">精灵融合管理</div>
+                        <div class="kyse-nav-item" data-section="freshfight" onclick="showSection('freshfight'); loadFreshFight();">试炼之塔</div>
+                        <div class="kyse-nav-item" data-section="fightlevel" onclick="showSection('fightlevel'); loadFightLevel();">勇者之塔</div>
+                        <div class="kyse-nav-item" data-section="darkportal" onclick="showSection('darkportal'); loadDarkPortal();">暗黑武斗场</div>
+                        <div class="kyse-nav-item" data-section="sptboss" onclick="showSection('sptboss'); loadSPTBoss();">SPT BOSS</div>
+                        <div class="kyse-nav-item" data-section="boss_effect" onclick="showSection('boss_effect'); loadBossEffect();">BOSS 多效果</div>
+                    </div>
+                </div>
             </nav>
         </aside>
         <div class="kyse-main">
             <header class="kyse-header">
                 <h3 id="kysePageTitle">仪表盘</h3>
                 <div class="kyse-header-actions">
-                    <button type="button" class="kyse-btn kyse-btn-secondary" onclick="loadDashboard(); loadUsers();">刷新</button>
-                    <button type="button" class="kyse-btn kyse-btn-primary" onclick="checkConnection()">连接状态</button>
+                    <button type="button" class="kyse-btn kyse-btn-ghost text-success" onclick="window.location.href='/'" title="本地访问">🏠 本地访问</button>
+                    <button type="button" class="kyse-btn kyse-btn-ghost" onclick="loadDashboard(); loadUsers();" title="刷新">🔄 刷新</button>
+                    <button type="button" class="kyse-btn kyse-btn-primary kyse-status-pill" onclick="checkConnection()" title="连接状态">🔗 连接状态</button>
                 </div>
             </header>
             <main class="kyse-content">
@@ -265,6 +329,21 @@
                             </div>
                             <div class="page-block-body collapsed"><div id="storagePets"></div></div>
                         </div>
+                        <div class="page-block">
+                            <div class="page-block-header collapsible collapsed" onclick="toggleCollapse(this)">
+                                <span><span class="collapse-icon">▼</span>任务奖励工具</span>
+                            </div>
+                            <div class="page-block-body collapsed">
+                                <div class="mb-2">
+                                    <label class="form-label small mb-1">任务ID</label>
+                                    <input type="number" class="form-control form-control-sm" id="gmTaskGrantId" placeholder="例如 85" min="1">
+                                </div>
+                                <div class="mb-2">
+                                    <small class="text-muted">将根据 gm_task_config 中的配置，为当前用户发放一次该任务的奖励。</small>
+                                </div>
+                                <button type="button" class="kyse-btn kyse-btn-primary" onclick="gmGrantTaskReward()">发放任务奖励</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -326,6 +405,30 @@
                                     <tbody id="weightsCapsuleList"></tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+                    <div class="weights-sub-block">
+                        <div class="page-block-header collapsible collapsed weights-sub-header" onclick="toggleCollapse(this)">
+                            <span><span class="collapse-icon">▼</span>NONO 芯片合成奖励(9004)</span>
+                        </div>
+                        <div class="page-block-body collapsed">
+                            <p class="weights-desc">配置 NONO 芯片制造机（9004 NONO_CHIP_MIXTURE）的合成规则：<strong>道具1 + 道具2 + 道具3 = 奖励道具 × 数量</strong>。同一组合可添加多条奖励，每条有自己的成功率(0-100)，系统会按成功率权重随机选择 1 条（总和建议不超过 100%）。</p>
+                            <div class="table-responsive">
+                                <table class="weights-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:100px;">道具1ID</th>
+                                            <th style="width:100px;">道具2ID</th>
+                                            <th style="width:100px;">道具3ID</th>
+                                            <th style="width:120px;">备注名称</th>
+                                            <th>奖励配置（可多条：道具ID × 数量 × 几率%）</th>
+                                            <th style="width:80px;">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="chipMixList"></tbody>
+                                </table>
+                            </div>
+                            <button type="button" class="kyse-btn kyse-btn-secondary mt-2" onclick="addChipMixRow()">添加规则</button>
                         </div>
                     </div>
                     <div class="weights-sub-block">
@@ -499,6 +602,59 @@
                             </div>
                         </div>
                     </div>
+                    <div class="weights-section mt-4">
+                        <h6 class="weights-subtitle">小游戏奖励（5002 GAME_OVER）</h6>
+                        <p class="weights-desc small text-muted">按 per/score 区间配置赛尔豆与经验池经验；所有小游戏统一使用该表。</p>
+                        <div class="table-responsive">
+                            <table class="weights-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:140px;">名称备注</th>
+                                        <th style="width:80px;">per最小</th>
+                                        <th style="width:80px;">per最大</th>
+                                        <th style="width:90px;">score最小</th>
+                                        <th style="width:90px;">score最大</th>
+                                        <th style="width:90px;">赛尔豆</th>
+                                        <th style="width:90px;">经验池</th>
+                                        <th style="width:80px;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="miniGameRewardList"></tbody>
+                            </table>
+                        </div>
+                        <button type="button" class="kyse-btn kyse-btn-secondary mt-2" onclick="addMiniGameRewardRow()">添加行</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 任务奖励管理 -->
+        <div id="tasks" class="content-section">
+            <div class="page-block">
+                <div class="page-block-header">
+                    任务奖励配置（gm_task_config）
+                    <button type="button" class="kyse-btn kyse-btn-primary" onclick="saveTaskConfigs()">保存任务奖励配置</button>
+                </div>
+                <div class="page-block-body">
+                    <p class="weights-desc">通过任务 ID 配置任务完成后的奖励（精灵 / 道具 / 家具 / 赛尔豆 / 金豆 / 经验等）。建议先从 test/gm_task_config.json 初始化，再在此进行可视化调整。</p>
+                    <div class="mb-2 d-flex gap-2">
+                        <input type="text" class="form-control kyse-input" id="taskSearchInput" placeholder="按任务ID或名称搜索..." oninput="renderTaskConfigTable()">
+                        <button type="button" class="kyse-btn kyse-btn-secondary" onclick="loadTaskConfigs()">重新加载</button>
+                    </div>
+                    <div class="table-responsive" style="max-height:min(65vh, 600px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:80px;">任务ID</th>
+                                    <th style="width:200px;">名称</th>
+                                    <th style="width:120px;">类型</th>
+                                    <th>奖励概要</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskConfigTableBody"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -638,9 +794,12 @@
                                     <th>门索引</th>
                                     <th>子关卡</th>
                                     <th>Boss ID</th>
+                                    <th>Boss名称</th>
                                     <th>等级</th>
                                     <th>奖励物品ID</th>
+                                    <th>奖励物品</th>
                                     <th>奖励精灵ID</th>
+                                    <th>奖励精灵</th>
                                     <th>备注</th>
                                     <th width="80">操作</th>
                                 </tr>
@@ -674,8 +833,10 @@
                                     <thead>
                                         <tr>
                                             <th>地图ID</th>
+                                            <th>地图名称</th>
                                             <th>Param2</th>
                                             <th>Boss精灵ID</th>
+                                            <th>Boss名称</th>
                                             <th>等级</th>
                                             <th>防护罩</th>
                                             <th width="80">操作</th>
@@ -700,7 +861,9 @@
                                         <tr>
                                             <th>SPT ID</th>
                                             <th>Boss精灵ID</th>
+                                            <th>Boss名称</th>
                                             <th>奖励精灵ID</th>
+                                            <th>奖励精灵名称</th>
                                             <th>奖励精元物品ID</th>
                                             <th>等级</th>
                                             <th>防护罩</th>
@@ -758,7 +921,7 @@
                         </div>
                         <div class="page-block-body">
                             <p class="weights-desc mb-3">配置谱尼七封印（door 1-7）和真身（door 8）的属性、特性、奖励等。真身可配置多条命的血量和自动回满阈值。</p>
-                            <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+                            <div class="table-responsive" style="max-height:min(65vh, 600px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
                                 <table class="weights-table">
                                     <thead>
                                         <tr>
@@ -834,27 +997,37 @@
         
         <!-- 地图管理 -->
         <div id="maps" class="content-section">
-            <div class="page-block">
-                <div class="page-block-header">
-                    地图精灵刷新配置
-                    <button type="button" class="kyse-btn kyse-btn-primary" onclick="saveMapConfig()">保存全部修改</button>
-                </div>
-                <div class="page-block-body">
-                    <p class="weights-desc">为每一张地图配置普通/稀有精灵列表与刷新间隔（秒）。普通/稀有精灵使用服务端内置默认值，GM 可按需覆盖。修改后会立即影响后续刷新的精灵列表。</p>
-                    <div class="table-responsive" id="mapConfigContainer">
-                        <table class="weights-table">
-                            <thead>
-                                <tr>
-                                    <th style="width:80px;">地图ID</th>
-                                    <th style="width:80px;">槽位数</th>
-                                    <th>普通精灵（名称 LvMin-LvMax，一行一个）</th>
-                                    <th>稀有精灵（名称 LvMin-LvMax，一行一个）</th>
-                                    <th style="width:140px;">刷新间隔(秒)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="mapConfig"></tbody>
-                        </table>
+            <div class="maps-config-block">
+                <div class="maps-config-header">
+                    <span class="title">地图配置</span>
+                    <span class="sub" id="mapsCountText">共0个地图</span>
+                    <div class="actions">
+                        <button type="button" class="kyse-btn kyse-btn-success" onclick="saveMapConfig()">💾 保存配置</button>
+                        <button type="button" class="kyse-btn kyse-btn-secondary" onclick="loadMapConfig()">🔄 重载配置</button>
                     </div>
+                </div>
+                <div class="maps-config-body">
+                    <div class="maps-search-wrap">
+                        <input type="text" class="form-control kyse-input" id="mapSearchInput" placeholder="搜索地图ID或名称..." oninput="filterMapList()">
+                    </div>
+                    <div class="maps-list" id="mapListContainer"></div>
+                    <div class="maps-pagination" id="mapPagination" style="display:none;">
+                        <span class="info" id="mapPaginationInfo">共0条</span>
+                        <div class="controls">
+                            <select class="form-select form-select-sm" id="mapPageSize" style="width:auto;" onchange="renderMapList()">
+                                <option value="5">5条/页</option>
+                                <option value="10">10条/页</option>
+                                <option value="20">20条/页</option>
+                            </select>
+                            <button type="button" class="page-btn" id="mapPagePrev" onclick="mapPagePrev()">‹</button>
+                            <span id="mapPageNumbers"></span>
+                            <button type="button" class="page-btn" id="mapPageNext" onclick="mapPageNext()">›</button>
+                            <span>前往</span>
+                            <input type="number" class="form-control form-control-sm maps-pagination page-input" id="mapPageGo" min="1" value="1" onchange="mapGoToPage(this.value)">
+                            <span>页</span>
+                        </div>
+                    </div>
+                    <p class="weights-desc mb-2">为每一张地图配置普通/稀有精灵列表与刷新间隔（秒）。点击上方地图卡片打开配置窗口。</p>
                 </div>
             </div>
         </div>
@@ -862,6 +1035,59 @@
         </div>
     </div>
     
+    <!-- 地图配置模态框 -->
+    <div class="modal fade" id="mapConfigModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="mapConfigModalTitle">地图配置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="mapConfigModalMapId">
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">地图ID</label>
+                            <input type="text" class="form-control" id="mapConfigModalMapIdDisplay" readonly>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">地图名称</label>
+                            <input type="text" class="form-control" id="mapConfigModalMapName" readonly>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">槽位数</label>
+                            <input type="number" class="form-control" id="mapConfigModalSlots" min="1" max="9" value="4" data-field="slots">
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">稀有刷新几率(%)</label>
+                            <input type="number" class="form-control" id="mapConfigModalRarePercent" min="0" max="100" value="5" data-field="rarePercent">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">刷新间隔(秒)</label>
+                            <input type="number" class="form-control" id="mapConfigModalInterval" min="1" max="600" value="10" data-field="interval">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">普通精灵（精灵代码+名称 LvMin-LvMax，一行一个）</label>
+                        <textarea class="form-control" id="mapConfigModalCommon" rows="4" data-field="common" placeholder="例如：166 闪光波克尔 1-2&#10;47 蘑菇怪 10-12"></textarea>
+                        <button type="button" class="kyse-btn kyse-btn-secondary btn-sm mt-1" id="mapConfigModalCommonBtn">从列表选择</button>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">稀有精灵（精灵代码+名称 LvMin-LvMax，一行一个）</label>
+                        <textarea class="form-control" id="mapConfigModalRare" rows="4" data-field="rare" placeholder="例如：166 闪光波克尔 5-5"></textarea>
+                        <button type="button" class="kyse-btn kyse-btn-secondary btn-sm mt-1" id="mapConfigModalRareBtn">从列表选择</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="kyse-btn kyse-btn-success" onclick="saveMapConfigFromModal()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 模态框 -->
     <div class="modal fade" id="addPetModal" tabindex="-1">
         <div class="modal-dialog">
@@ -1251,6 +1477,148 @@
             </div>
         </div>
     </div>
+    <div class="modal fade" id="taskRewardModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="taskRewardModalTitle">编辑任务奖励</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1">赛尔豆（coins）</label>
+                            <input type="number" class="form-control form-control-sm" id="taskRewardCoins" min="0" value="0">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1">金豆（special type=2）</label>
+                            <input type="number" class="form-control form-control-sm" id="taskRewardGold" min="0" value="0">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1">经验池（special type=3）</label>
+                            <input type="number" class="form-control form-control-sm" id="taskRewardExp" min="0" value="0">
+                        </div>
+                    </div>
+                    <hr>
+                    <h6 class="weights-subtitle">精灵奖励</h6>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-6">
+                            <label class="form-label small mb-1">搜索精灵（ID 或名称）</label>
+                            <input type="text" class="form-control form-control-sm" id="taskPetSearchInput" list="petOptions" placeholder="例如: 1 布布种子" oninput="updateTaskPetSearchPreview()">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskPetReward()">添加精灵奖励</button>
+                        </div>
+                        <div class="col-md-12 mt-1">
+                            <small id="taskPetSearchPreview" class="text-muted"></small>
+                        </div>
+                    </div>
+                    <div class="table-responsive mb-3" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:160px;">精灵ID</th>
+                                    <th>名称</th>
+                                    <th style="width:80px;">等级</th>
+                                    <th style="width:80px;">DV</th>
+                                    <th style="width:80px;">性格</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskRewardPetsBody"></tbody>
+                        </table>
+                    </div>
+                    <h6 class="weights-subtitle">道具奖励</h6>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1">搜索道具（ID 或名称）</label>
+                            <input type="text" class="form-control form-control-sm" id="taskItemSearchInput" list="itemOptions" placeholder="例如: 300001 精灵胶囊" oninput="updateTaskItemSearchPreview()">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1">数量（批量默认值）</label>
+                            <input type="number" class="form-control form-control-sm" id="taskItemSearchCount" placeholder="1" min="1" value="1">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskItemReward()">添加道具奖励</button>
+                        </div>
+                        <div class="col-md-12 mt-1">
+                            <small id="taskItemSearchPreview" class="text-muted"></small>
+                        </div>
+                    </div>
+                    <div class="table-responsive" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:260px;">道具ID</th>
+                                    <th>名称</th>
+                                    <th style="width:80px;">数量</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskRewardItemsBody"></tbody>
+                        </table>
+                    </div>
+                    <hr>
+                    <h6 class="weights-subtitle">家具奖励</h6>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-6">
+                            <label class="form-label small mb-1">搜索家具（ID 或名称）</label>
+                            <input type="text" class="form-control form-control-sm" id="taskFitmentIdInput" list="itemOptions" placeholder="例如: 500510 家具名称" oninput="updateTaskFitmentSearchPreview()">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1">数量</label>
+                            <input type="number" class="form-control form-control-sm" id="taskFitmentCountInput" placeholder="1" min="1" value="1">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskFitmentReward()">添加家具奖励</button>
+                        </div>
+                        <div class="col-md-12 mt-1">
+                            <small id="taskFitmentSearchPreview" class="text-muted"></small>
+                        </div>
+                    </div>
+                    <div class="table-responsive" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:160px;">家具ID</th>
+                                    <th>名称</th>
+                                    <th style="width:80px;">数量</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskRewardFitmentsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveTaskRewardModal()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="mapPetsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">地图精灵批量添加</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted mb-2" id="mapPetsModalTitle">—</p>
+                    <div class="mb-2">
+                        <input type="text" class="form-control form-control-sm" id="mapPetsSearch" placeholder="按精灵ID或名称搜索" oninput="filterMapPetsList()">
+                    </div>
+                    <div id="mapPetsList" class="scroll-panel" style="max-height:min(55vh, 480px);"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="applyMapPetsSelection()">确定添加</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -1261,8 +1629,13 @@
         let gachaListData = [];
         let allPets = [];   // 精灵列表（ID + 中文名），用于下拉选择与搜索
         let allItems = [];  // 道具列表（ID + 中文名），用于下拉选择与搜索
+        let taskConfigs = []; // 任务奖励配置列表（gm_task_config）
+        let editingTaskIndex = -1;
+        let editingTaskRewards = null;
+        let editingTaskSpecialOthers = [];
         let addPetModalInstance, addItemModalInstance, editPetSkillsModalInstance, editPetStatsModalInstance, gachaAddModalInstance, gachaEditModalInstance;
-        let editPetTraitModalInstance, editPetNatureModalInstance, addRewardPetModalInstance;
+        let editPetTraitModalInstance, editPetNatureModalInstance, addRewardPetModalInstance, mapPetsModalInstance, taskRewardModalInstance;
+        let currentMapPetsTarget = null; // { mapId, type: 'common' | 'rare' }
         
         // 折叠/展开功能（点击子功能只折叠/展开该子功能）
         function toggleCollapse(headerElement) {
@@ -1312,13 +1685,19 @@
             gachaAddModalInstance = new bootstrap.Modal(document.getElementById('gachaAddModal'));
             gachaEditModalInstance = new bootstrap.Modal(document.getElementById('gachaEditModal'));
             addRewardPetModalInstance = new bootstrap.Modal(document.getElementById('addRewardPetModal'));
+            taskRewardModalInstance = new bootstrap.Modal(document.getElementById('taskRewardModal'));
+            mapPetsModalInstance = new bootstrap.Modal(document.getElementById('mapPetsModal'));
             loadDashboard();
             loadUsers();
             loadPetDatabase();   // 预加载精灵列表，供下拉与搜索使用
             loadItemDatabase();  // 预加载道具列表，供下拉与搜索使用
         };
         
-        const sectionTitles = { dashboard: '仪表盘', users: '用户管理', pets: '精灵管理', gacha: '扭蛋机', weights: '权重管理', buffs: 'BUFF / 奖励', fusion: '精灵融合管理', freshfight: '试炼之塔', fightlevel: '勇者之塔', darkportal: '暗黑武斗场', sptboss: 'SPT BOSS', boss_effect: 'BOSS 多效果', maps: '地图管理' };
+        const sectionTitles = { dashboard: '仪表盘', users: '玩家管理', pets: '精灵管理', gacha: '扭蛋机', weights: '权重管理', buffs: 'BUFF / 奖励', fusion: '精灵融合管理', freshfight: '试炼之塔', fightlevel: '勇者之塔', darkportal: '暗黑武斗场', sptboss: 'SPT BOSS', boss_effect: 'BOSS 多效果', maps: '地图怪物配置', tasks: '任务配置' };
+        function toggleNavGroup(groupId) {
+            const g = document.getElementById(groupId);
+            if (g) g.classList.toggle('collapsed');
+        }
         function showSection(section) {
             document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.kyse-nav-item').forEach(n => n.classList.remove('active'));
@@ -1330,8 +1709,8 @@
             if(section === 'users') loadUsers();
             if(section === 'pets') { loadPetDatabase(); loadItemDatabase(); }
             if(section === 'gacha') gachaLoadList();
-            if(section === 'weights') loadWeights();
-            if(section === 'buffs') { loadBuffItems(); loadRewards(); }
+            if(section === 'weights') { loadItemDatabase(); loadWeights(); }
+            if(section === 'buffs') { loadBuffItems(); loadRewards(); loadTaskConfigs(); }
             if(section === 'fusion') loadFusion();
             if(section === 'maps') loadMapConfig();
             if(section === 'fightlevel') loadFightLevel();
@@ -1362,6 +1741,7 @@
                 if (!data.success) { document.getElementById('weightsCapsuleList').innerHTML = '<tr><td colspan="2">加载失败</td></tr>'; return; }
                 const capsules = data.capsuleCatchRates || [];
                 const fusion = data.fusionSuccessRates || [];
+                const chipMix = data.chipMixtureRules || [];
                 const petIdToName = {};
                 let weightsPetList = [];
                 if (petsRes.ok) {
@@ -1388,12 +1768,525 @@
                 window._weightsFusion = fusion;
                 renderWeightsFusionRows();
                 renderWeightsBreedRows();
+                // 将后端的扁平 chipMixtureRules 按「材料 + 备注」合并成行，每行包含多个奖励
+                const chipRowsMap = {};
+                (chipMix || []).forEach(function(rule) {
+                    if (!rule) return;
+                    const m1 = rule.mat1 || 0;
+                    const m2 = rule.mat2 || 0;
+                    const m3 = rule.mat3 || 0;
+                    const name = rule.name || '';
+                    const key = m1 + '_' + m2 + '_' + m3 + '_' + name;
+                    if (!chipRowsMap[key]) {
+                        chipRowsMap[key] = {
+                            mat1: m1,
+                            mat2: m2,
+                            mat3: m3,
+                            name: name,
+                            rewards: []
+                        };
+                    }
+                    chipRowsMap[key].rewards.push({
+                        itemId: rule.rewardItemId || rule.rewardItemID || 0,
+                        count: rule.rewardCount || 1,
+                        rate: rule.successRate || 0
+                    });
+                });
+                window._chipMixRules = Object.keys(chipRowsMap).map(function(k) { return chipRowsMap[k]; });
+                renderChipMixRows();
             } catch (e) {
                 document.getElementById('weightsCapsuleList').innerHTML = '<tr><td colspan="2">加载失败: ' + e.message + '</td></tr>';
                 const tbodyF = document.getElementById('weightsFusionList');
                 const tbodyB = document.getElementById('weightsBreedList');
+                const tbodyChip = document.getElementById('chipMixList');
                 if (tbodyF) tbodyF.innerHTML = '<tr><td colspan="5">加载失败</td></tr>';
                 if (tbodyB) tbodyB.innerHTML = '<tr><td colspan="3">加载失败</td></tr>';
+                if (tbodyChip) tbodyChip.innerHTML = '<tr><td colspan="6">加载失败</td></tr>';
+            }
+        }
+        
+        async function loadTaskConfigs() {
+            try {
+                const res = await fetch(API + '/gm/tasks/config');
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message || '加载失败');
+                taskConfigs = Array.isArray(data.data) ? data.data : [];
+                renderTaskConfigTable();
+            } catch (e) {
+                const tbody = document.getElementById('taskConfigTableBody');
+                if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-muted">加载失败: ' + e.message + '</td></tr>';
+            }
+        }
+
+        function summarizeTaskRewards(r) {
+            if (!r) return '无';
+            const parts = [];
+            let coins = r.coins || 0;
+            let gold = 0;
+            let exp = 0;
+            const otherSpecial = {};
+
+            if (Array.isArray(r.special)) {
+                r.special.forEach(function (s) {
+                    const t = s.type;
+                    const v = s.value || 0;
+                    if (!t || v <= 0) return;
+                    if (t === 1) {
+                        coins += v;
+                    } else if (t === 2) {
+                        gold += v;
+                    } else if (t === 3) {
+                        exp += v;
+                    } else {
+                        if (!otherSpecial[t]) otherSpecial[t] = 0;
+                        otherSpecial[t] += v;
+                    }
+                });
+            }
+
+            if (coins) parts.push('金币+' + coins);
+            if (gold) parts.push('金豆+' + gold);
+            if (exp) parts.push('经验池+' + exp);
+
+            if (Array.isArray(r.pets) && r.pets.length) {
+                const names = r.pets.map(function (p) { return getPetNameById(p.petId); }).filter(Boolean);
+                if (names.length === 1) {
+                    parts.push('精灵: ' + names[0]);
+                } else if (names.length > 1) {
+                    parts.push('精灵: ' + names.slice(0, 2).join('、') + ' 等' + names.length + '只');
+                }
+            }
+            if (Array.isArray(r.items) && r.items.length) {
+                const names = r.items.map(function (it) { return getItemNameById(it.itemId); }).filter(Boolean);
+                if (names.length === 1) {
+                    parts.push('道具: ' + names[0]);
+                } else if (names.length > 1) {
+                    parts.push('道具: ' + names.slice(0, 2).join('、') + ' 等' + names.length + '种');
+                }
+            }
+            if (Array.isArray(r.fitments) && r.fitments.length) {
+                const map = {};
+                r.fitments.forEach(function (f) {
+                    const id = f.fitmentId || f.FitmentID || 0;
+                    if (!id) return;
+                    if (!map[id]) map[id] = 0;
+                    map[id] += f.count || 1;
+                });
+                const fitmentParts = Object.keys(map).map(function (id) {
+                    const name = getItemNameById(id);
+                    const label = name ? (name + ' (ID' + id + ')') : ('ID' + id);
+                    return label + 'x' + map[id];
+                });
+                if (fitmentParts.length) {
+                    parts.push('家具: ' + fitmentParts.join('、'));
+                }
+            }
+
+            Object.keys(otherSpecial).forEach(function (t) {
+                const v = otherSpecial[t];
+                parts.push('特殊(type=' + t + ')+' + v);
+            });
+
+            return parts.length ? parts.join(' / ') : '无';
+        }
+
+        function renderTaskConfigTable() {
+            const tbody = document.getElementById('taskConfigTableBody');
+            if (!tbody) return;
+            if (!Array.isArray(taskConfigs) || taskConfigs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-muted">暂无任务配置，请从 test/gm_task_config.json 初始化或在此页面手动添加。</td></tr>';
+                return;
+            }
+            const kwEl = document.getElementById('taskSearchInput');
+            const kw = kwEl ? kwEl.value.trim().toLowerCase() : '';
+            const list = kw ? taskConfigs.filter(function(t) {
+                const idStr = String(t.taskId || '');
+                const name = (t.name || '').toLowerCase();
+                return idStr.indexOf(kw) >= 0 || name.indexOf(kw) >= 0;
+            }) : taskConfigs;
+            const rows = list.map(function(t, idx) {
+                const rewards = t.rewards || {};
+                const summary = summarizeTaskRewards(rewards);
+                const safeName = (t.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const safeType = (t.type || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return '<tr>' +
+                    '<td>' + t.taskId + '</td>' +
+                    '<td>' + safeName + '</td>' +
+                    '<td>' + safeType + '</td>' +
+                    '<td>' + summary + '</td>' +
+                    '<td><button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="openEditTaskRewardModal(' + t.taskId + ')">编辑</button></td>' +
+                '</tr>';
+            }).join('');
+            tbody.innerHTML = rows;
+        }
+        
+        function cloneRewards(r) {
+            if (!r) return { coins: 0, items: [], pets: [], fitments: [], special: [] };
+            return JSON.parse(JSON.stringify(r));
+        }
+
+        function openEditTaskRewardModal(taskId) {
+            if (!Array.isArray(taskConfigs)) return;
+            const index = taskConfigs.findIndex(function(t) { return t.taskId === taskId; });
+            if (index < 0) { alert('未找到该任务配置'); return; }
+            editingTaskIndex = index;
+            const t = taskConfigs[index];
+            editingTaskRewards = cloneRewards(t.rewards || {});
+            if (!Array.isArray(editingTaskRewards.items)) editingTaskRewards.items = [];
+            if (!Array.isArray(editingTaskRewards.pets)) editingTaskRewards.pets = [];
+            if (!Array.isArray(editingTaskRewards.fitments)) editingTaskRewards.fitments = [];
+            if (!Array.isArray(editingTaskRewards.special)) editingTaskRewards.special = [];
+
+            const specials = editingTaskRewards.special || [];
+            let gold = 0, exp = 0;
+            editingTaskSpecialOthers = [];
+            specials.forEach(function(s) {
+                if (s.type === 2) gold += s.value || 0;
+                else if (s.type === 3) exp += s.value || 0;
+                else editingTaskSpecialOthers.push(s);
+            });
+
+            const title = document.getElementById('taskRewardModalTitle');
+            if (title) title.textContent = '编辑任务奖励 - [' + t.taskId + '] ' + (t.name || '');
+            const coinsEl = document.getElementById('taskRewardCoins');
+            const goldEl = document.getElementById('taskRewardGold');
+            const expEl = document.getElementById('taskRewardExp');
+            if (coinsEl) coinsEl.value = editingTaskRewards.coins || 0;
+            if (goldEl) goldEl.value = gold;
+            if (expEl) expEl.value = exp;
+
+            renderTaskPetRewards();
+            renderTaskItemRewards();
+            renderTaskFitmentRewards();
+            if (taskRewardModalInstance) taskRewardModalInstance.show();
+        }
+
+        function getPetNameById(id) {
+            id = parseInt(id, 10) || 0;
+            const p = (allPets || []).find(function(x) { return x.id === id; });
+            return p ? (p.name || ('ID:' + id)) : ('ID:' + id);
+        }
+
+        function getItemNameById(id) {
+            id = parseInt(id, 10) || 0;
+            const it = (allItems || []).find(function(x) { return x.id === id; });
+            return it ? (it.name || ('ID:' + id)) : ('ID:' + id);
+        }
+
+        function renderTaskPetRewards() {
+            const tbody = document.getElementById('taskRewardPetsBody');
+            if (!tbody) return;
+            const pets = (editingTaskRewards && editingTaskRewards.pets) || [];
+            if (!pets.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-muted">暂无精灵奖励，点击下方「添加精灵奖励」</td></tr>';
+                return;
+            }
+            tbody.innerHTML = pets.map(function(p, idx) {
+                const name = getPetNameById(p.petId);
+                return '<tr>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (p.petId || 0) + '" onchange="updateTaskPetReward(' + idx + ',\'petId\',this.value)"></td>' +
+                    '<td>' + name + '</td>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (p.level || 1) + '" min="1" max="100" onchange="updateTaskPetReward(' + idx + ',\'level\',this.value)"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (p.dv || 0) + '" min="0" max="31" onchange="updateTaskPetReward(' + idx + ',\'dv\',this.value)"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (p.nature || 0) + '" min="0" max="24" onchange="updateTaskPetReward(' + idx + ',\'nature\',this.value)"></td>' +
+                    '<td><button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeTaskPetReward(' + idx + ')">删除</button></td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        function updateTaskPetReward(index, field, val) {
+            if (!editingTaskRewards || !Array.isArray(editingTaskRewards.pets)) return;
+            const pets = editingTaskRewards.pets;
+            if (index < 0 || index >= pets.length) return;
+            const p = pets[index];
+            const v = parseInt(val, 10) || 0;
+            if (field === 'petId') p.petId = v;
+            else if (field === 'level') p.level = v;
+            else if (field === 'dv') p.dv = v;
+            else if (field === 'nature') p.nature = v;
+            renderTaskPetRewards();
+        }
+
+        function removeTaskPetReward(index) {
+            if (!editingTaskRewards || !Array.isArray(editingTaskRewards.pets)) return;
+            editingTaskRewards.pets.splice(index, 1);
+            renderTaskPetRewards();
+        }
+
+        function addTaskPetReward() {
+            if (!editingTaskRewards) return;
+            if (!Array.isArray(editingTaskRewards.pets)) editingTaskRewards.pets = [];
+            const input = document.getElementById('taskPetSearchInput');
+            let v = input ? input.value.trim() : '';
+            let petId = parseInt(v, 10) || 0;
+            if (!petId && v) {
+                const found = (allPets || []).find(function(p) { return (p.name || '').indexOf(v) >= 0; });
+                if (found) petId = found.id;
+            }
+            if (!petId) {
+                alert('请输入或选择有效的精灵');
+                return;
+            }
+            editingTaskRewards.pets.push({ petId: petId, level: 1, dv: 0, nature: 0 });
+            if (input) input.value = '';
+            updateTaskPetSearchPreview();
+            renderTaskPetRewards();
+        }
+
+        function renderTaskItemRewards() {
+            const tbody = document.getElementById('taskRewardItemsBody');
+            if (!tbody) return;
+            const items = (editingTaskRewards && editingTaskRewards.items) || [];
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-muted">暂无道具奖励，点击下方「添加道具奖励」</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function(it, idx) {
+                const name = getItemNameById(it.itemId);
+                return '<tr>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (it.itemId || 0) + '" onchange="updateTaskItemReward(' + idx + ',\'itemId\',this.value)"></td>' +
+                    '<td>' + name + '</td>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (it.count || 1) + '" min="1" onchange="updateTaskItemReward(' + idx + ',\'count\',this.value)"></td>' +
+                    '<td><button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeTaskItemReward(' + idx + ')">删除</button></td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        function updateTaskItemReward(index, field, val) {
+            if (!editingTaskRewards || !Array.isArray(editingTaskRewards.items)) return;
+            const items = editingTaskRewards.items;
+            if (index < 0 || index >= items.length) return;
+            const it = items[index];
+            const v = parseInt(val, 10) || 0;
+            if (field === 'itemId') it.itemId = v;
+            else if (field === 'count') it.count = v;
+            renderTaskItemRewards();
+        }
+
+        function updateTaskPetSearchPreview() {
+            const input = document.getElementById('taskPetSearchInput');
+            const preview = document.getElementById('taskPetSearchPreview');
+            if (!input || !preview) return;
+            const v = input.value.trim();
+            if (!v) {
+                preview.textContent = '';
+                return;
+            }
+            let petId = parseInt(v, 10) || 0;
+            let name = '';
+            if (!petId) {
+                const found = (allPets || []).find(function (p) { return (p.name || '').indexOf(v) >= 0; });
+                if (found) {
+                    petId = found.id;
+                    name = found.name || '';
+                }
+            } else {
+                name = getPetNameById(petId);
+            }
+            if (petId) {
+                preview.textContent = '解析结果: ID ' + petId + (name ? (' ' + name) : '');
+            } else {
+                preview.textContent = '未找到匹配的精灵';
+            }
+        }
+
+        function updateTaskItemSearchPreview() {
+            const input = document.getElementById('taskItemSearchInput');
+            const preview = document.getElementById('taskItemSearchPreview');
+            if (!input || !preview) return;
+            const v = input.value.trim();
+            if (!v) {
+                preview.textContent = '';
+                return;
+            }
+            let itemId = parseInt(v, 10) || 0;
+            let name = '';
+            if (!itemId) {
+                const found = (allItems || []).find(function (it) { return (it.name || '').indexOf(v) >= 0; });
+                if (found) {
+                    itemId = found.id;
+                    name = found.name || '';
+                }
+            } else {
+                name = getItemNameById(itemId);
+            }
+            if (itemId) {
+                preview.textContent = '解析结果: ID ' + itemId + (name ? (' ' + name) : '');
+            } else {
+                preview.textContent = '未找到匹配的道具';
+            }
+        }
+
+        function renderTaskFitmentRewards() {
+            const tbody = document.getElementById('taskRewardFitmentsBody');
+            if (!tbody) return;
+            const list = (editingTaskRewards && editingTaskRewards.fitments) || [];
+            if (!list.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-muted">暂无家具奖励，点击下方「添加家具奖励」</td></tr>';
+                return;
+            }
+            tbody.innerHTML = list.map(function(f, idx) {
+                const name = getItemNameById(f.fitmentId);
+                return '<tr>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (f.fitmentId || 0) + '" onchange="updateTaskFitmentReward(' + idx + ',\'fitmentId\',this.value)"></td>' +
+                    '<td>' + (name || '') + '</td>' +
+                    '<td><input type="number" class="form-control form-control-sm" value="' + (f.count || 1) + '" min="1" onchange="updateTaskFitmentReward(' + idx + ',\'count\',this.value)"></td>' +
+                    '<td><button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeTaskFitmentReward(' + idx + ')">删除</button></td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        function updateTaskFitmentReward(index, field, val) {
+            if (!editingTaskRewards || !Array.isArray(editingTaskRewards.fitments)) return;
+            const list = editingTaskRewards.fitments;
+            if (index < 0 || index >= list.length) return;
+            const f = list[index];
+            const v = parseInt(val, 10) || 0;
+            if (field === 'fitmentId') f.fitmentId = v;
+            else if (field === 'count') f.count = v;
+            renderTaskFitmentRewards();
+        }
+
+        function removeTaskFitmentReward(index) {
+            if (!editingTaskRewards || !Array.isArray(editingTaskRewards.fitments)) return;
+            editingTaskRewards.fitments.splice(index, 1);
+            renderTaskFitmentRewards();
+        }
+
+        function addTaskFitmentReward() {
+            if (!editingTaskRewards) return;
+            if (!Array.isArray(editingTaskRewards.fitments)) editingTaskRewards.fitments = [];
+            const idInput = document.getElementById('taskFitmentIdInput');
+            const countInput = document.getElementById('taskFitmentCountInput');
+            let v = idInput ? idInput.value.trim() : '';
+            let fitmentId = parseInt(v, 10) || 0;
+            if (!fitmentId && v) {
+                const found = (allItems || []).find(function (it) { return (it.name || '').indexOf(v) >= 0; });
+                if (found) fitmentId = found.id;
+            }
+            const count = parseInt(countInput && countInput.value, 10) || 1;
+            if (!fitmentId) {
+                alert('请输入有效的家具ID或名称');
+                return;
+            }
+            editingTaskRewards.fitments.push({ fitmentId: fitmentId, count: count });
+            if (idInput) idInput.value = '';
+            if (countInput) countInput.value = '1';
+            updateTaskFitmentSearchPreview();
+            renderTaskFitmentRewards();
+        }
+
+        function updateTaskFitmentSearchPreview() {
+            const input = document.getElementById('taskFitmentIdInput');
+            const preview = document.getElementById('taskFitmentSearchPreview');
+            if (!input || !preview) return;
+            const v = input.value.trim();
+            if (!v) {
+                preview.textContent = '';
+                return;
+            }
+            let id = parseInt(v, 10) || 0;
+            let name = '';
+            if (!id) {
+                const found = (allItems || []).find(function (it) { return (it.name || '').indexOf(v) >= 0; });
+                if (found) {
+                    id = found.id;
+                    name = found.name || '';
+                }
+            } else {
+                name = getItemNameById(id);
+            }
+            if (id) {
+                preview.textContent = '解析结果: ID ' + id + (name ? (' ' + name) : '');
+            } else {
+                preview.textContent = '未找到匹配的家具（使用道具列表）';
+            }
+        }
+
+        function removeTaskItemReward(index) {
+            if (!editingTaskRewards || !Array.isArray(editingTaskRewards.items)) return;
+            editingTaskRewards.items.splice(index, 1);
+            renderTaskItemRewards();
+        }
+
+        function addTaskItemReward() {
+            if (!editingTaskRewards) return;
+            if (!Array.isArray(editingTaskRewards.items)) editingTaskRewards.items = [];
+            const input = document.getElementById('taskItemSearchInput');
+            const countInput = document.getElementById('taskItemSearchCount');
+            let v = input ? input.value.trim() : '';
+            if (!v) {
+                alert('请输入道具ID或名称');
+                return;
+            }
+            let defaultCount = parseInt(countInput && countInput.value, 10) || 1;
+            if (defaultCount < 1) defaultCount = 1;
+            const tokens = v.split(/[,，;；\s]+/).filter(function (s) { return s.length > 0; });
+            const added = [];
+            const addedSet = new Set();
+            const failed = [];
+            tokens.forEach(function (token) {
+                let itemId = parseInt(token, 10) || 0;
+                if (!itemId) {
+                    const found = (allItems || []).find(function (it) { return (it.name || '').indexOf(token) >= 0; });
+                    if (found) itemId = found.id;
+                }
+                if (!itemId) {
+                    failed.push(token);
+                    return;
+                }
+                if (addedSet.has(itemId)) {
+                    return;
+                }
+                editingTaskRewards.items.push({ itemId: itemId, count: defaultCount });
+                added.push(itemId);
+                addedSet.add(itemId);
+            });
+            if (!added.length) {
+                alert('未找到任何有效的道具，请检查输入');
+                return;
+            }
+            if (input) input.value = '';
+            updateTaskItemSearchPreview();
+            renderTaskItemRewards();
+            if (failed.length) {
+                alert('以下道具未找到，已跳过：' + failed.join('、'));
+            }
+        }
+
+        function saveTaskRewardModal() {
+            if (editingTaskIndex < 0 || !editingTaskRewards) {
+                if (taskRewardModalInstance) taskRewardModalInstance.hide();
+                return;
+            }
+            const coins = parseInt(document.getElementById('taskRewardCoins').value, 10) || 0;
+            const gold = parseInt(document.getElementById('taskRewardGold').value, 10) || 0;
+            const exp = parseInt(document.getElementById('taskRewardExp').value, 10) || 0;
+            editingTaskRewards.coins = coins;
+            const specials = editingTaskSpecialOthers ? editingTaskSpecialOthers.slice() : [];
+            if (gold > 0) specials.push({ type: 2, value: gold });
+            if (exp > 0) specials.push({ type: 3, value: exp });
+            editingTaskRewards.special = specials;
+            taskConfigs[editingTaskIndex].rewards = editingTaskRewards;
+            renderTaskConfigTable();
+            if (taskRewardModalInstance) taskRewardModalInstance.hide();
+        }
+
+        async function saveTaskConfigs() {
+            try {
+                const res = await fetch(API + '/gm/tasks/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(taskConfigs || [])
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('任务奖励配置保存成功');
+                } else {
+                    alert('保存失败: ' + (data.message || '未知错误'));
+                }
+            } catch (e) {
+                alert('保存失败: ' + e.message);
             }
         }
         const SOUL_PEARL_MIN = 1000001, SOUL_PEARL_MAX = 1000022;
@@ -1696,6 +2589,7 @@
         async function saveWeights() {
             const capsules = window._weightsCapsules || [];
             const fusion = window._weightsFusion || [];
+            const chipViewRows = window._chipMixRules || [];
             const capsuleCatchRates = {};
             capsules.forEach(function(c) {
                 const el = document.getElementById(c._inputId);
@@ -1718,6 +2612,39 @@
                 const id = String(f.itemID);
                 soulPearlRewardPets[id] = (f.rewardPets || []).map(function(r) { return { petClass: r.petClass, weight: Math.max(1, parseInt(r.weight, 10) || 1) }; });
             });
+            // 将「每行包含多个奖励」的视图模型，展开为后端需要的扁平 chipMixtureRules
+            const chipMixtureRules = [];
+            (chipViewRows || []).forEach(function(row, idx) {
+                const m1El = document.getElementById('chip_m1_' + idx);
+                const m2El = document.getElementById('chip_m2_' + idx);
+                const m3El = document.getElementById('chip_m3_' + idx);
+                const nameEl = document.getElementById('chip_name_' + idx);
+                const mat1 = m1El ? (parseInt(m1El.value, 10) || 0) : (row.mat1 || 0);
+                const mat2 = m2El ? (parseInt(m2El.value, 10) || 0) : (row.mat2 || 0);
+                const mat3 = m3El ? (parseInt(m3El.value, 10) || 0) : (row.mat3 || 0);
+                const name = nameEl ? (nameEl.value || '') : (row.name || '');
+                const rewards = row.rewards || [];
+                rewards.forEach(function(r, ridx) {
+                    const baseId = 'chip_reward_' + idx + '_' + ridx;
+                    const itemEl = document.getElementById(baseId + '_item');
+                    const cntEl = document.getElementById(baseId + '_cnt');
+                    const rateEl = document.getElementById(baseId + '_rate');
+                    const itemId = itemEl ? (parseInt(itemEl.value, 10) || 0) : (r.itemId || 0);
+                    const count = cntEl ? Math.max(1, parseInt(cntEl.value, 10) || 1) : (r.count || 1);
+                    const rate = rateEl ? Math.max(0, Math.min(100, parseInt(rateEl.value, 10) || 0)) : (r.rate || 0);
+                    if (!itemId || rate <= 0) return; // 跳过无效行
+                    chipMixtureRules.push({
+                        mat1: mat1,
+                        mat2: mat2,
+                        mat3: mat3,
+                        name: name,
+                        successRate: rate,
+                        rewardItemId: itemId,
+                        rewardCount: count
+                    });
+                });
+            });
+
             try {
                 const res = await fetch(API + '/gm/weights', {
                     method: 'POST',
@@ -1727,17 +2654,95 @@
                         fusionSuccessRates: fusionSuccessRates,
                         soulPearlTransmuteTm: soulPearlTransmuteTm,
                         soulPearlVipTransmuteTm: soulPearlVipTransmuteTm,
-                        soulPearlRewardPets: soulPearlRewardPets
+                        soulPearlRewardPets: soulPearlRewardPets,
+                        chipMixtureRules: chipMixtureRules
                     })
                 });
                 const data = await res.json();
                 if (data.success) alert('保存成功'); else alert('保存失败: ' + (data.message || ''));
             } catch (e) { alert('保存失败: ' + e.message); }
         }
+
+        function renderChipMixRows() {
+            const tbody = document.getElementById('chipMixList');
+            if (!tbody) return;
+            const list = window._chipMixRules || [];
+            if (!list.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-muted">暂无配置，点击下方「添加规则」添加一条。</td></tr>';
+                return;
+            }
+            tbody.innerHTML = list.map(function(r, idx) {
+                const m1Input = 'chip_m1_' + idx;
+                const m2Input = 'chip_m2_' + idx;
+                const m3Input = 'chip_m3_' + idx;
+                const nameInput = 'chip_name_' + idx;
+                const v1 = r.mat1 ? r.mat1 : '';
+                const v2 = r.mat2 ? r.mat2 : '';
+                const v3 = r.mat3 ? r.mat3 : '';
+                const rewards = Array.isArray(r.rewards) && r.rewards.length ? r.rewards : [{ itemId: '', count: 1, rate: 100 }];
+                const rewardsHtml = rewards.map(function(rv, ridx) {
+                    const baseId = 'chip_reward_' + idx + '_' + ridx;
+                    const itemVal = rv.itemId ? rv.itemId : '';
+                    const cntVal = rv.count != null ? rv.count : 1;
+                    const rateVal = rv.rate != null ? rv.rate : 100;
+                    return '<div class="d-flex flex-wrap align-items-center gap-1 mb-1">' +
+                        '<input type="text" id="'+baseId+'_item" class="form-control form-control-sm kyse-input" style="width:130px" list="itemOptions" placeholder="道具ID 或名称" value="'+itemVal+'">' +
+                        '<input type="number" id="'+baseId+'_cnt" class="form-control form-control-sm kyse-input" style="width:70px" min="1" value="'+cntVal+'" placeholder="数量">' +
+                        '<input type="number" id="'+baseId+'_rate" class="form-control form-control-sm kyse-input" style="width:80px" min="0" max="100" value="'+rateVal+'" placeholder="%">' +
+                        '<button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeChipMixReward('+idx+','+ridx+')">删</button>' +
+                    '</div>';
+                }).join('') +
+                '<button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addChipMixReward('+idx+')">添加奖励</button>';
+                return '<tr>' +
+                    '<td><input type="text" id="'+m1Input+'" class="form-control form-control-sm kyse-input" style="width:120px" list="itemOptions" placeholder="输入或选择道具ID" value="'+v1+'"></td>' +
+                    '<td><input type="text" id="'+m2Input+'" class="form-control form-control-sm kyse-input" style="width:120px" list="itemOptions" placeholder="输入或选择道具ID" value="'+v2+'"></td>' +
+                    '<td><input type="text" id="'+m3Input+'" class="form-control form-control-sm kyse-input" style="width:120px" list="itemOptions" placeholder="输入或选择道具ID" value="'+v3+'"></td>' +
+                    '<td><input type="text" id="'+nameInput+'" class="form-control form-control-sm kyse-input" value="'+(r.name||'')+'"></td>' +
+                    '<td>'+rewardsHtml+'</td>' +
+                    '<td><button type="button" class="kyse-btn kyse-btn-danger btn-sm" onclick="removeChipMixRow('+idx+')">删除整行</button></td>' +
+                    '</tr>';
+            }).join('');
+        }
+
+        function addChipMixRow() {
+            if (!window._chipMixRules) window._chipMixRules = [];
+            window._chipMixRules.push({
+                mat1: 0,
+                mat2: 0,
+                mat3: 0,
+                name: '',
+                rewards: [{ itemId: '', count: 1, rate: 100 }]
+            });
+            renderChipMixRows();
+        }
+
+        function removeChipMixRow(idx) {
+            if (!window._chipMixRules) return;
+            window._chipMixRules.splice(idx, 1);
+            renderChipMixRows();
+        }
+
+        function addChipMixReward(rowIdx) {
+            if (!window._chipMixRules) window._chipMixRules = [];
+            const row = window._chipMixRules[rowIdx];
+            if (!row) return;
+            if (!Array.isArray(row.rewards)) row.rewards = [];
+            row.rewards.push({ itemId: '', count: 1, rate: 100 });
+            renderChipMixRows();
+        }
+
+        function removeChipMixReward(rowIdx, rewardIdx) {
+            const rows = window._chipMixRules || [];
+            const row = rows[rowIdx];
+            if (!row || !Array.isArray(row.rewards)) return;
+            row.rewards.splice(rewardIdx, 1);
+            renderChipMixRows();
+        }
         
         // ===== BUFF 道具 / 奖励配置 =====
         let buffItemsConfig = null;
         let rewardConfig = null;
+        let allItemsForGM = [];
 
         async function loadBuffItems() {
             try {
@@ -1752,6 +2757,18 @@
                 renderBuffTables();
             } catch (e) {
                 alert('加载 BUFF 配置失败: ' + e.message);
+            }
+        }
+
+        async function loadAllItemsForGM() {
+            try {
+                const res = await fetch(API + '/gm/items');
+                const data = await res.json();
+                if (data.success && Array.isArray(data.data)) {
+                    allItemsForGM = data.data;
+                }
+            } catch (e) {
+                // 忽略失败，仅影响道具搜索联想
             }
         }
 
@@ -1870,6 +2887,7 @@
                 rewardConfig = data.data || {};
                 if (!rewardConfig.collectRewards) rewardConfig.collectRewards = [];
                 if (!rewardConfig.roweiRewards) rewardConfig.roweiRewards = { baseExp: 0, expPerHour: 0, coinPerHour: 0 };
+                if (!rewardConfig.miniGames) rewardConfig.miniGames = [];
                 renderRewardTables();
             } catch (e) {
                 alert('加载奖励配置失败: ' + e.message);
@@ -1898,6 +2916,23 @@
             if (baseExpEl) baseExpEl.value = rowei.baseExp || 0;
             if (expHourEl) expHourEl.value = rowei.expPerHour || 0;
             if (coinHourEl) coinHourEl.value = rowei.coinPerHour || 0;
+
+            const miniBody = document.getElementById('miniGameRewardList');
+            if (miniBody) {
+                const list2 = rewardConfig.miniGames || [];
+                miniBody.innerHTML = list2.map(function (r, idx) {
+                    return '<tr>' +
+                        '<td><input type="text" class="form-control form-control-sm" value="' + (r.name || r.Name || '') + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'name\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.minPer != null ? r.minPer : (r.MinPer || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'minPer\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.maxPer != null ? r.maxPer : (r.MaxPer || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'maxPer\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.minScore != null ? r.minScore : (r.MinScore || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'minScore\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.maxScore != null ? r.maxScore : (r.MaxScore || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'maxScore\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.coins != null ? r.coins : (r.Coins || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'coins\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.exp != null ? r.exp : (r.Exp || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'exp\',this.value)"></td>' +
+                        '<td><button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeRewardRow(\'miniGames\',' + idx + ')">删除</button></td>' +
+                        '</tr>';
+                }).join('') || '<tr><td colspan="8" class="text-muted">暂无配置，点击「添加行」新增</td></tr>';
+            }
         }
 
         function updateRewardField(section, idx, field, val) {
@@ -1916,6 +2951,21 @@
             if (!rewardConfig) rewardConfig = {};
             if (!rewardConfig.collectRewards) rewardConfig.collectRewards = [];
             rewardConfig.collectRewards.push({ activityId: 0, petId: 0, level: 5, dv: 31, nature: 0 });
+            renderRewardTables();
+        }
+
+        function addMiniGameRewardRow() {
+            if (!rewardConfig) rewardConfig = {};
+            if (!rewardConfig.miniGames) rewardConfig.miniGames = [];
+            rewardConfig.miniGames.push({
+                name: '',
+                minPer: 0,
+                maxPer: 100,
+                minScore: 0,
+                maxScore: 0,
+                coins: 0,
+                exp: 0
+            });
             renderRewardTables();
         }
 
@@ -2001,7 +3051,8 @@
         
         async function loadUsers() {
             try {
-                const keyword = document.getElementById('searchKeyword').value.trim();
+                const keywordEl = document.getElementById('searchKeyword');
+                const keyword = keywordEl ? keywordEl.value.trim() : '';
                 const url = keyword ? `${API}/gm/users?keyword=${encodeURIComponent(keyword)}` : `${API}/gm/users`;
                 const res = await fetch(url);
                 const data = await res.json();
@@ -2013,7 +3064,8 @@
                             <small>💰 ${u.coins} | 💎 ${u.gold} | 🥚 ${u.petCount}</small>
                         </div>
                     `).join('');
-                    document.getElementById('userList').innerHTML = html;
+                    const listEl = document.getElementById('userList');
+                    if (listEl) listEl.innerHTML = html;
                 }
             } catch(e) { alert('加载失败: ' + e.message); }
         }
@@ -2640,15 +3692,29 @@
         
         async function loadPetDatabase() {
             const container = document.getElementById('petDatabase');
-            if (!container) return;
-            container.innerHTML = '<p class="text-muted">精灵列表加载中...</p>';
+            if (container) {
+                container.innerHTML = '<p class="text-muted">精灵列表加载中...</p>';
+            }
             try {
                 const res = await fetch(`${API}/gm/pets`);
                 const data = await res.json();
                 if (data.success && Array.isArray(data.data)) {
                     allPets = data.data;
-                    renderPetDatabase(allPets);
-                    // 填充添加精灵弹窗的 datalist
+                    // 建立 ID->名稱 映射，供任務獎勵等功能使用
+                    const petIdToName = window._petIdToName || {};
+                    allPets.forEach(p => {
+                        if (!p) return;
+                        const id = parseInt(p.id, 10);
+                        if (!isNaN(id) && id > 0) {
+                            petIdToName[id] = p.name || '';
+                        }
+                    });
+                    window._petIdToName = petIdToName;
+
+                    if (container) {
+                        renderPetDatabase(allPets);
+                    }
+                    // 填充添加精靈彈窗的 datalist
                     const dl = document.getElementById('petOptions');
                     if (dl) {
                         dl.innerHTML = allPets.map(p => 
@@ -2656,11 +3722,15 @@
                         ).join('');
                     }
                 } else {
-                    container.innerHTML = '<p class="text-danger">精灵列表加载失败</p>';
+                    if (container) {
+                        container.innerHTML = '<p class="text-danger">精灵列表加载失败</p>';
+                    }
                 }
             } catch (e) {
                 console.error(e);
-                container.innerHTML = '<p class="text-danger">精灵列表加载失败，请确认服务已启动</p>';
+                if (container) {
+                    container.innerHTML = '<p class="text-danger">精灵列表加载失败，请确认服务已启动</p>';
+                }
             }
         }
 
@@ -2678,6 +3748,102 @@
             `).join('');
         }
 
+        function openMapPetsModal(mapId, type) {
+            if (!allPets || allPets.length === 0) {
+                // 尝试加载一次精灵数据库
+                loadPetDatabase();
+            }
+            currentMapPetsTarget = { mapId, type };
+            const title = document.getElementById('mapPetsModalTitle');
+            if (title) {
+                title.textContent = `地图 ${mapId} - ${type === 'rare' ? '稀有精灵' : '普通精灵'} 批量添加`;
+            }
+            renderMapPetsList(allPets || []);
+            if (mapPetsModalInstance) {
+                mapPetsModalInstance.show();
+            }
+        }
+
+        function renderMapPetsList(list) {
+            const container = document.getElementById('mapPetsList');
+            if (!container) return;
+            if (!list || list.length === 0) {
+                container.innerHTML = '<p class="text-muted">精灵列表为空，请确认 /gm/pets 接口正常。</p>';
+                return;
+            }
+            container.innerHTML = list.map(p => {
+                const id = p.id;
+                const name = p.name || '';
+                return `
+                    <div class="user-item mb-1">
+                        <div class="d-flex justify-content-between align-items-center gap-2">
+                            <div><strong>${id}</strong> ${name}</div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="small text-muted">Lv</span>
+                                <input type="number" class="form-control form-control-sm" style="width:70px" value="1" min="1" data-role="lvMin" data-pet-id="${id}">
+                                <span class="small">-</span>
+                                <input type="number" class="form-control form-control-sm" style="width:70px" value="1" min="1" data-role="lvMax" data-pet-id="${id}">
+                                <div class="form-check ms-2">
+                                    <input class="form-check-input" type="checkbox" value="" data-role="selected" data-pet-id="${id}">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function filterMapPetsList() {
+            const input = document.getElementById('mapPetsSearch');
+            if (!input) return;
+            const q = (input.value || '').trim().toLowerCase();
+            if (!q) {
+                renderMapPetsList(allPets || []);
+                return;
+            }
+            const list = (allPets || []).filter(p => {
+                const idStr = String(p.id);
+                const nameStr = (p.name || '').toLowerCase();
+                return idStr.includes(q) || nameStr.includes(q);
+            });
+            renderMapPetsList(list);
+        }
+
+        function applyMapPetsSelection() {
+            if (!currentMapPetsTarget) return;
+            const { mapId, type } = currentMapPetsTarget;
+            const listContainer = document.getElementById('mapPetsList');
+            if (!listContainer) return;
+            const selected = Array.from(listContainer.querySelectorAll('input[data-role="selected"]:checked'));
+            if (selected.length === 0) {
+                if (mapPetsModalInstance) mapPetsModalInstance.hide();
+                return;
+            }
+            const lines = [];
+            selected.forEach(chk => {
+                const id = parseInt(chk.getAttribute('data-pet-id'), 10);
+                if (!id) return;
+                const lvMinInput = listContainer.querySelector(`input[data-role="lvMin"][data-pet-id="${id}"]`);
+                const lvMaxInput = listContainer.querySelector(`input[data-role="lvMax"][data-pet-id="${id}"]`);
+                let lvMin = parseInt(lvMinInput && lvMinInput.value, 10) || 1;
+                let lvMax = parseInt(lvMaxInput && lvMaxInput.value, 10) || lvMin;
+                if (lvMax < lvMin) lvMax = lvMin;
+                const name = getPetNameById(id);
+                const base = name ? `${id} ${name}` : String(id);
+                const line = lvMin === lvMax ? `${base} ${lvMin}` : `${base} ${lvMin}-${lvMax}`;
+                lines.push(line);
+            });
+            const textarea = document.querySelector(`textarea[data-map-id="${mapId}"][data-field="${type}"]`);
+            if (textarea && lines.length > 0) {
+                const existing = (textarea.value || '').trim();
+                const appendText = lines.join('\n');
+                textarea.value = existing ? (existing + '\n' + appendText) : appendText;
+            }
+            if (mapPetsModalInstance) {
+                mapPetsModalInstance.hide();
+            }
+        }
+
         async function loadItemDatabase() {
             const container = document.getElementById('itemDatabase');
             if (!container) return;
@@ -2687,6 +3853,10 @@
                 const data = await res.json();
                 if (data.success && Array.isArray(data.data)) {
                     allItems = data.data;
+                    const itemIdToName = {};
+                    allItems.forEach(it => { if (it && it.id) itemIdToName[it.id] = it.name || ''; });
+                    window._itemIdToName = window._itemIdToName || {};
+                    Object.assign(window._itemIdToName, itemIdToName);
                     renderItemDatabase(allItems);
                     const dl = document.getElementById('itemOptions');
                     if (dl) {
@@ -2719,16 +3889,177 @@
         
         // 地图刷新配置（普通/稀有精灵 + 刷新间隔）
         let mapConfigsCache = [];
+        let mapListPage = 1;
+        let mapListPageSize = 5;
+        let mapListFiltered = [];
+        function filterMapList() {
+            const q = (document.getElementById('mapSearchInput') && document.getElementById('mapSearchInput').value || '').trim().toLowerCase();
+            if (!q) {
+                mapListFiltered = (mapConfigsCache || []).slice();
+            } else {
+                mapListFiltered = (mapConfigsCache || []).filter(c => {
+                    const id = String(c.mapId || c.MapID || c.mapID || '');
+                    const name = (getMapName(id) || '').toLowerCase();
+                    return id.includes(q) || name.includes(q);
+                });
+            }
+            mapListPage = 1;
+            renderMapList();
+        }
+        function renderMapList() {
+            const container = document.getElementById('mapListContainer');
+            const pagEl = document.getElementById('mapPagination');
+            const countEl = document.getElementById('mapsCountText');
+            const pageSizeEl = document.getElementById('mapPageSize');
+            if (!container) return;
+            const list = mapListFiltered.length ? mapListFiltered : (mapConfigsCache || []);
+            const total = list.length;
+            mapListPageSize = parseInt(pageSizeEl && pageSizeEl.value, 10) || 5;
+            const totalPages = Math.max(1, Math.ceil(total / mapListPageSize));
+            mapListPage = Math.min(mapListPage, totalPages);
+            const start = (mapListPage - 1) * mapListPageSize;
+            const pageData = list.slice(start, start + mapListPageSize);
+            if (countEl) countEl.textContent = '共' + (mapConfigsCache.length || 0) + '个地图';
+            if (total === 0) {
+                container.innerHTML = '<p class="text-muted">暂无可配置地图</p>';
+                if (pagEl) pagEl.style.display = 'none';
+                return;
+            }
+            container.innerHTML = pageData.map(cfg => {
+                const mapId = cfg.mapId || cfg.MapID || cfg.mapID;
+                const name = getMapName(mapId);
+                const common = cfg.common || cfg.Common || [];
+                const rare = cfg.rare || cfg.Rare || [];
+                const cnt = (Array.isArray(common) ? common.length : 0) + (Array.isArray(rare) ? rare.length : 0);
+                const interval = cfg.refreshIntervalSeconds || cfg.RefreshIntervalSeconds || 10;
+                return `<div class="maps-list-item" data-map-id="${mapId}" onclick="openMapConfigModal(${mapId})">
+                    <div class="left"><span class="map-tag">地图 ${mapId}</span><span class="map-name">${name || '未知'}</span></div>
+                    <div class="right"><span class="monster-count">${cnt}个怪物</span><span class="refresh-info">刷新:${interval} ›</span></div>
+                </div>`;
+            }).join('');
+            if (pagEl) {
+                pagEl.style.display = 'flex';
+                const infoEl = document.getElementById('mapPaginationInfo');
+                if (infoEl) infoEl.textContent = '共' + total + '条';
+                const numsEl = document.getElementById('mapPageNumbers');
+                if (numsEl) {
+                    let html = '';
+                    for (let i = 1; i <= totalPages; i++) {
+                        const active = i === mapListPage ? ' active' : '';
+                        html += `<button type="button" class="page-btn${active}" onclick="mapGoToPage(${i})">${i}</button>`;
+                    }
+                    numsEl.innerHTML = html;
+                }
+                const goEl = document.getElementById('mapPageGo');
+                if (goEl) { goEl.value = mapListPage; goEl.max = totalPages; }
+            }
+        }
+        let currentMapConfigMapId = null;
+        let mapConfigModalInstance = null;
+        function openMapConfigModal(mapId) {
+            const cfg = (mapConfigsCache || []).find(c => String(c.mapId || c.MapID || c.mapID) === String(mapId));
+            if (!cfg) return;
+            currentMapConfigMapId = mapId;
+            const slots = cfg.slots || cfg.Slots || 4;
+            const interval = cfg.refreshIntervalSeconds || cfg.RefreshIntervalSeconds || 10;
+            const rarePercent = (cfg.rarePercent != null ? cfg.rarePercent : (cfg.RarePercent != null ? cfg.RarePercent : 5));
+            const commonText = monsterLinesFromEntries(cfg.common || cfg.Common);
+            const rareText = monsterLinesFromEntries(cfg.rare || cfg.Rare);
+            const titleEl = document.getElementById('mapConfigModalTitle');
+            const idDisplay = document.getElementById('mapConfigModalMapIdDisplay');
+            const nameEl = document.getElementById('mapConfigModalMapName');
+            const slotsEl = document.getElementById('mapConfigModalSlots');
+            const rareEl = document.getElementById('mapConfigModalRarePercent');
+            const intervalEl = document.getElementById('mapConfigModalInterval');
+            const commonTa = document.getElementById('mapConfigModalCommon');
+            const rareTa = document.getElementById('mapConfigModalRare');
+            const commonBtn = document.getElementById('mapConfigModalCommonBtn');
+            const rareBtn = document.getElementById('mapConfigModalRareBtn');
+            if (titleEl) titleEl.textContent = '地图配置 - ' + getMapName(mapId) + ' (ID:' + mapId + ')';
+            if (idDisplay) idDisplay.value = mapId;
+            if (nameEl) nameEl.value = getMapName(mapId) || '';
+            if (slotsEl) { slotsEl.value = slots; slotsEl.setAttribute('data-map-id', String(mapId)); }
+            if (rareEl) { rareEl.value = rarePercent; rareEl.setAttribute('data-map-id', String(mapId)); }
+            if (intervalEl) { intervalEl.value = interval; intervalEl.setAttribute('data-map-id', String(mapId)); }
+            if (commonTa) { commonTa.value = commonText; commonTa.setAttribute('data-map-id', String(mapId)); }
+            if (rareTa) { rareTa.value = rareText; rareTa.setAttribute('data-map-id', String(mapId)); }
+            if (commonBtn) commonBtn.onclick = function() { openMapPetsModal(mapId, 'common'); };
+            if (rareBtn) rareBtn.onclick = function() { openMapPetsModal(mapId, 'rare'); };
+            if (!mapConfigModalInstance) {
+                const el = document.getElementById('mapConfigModal');
+                if (el && typeof bootstrap !== 'undefined') mapConfigModalInstance = new bootstrap.Modal(el);
+            }
+            if (mapConfigModalInstance) mapConfigModalInstance.show();
+        }
+        async function saveMapConfigFromModal() {
+            if (!currentMapConfigMapId) return;
+            const cfg = (mapConfigsCache || []).find(c => String(c.mapId || c.MapID || c.mapID) === String(currentMapConfigMapId));
+            if (!cfg) return;
+            let slots = parseInt(document.getElementById('mapConfigModalSlots') && document.getElementById('mapConfigModalSlots').value, 10) || 4;
+            if (slots < 1) slots = 1;
+            if (slots > 9) slots = 9;
+            let interval = parseInt(document.getElementById('mapConfigModalInterval') && document.getElementById('mapConfigModalInterval').value, 10) || 10;
+            if (interval < 1) interval = 1;
+            if (interval > 600) interval = 600;
+            let rarePercent = parseInt(document.getElementById('mapConfigModalRarePercent') && document.getElementById('mapConfigModalRarePercent').value, 10);
+            if (isNaN(rarePercent) || rarePercent < 0) rarePercent = 0;
+            if (rarePercent > 100) rarePercent = 100;
+            const commonText = (document.getElementById('mapConfigModalCommon') && document.getElementById('mapConfigModalCommon').value) || '';
+            const rareText = (document.getElementById('mapConfigModalRare') && document.getElementById('mapConfigModalRare').value) || '';
+            cfg.slots = slots;
+            cfg.refreshIntervalSeconds = interval;
+            cfg.rarePercent = rarePercent;
+            cfg.common = parseMonsterLines(commonText);
+            cfg.rare = parseMonsterLines(rareText);
+            if (mapConfigModalInstance) mapConfigModalInstance.hide();
+            await saveMapConfig(true);
+        }
+        function mapPagePrev() { mapListPage = Math.max(1, mapListPage - 1); renderMapList(); }
+        function mapPageNext() { const total = mapListFiltered.length || mapConfigsCache.length; const maxP = Math.ceil(total / mapListPageSize); mapListPage = Math.min(maxP, mapListPage + 1); renderMapList(); }
+        function mapGoToPage(p) { const total = mapListFiltered.length || mapConfigsCache.length; const maxP = Math.max(1, Math.ceil(total / mapListPageSize)); mapListPage = Math.max(1, Math.min(maxP, parseInt(p, 10) || 1)); renderMapList(); }
         function parseMonsterLines(text) {
             const lines = (text || '').split('\n').map(l => l.trim()).filter(Boolean);
             const result = [];
             for (const line of lines) {
-                // 允许格式：名称 或 名称 LvMin-LvMax 或 名称 Lv
+                // 支持格式：
+                // 1) 精灵代码 名称 LvMin-LvMax
+                // 2) 精灵代码 名称 Lv
+                // 3) 精灵代码 LvMin-LvMax
+                // 4) 名称 LvMin-LvMax（兼容旧格式，仅名称）
                 const parts = line.split(/\s+/);
-                const name = parts[0];
+                if (parts.length === 0) continue;
+                let petId = 0;
+                let name = '';
                 let lvMin = 0, lvMax = 0;
+
+                // 先尝试从最后一个字段解析等级
+                let lvPart = null;
                 if (parts.length >= 2) {
-                    const lvPart = parts[1];
+                    const last = parts[parts.length - 1];
+                    if (/^\d+(-\d+)?$/.test(last)) {
+                        lvPart = last;
+                        parts.pop();
+                    }
+                }
+
+                if (parts.length > 0) {
+                    const first = parts[0];
+                    const maybeId = parseInt(first, 10);
+                    if (!isNaN(maybeId) && maybeId > 0) {
+                        petId = maybeId;
+                        // 剩余部分当作名称参考
+                        if (parts.length >= 2) {
+                            name = parts.slice(1).join(' ');
+                        } else {
+                            name = getPetNameById(petId);
+                        }
+                    } else {
+                        // 旧格式：只写名称
+                        name = parts.join(' ');
+                    }
+                }
+
+                if (lvPart) {
                     if (lvPart.includes('-')) {
                         const [a, b] = lvPart.split('-');
                         const m = parseInt(a, 10) || 0;
@@ -2741,70 +4072,77 @@
                         lvMax = v;
                     }
                 }
-                result.push({ name, lvMin, lvMax });
+                result.push({ petId, name, lvMin, lvMax });
             }
             return result;
         }
         function monsterLinesFromEntries(entries) {
             if (!entries || entries.length === 0) return '';
             return entries.map(e => {
-                const n = e.name || '';
-                const a = e.levelMin || e.lvMin || 0;
-                const b = e.levelMax || e.lvMax || 0;
-                if (!a && !b) return n;
-                if (a === b) return n + ' ' + a;
-                return n + ' ' + a + '-' + b;
+                const id = e.petId || e.PetID || 0;
+                let name = e.name || e.Name || '';
+                const a = e.levelMin || e.lvMin || e.LevelMin || 0;
+                const b = e.levelMax || e.lvMax || e.LevelMax || 0;
+                let prefix = '';
+                if (id) {
+                    const autoName = getPetNameById(id);
+                    if (autoName) {
+                        name = autoName;
+                    }
+                    prefix = String(id);
+                    if (name) {
+                        prefix += ' ' + name;
+                    }
+                } else {
+                    prefix = name;
+                }
+                if (!a && !b) return prefix;
+                if (a === b) return prefix + ' ' + a;
+                return prefix + ' ' + a + '-' + b;
             }).join('\n');
         }
         async function loadMapConfig() {
-            const tbody = document.getElementById('mapConfig');
-            if (!tbody) return;
-            tbody.innerHTML = '<tr><td colspan="5" class="text-muted">地图配置加载中...</td></tr>';
+            const container = document.getElementById('mapListContainer');
+            if (!container) return;
+            container.innerHTML = '<p class="text-muted">地图配置加载中...</p>';
             try {
+                if (!allPets || allPets.length === 0) {
+                    await loadPetDatabase();
+                }
                 const res = await fetch(`${API}/gm/maps/config`);
                 const data = await res.json();
                 if (!data.success || !Array.isArray(data.data)) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-danger">加载失败</td></tr>';
+                    container.innerHTML = '<p class="text-danger">加载失败</p>';
                     return;
                 }
                 mapConfigsCache = data.data || [];
                 if (mapConfigsCache.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-muted">暂无可配置地图</td></tr>';
+                    mapListFiltered = [];
+                    renderMapList();
                     return;
                 }
-                tbody.innerHTML = mapConfigsCache.map(cfg => {
-                    const mapId = cfg.mapId || cfg.MapID || cfg.mapID;
-                    const slots = cfg.slots || cfg.Slots || 4;
-                    const interval = cfg.refreshIntervalSeconds || cfg.RefreshIntervalSeconds || 10;
-                    const commonText = monsterLinesFromEntries(cfg.common || cfg.Common);
-                    const rareText = monsterLinesFromEntries(cfg.rare || cfg.Rare);
-                    return `
-                        <tr>
-                            <td>${mapId}</td>
-                            <td><input type="number" class="form-control form-control-sm" min="1" max="9" value="${slots}" data-map-id="${mapId}" data-field="slots"></td>
-                            <td><textarea class="form-control form-control-sm" rows="3" data-map-id="${mapId}" data-field="common" placeholder="例如：皮皮 1-2&#10;#闪光皮皮 1-2">${commonText}</textarea></td>
-                            <td><textarea class="form-control form-control-sm" rows="3" data-map-id="${mapId}" data-field="rare" placeholder="例如：#闪光皮皮 1-2">${rareText}</textarea></td>
-                            <td><input type="number" class="form-control form-control-sm" min="1" max="600" value="${interval}" data-map-id="${mapId}" data-field="interval"></td>
-                        </tr>
-                    `;
-                }).join('');
+                mapListFiltered = mapConfigsCache.slice();
+                renderMapList();
             } catch (e) {
                 console.error(e);
-                tbody.innerHTML = '<tr><td colspan="5" class="text-danger">加载失败，请确认服务已启动</td></tr>';
+                container.innerHTML = '<p class="text-danger">加载失败，请确认服务已启动</p>';
             }
         }
-        async function saveMapConfig() {
+        async function saveMapConfig(useCache) {
             if (!Array.isArray(mapConfigsCache) || mapConfigsCache.length === 0) {
                 alert('暂无可保存的地图配置');
                 return;
             }
-            const rowsById = {};
-            document.querySelectorAll('[data-map-id]').forEach(el => {
-                const id = String(el.getAttribute('data-map-id'));
-                if (!rowsById[id]) rowsById[id] = {};
-                const field = el.getAttribute('data-field');
-                rowsById[id][field] = el;
-            });
+            const rowsById = (function() {
+                const o = {};
+                document.querySelectorAll('[data-map-id][data-field]').forEach(el => {
+                    const id = String(el.getAttribute('data-map-id'));
+                    if (!o[id]) o[id] = {};
+                    const field = el.getAttribute('data-field');
+                    o[id][field] = el;
+                });
+                return o;
+            })();
             const payload = [];
             for (const cfg of mapConfigsCache) {
                 const mapId = cfg.mapId || cfg.MapID || cfg.mapID;
@@ -2812,32 +4150,74 @@
                 const row = rowsById[key] || {};
                 const slotsEl = row['slots'];
                 const intervalEl = row['interval'];
+                const rarePercentEl = row['rarePercent'];
                 const commonEl = row['common'];
                 const rareEl = row['rare'];
-                let slots = parseInt(slotsEl && slotsEl.value, 10) || 4;
+                const fromDom = slotsEl || intervalEl || rarePercentEl || commonEl || rareEl;
+                let slots, interval, rarePercent, commonList, rareList;
+                if (useCache || !fromDom) {
+                    slots = cfg.slots ?? 4;
+                    interval = cfg.refreshIntervalSeconds ?? 10;
+                    rarePercent = cfg.rarePercent ?? 5;
+                    commonList = cfg.common || [];
+                    rareList = cfg.rare || [];
+                } else {
+                    slots = parseInt(slotsEl && slotsEl.value, 10) || 4;
+                    interval = parseInt(intervalEl && intervalEl.value, 10) || 10;
+                    rarePercent = parseInt(rarePercentEl && rarePercentEl.value, 10);
+                    commonList = parseMonsterLines(commonEl ? commonEl.value : '');
+                    rareList = parseMonsterLines(rareEl ? rareEl.value : '');
+                }
                 if (slots < 1) slots = 1;
                 if (slots > 9) slots = 9;
-                let interval = parseInt(intervalEl && intervalEl.value, 10) || 10;
                 if (interval < 1) interval = 1;
                 if (interval > 600) interval = 600;
-                const commonList = parseMonsterLines(commonEl ? commonEl.value : '');
-                const rareList = parseMonsterLines(rareEl ? rareEl.value : '');
+                if (isNaN(rarePercent) || rarePercent < 0) rarePercent = 0;
+                if (rarePercent > 100) rarePercent = 100;
+                // 原始配置（用于判断是否有改动，优化存储）
+                const origSlots = cfg.slots || cfg.Slots || 4;
+                const origInterval = cfg.refreshIntervalSeconds || cfg.RefreshIntervalSeconds || 10;
+                const origRarePercent = (cfg.rarePercent != null ? cfg.rarePercent : (cfg.RarePercent != null ? cfg.RarePercent : 5));
+                const origCommon = (cfg.common || cfg.Common || []).map(e => ({
+                    petId: e.petId || e.PetID || 0,
+                    name: e.name || e.Name || '',
+                    levelMin: e.levelMin || e.LevelMin || 0,
+                    levelMax: e.levelMax || e.LevelMax || 0,
+                    rare: false,
+                }));
+                const origRare = (cfg.rare || cfg.Rare || []).map(e => ({
+                    petId: e.petId || e.PetID || 0,
+                    name: e.name || e.Name || '',
+                    levelMin: e.levelMin || e.LevelMin || 0,
+                    levelMax: e.levelMax || e.LevelMax || 0,
+                    rare: true,
+                }));
+                const nowCommon = commonList.map(e => ({
+                    petId: e.petId || e.PetID || 0,
+                    name: e.name || e.Name || '',
+                    levelMin: e.levelMin ?? e.lvMin ?? 0,
+                    levelMax: e.levelMax ?? e.lvMax ?? 0,
+                    rare: false,
+                }));
+                const nowRare = rareList.map(e => ({
+                    petId: e.petId || e.PetID || 0,
+                    name: e.name || e.Name || '',
+                    levelMin: e.levelMin ?? e.lvMin ?? 0,
+                    levelMax: e.levelMax ?? e.lvMax ?? 0,
+                    rare: true,
+                }));
+                const origObj = { slots: origSlots, interval: origInterval, rarePercent: origRarePercent, common: origCommon, rare: origRare };
+                const nowObj = { slots: slots, interval: interval, rarePercent: rarePercent, common: nowCommon, rare: nowRare };
+                if (JSON.stringify(origObj) === JSON.stringify(nowObj)) {
+                    continue; // 无改动，不写入 payload，减小存储与传输
+                }
                 payload.push({
                     mapId: mapId,
                     slots: slots,
                     refreshIntervalSeconds: interval,
-                    common: commonList.map(e => ({
-                        name: e.name,
-                        levelMin: e.lvMin,
-                        levelMax: e.lvMax,
-                        rare: false
-                    })),
-                    rare: rareList.map(e => ({
-                        name: e.name,
-                        levelMin: e.lvMin,
-                        levelMax: e.lvMax,
-                        rare: true
-                    }))
+                    rarePercent: rarePercent,
+                    common: nowCommon,
+                    rare: nowRare,
                 });
             }
             try {
@@ -3098,6 +4478,7 @@
 
         async function loadDarkPortal() {
             try {
+                await Promise.all([ensurePetNameCache(), ensureItemNameCache()]);
                 const res = await fetch(API + '/gm/darkportal/bosses');
                 const data = await res.json();
                 if (!data.success) {
@@ -3123,12 +4504,30 @@
                 <td><input type="number" class="form-control form-control-sm" value="${row.doorIndex != null ? row.doorIndex : 0}" data-field="doorIndex" min="0" max="10"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.subIndex != null ? row.subIndex : 0}" data-field="subIndex" min="0"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.bossId || 0}" data-field="bossId"></td>
+                <td class="text-muted dark-boss-name" style="min-width:80px">${getPetNameById(row.bossId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.enemyLv != null ? row.enemyLv : 50}" data-field="enemyLv" min="0"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardItemId || 0}" data-field="rewardItemId" placeholder="精元物品ID"></td>
+                <td class="text-muted dark-item-name" style="min-width:80px">${getItemNameById(row.rewardItemId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardPetId || 0}" data-field="rewardPetId" placeholder="奖励精灵ID"></td>
+                <td class="text-muted dark-pet-name" style="min-width:80px">${getPetNameById(row.rewardPetId || 0)}</td>
                 <td><input type="text" class="form-control form-control-sm" value="${row.remark || ''}" data-field="remark" placeholder="备注"></td>
                 <td><button type="button" class="kyse-btn kyse-btn-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>
             `;
+            const bossInput = tr.querySelector('[data-field="bossId"]');
+            const bossNameCell = tr.querySelector('.dark-boss-name');
+            if (bossInput && bossNameCell) {
+                bossInput.addEventListener('change', function() { bossNameCell.textContent = getPetNameById(this.value); });
+            }
+            const itemInput = tr.querySelector('[data-field="rewardItemId"]');
+            const itemNameCell = tr.querySelector('.dark-item-name');
+            if (itemInput && itemNameCell) {
+                itemInput.addEventListener('change', function() { itemNameCell.textContent = getItemNameById(this.value); });
+            }
+            const petInput = tr.querySelector('[data-field="rewardPetId"]');
+            const petNameCell = tr.querySelector('.dark-pet-name');
+            if (petInput && petNameCell) {
+                petInput.addEventListener('change', function() { petNameCell.textContent = getPetNameById(this.value); });
+            }
             tbody.appendChild(tr);
         }
 
@@ -3178,6 +4577,142 @@
             }
         }
 
+        const MAP_NAMES = {
+            10: '克洛斯星草原',
+            11: '克洛斯星沼泽',
+            12: '克洛斯星密林',
+            15: '火山星山脚下',
+            16: '火山星山洞',
+            17: '火山星山洞深处',
+            20: '海洋星浅水区',
+            21: '海洋星深水区',
+            22: '海洋星海底',
+            25: '云霄星地面层',
+            26: '云霄星高空层',
+            27: '云霄星最高层',
+            30: '赫尔卡星表面',
+            31: '赫尔卡星遗迹',
+            32: '赫尔卡星荒地',
+            34: '精灵广场',
+            40: '塞西利亚星',
+            41: '塞西利亚星溶洞',
+            47: '双子贝塔星',
+            48: '海盗要塞废墟',
+            49: '贝塔星荒原',
+            51: '拜伦号甲板',
+            53: '斯诺岩洞',
+            54: '露希欧星',
+            55: '露希欧泥潭',
+            56: '露希欧之洋',
+            57: '尼古尔星',
+            58: '尼古尔峭壁',
+            59: '尼古尔水帘',
+            60: '塔克星',
+            61: '光之迷城',
+            62: '暗之迷城',
+            64: '沙漠窑洞',
+            105: '双子阿尔法星',
+            106: '阿尔法星岩地',
+            314: '拜伦号内部',
+            323: '拉姆世界丛林',
+            325: '艾迪星',
+            326: '暮色之城',
+            327: '地下之城',
+            328: '斯科尔星球',
+            329: '潘多拉宝盒',
+            330: '斯科尔浮岛',
+            331: '斯科尔高空塔',
+            333: '普雷空间',
+            334: '几米塔',
+            338: '未知空间338',
+            404: '比格星',
+            411: '陨石地带',
+            423: '沃尔夫洞穴',
+            424: '空间补给站',
+            425: '时空罗盘',
+            429: '拓梯星',
+            432: '精灵欢乐谷',
+            434: '格雷深湖',
+            435: '废弃遗迹435',
+            437: '墨杜莎星',
+            438: '石化城',
+            439: '海兹尔星',
+            445: '炫彩山山脚',
+            446: '炫彩山岩',
+            459: '隐秘空间459',
+            481: '隐秘空间481',
+            316: '精灵舱',
+            419: '暗影峭壁',
+            348: '未知空间348'
+        };
+
+        function getMapName(mapId) {
+            const id = parseInt(mapId, 10) || 0;
+            if (!id) return '';
+            const name = MAP_NAMES[id];
+            return name || ('地图ID ' + id);
+        }
+
+        function getPetNameById(petId) {
+            const id = parseInt(petId, 10) || 0;
+            if (!id) return '';
+            const petMap = window._petIdToName || {};
+            const name = petMap[id];
+            return name || ('ID:' + id);
+        }
+
+        function getItemNameById(itemId) {
+            const id = parseInt(itemId, 10) || 0;
+            if (!id) return '';
+            const itemMap = window._itemIdToName || {};
+            const name = itemMap[id];
+            return name || ('ID:' + id);
+        }
+
+        async function ensurePetNameCache() {
+            if (window._petIdToName && Object.keys(window._petIdToName).length > 0) {
+                return;
+            }
+            try {
+                const res = await fetch(API + '/gm/pets');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.success || !Array.isArray(data.data)) return;
+                const petIdToName = {};
+                data.data.forEach(function(p) {
+                    if (p && typeof p.id === 'number') {
+                        petIdToName[p.id] = p.name || '';
+                    }
+                });
+                window._petIdToName = window._petIdToName || {};
+                Object.assign(window._petIdToName, petIdToName);
+            } catch (e) {
+                console.warn('加载精灵名称列表失败:', e);
+            }
+        }
+
+        async function ensureItemNameCache() {
+            if (window._itemIdToName && Object.keys(window._itemIdToName).length > 0) {
+                return;
+            }
+            try {
+                const res = await fetch(API + '/gm/items');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.success || !Array.isArray(data.data)) return;
+                const itemIdToName = {};
+                data.data.forEach(function(it) {
+                    if (it && typeof it.id === 'number') {
+                        itemIdToName[it.id] = it.name || '';
+                    }
+                });
+                window._itemIdToName = window._itemIdToName || {};
+                Object.assign(window._itemIdToName, itemIdToName);
+            } catch (e) {
+                console.warn('加载道具名称列表失败:', e);
+            }
+        }
+
         function parseIdList(str) {
             if (!str || !String(str).trim()) return [];
             return String(str).split(/[\s,，]+/).map(s => parseInt(s, 10)).filter(n => !isNaN(n) && n > 0);
@@ -3185,6 +4720,7 @@
 
         async function loadSPTBoss() {
             try {
+                await ensurePetNameCache();
                 const res = await fetch(API + '/gm/sptboss/config');
                 const data = await res.json();
                 if (!data.success) {
@@ -3268,12 +4804,30 @@
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><input type="number" class="form-control form-control-sm" value="${row.mapId != null ? row.mapId : 0}" data-field="mapId"></td>
+                <td class="text-muted spt-map-name">${getMapName(row.mapId != null ? row.mapId : 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.param2 != null ? row.param2 : 0}" data-field="param2" min="0"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.bossPetId || 0}" data-field="bossPetId"></td>
+                <td class="text-muted spt-boss-name">${getPetNameById(row.bossPetId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.level != null ? row.level : 1}" data-field="level" min="1"></td>
                 <td><input type="checkbox" ${(row.hasShield ? 'checked' : '')} data-field="hasShield"></td>
                 <td><button type="button" class="kyse-btn kyse-btn-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>
             `;
+            const mapInput = tr.querySelector('[data-field="mapId"]');
+            const mapNameCell = tr.querySelector('.spt-map-name');
+            if (mapInput && mapNameCell) {
+                mapInput.addEventListener('change', function () {
+                    const id = parseInt(this.value, 10) || 0;
+                    mapNameCell.textContent = getSPTMapName(id);
+                });
+            }
+            const bossInput = tr.querySelector('[data-field="bossPetId"]');
+            const bossNameCell = tr.querySelector('.spt-boss-name');
+            if (bossInput && bossNameCell) {
+                bossInput.addEventListener('change', function () {
+                    const id = parseInt(this.value, 10) || 0;
+                    bossNameCell.textContent = getPetNameById(id);
+                });
+            }
             tbody.appendChild(tr);
         }
 
@@ -3282,12 +4836,30 @@
             tr.innerHTML = `
                 <td><input type="number" class="form-control form-control-sm" value="${row.sptId != null ? row.sptId : 0}" data-field="sptId"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.bossPetId || 0}" data-field="bossPetId"></td>
+                <td class="text-muted spt-boss-name">${getPetNameById(row.bossPetId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardPetId || 0}" data-field="rewardPetId"></td>
+                <td class="text-muted spt-reward-pet-name">${getPetNameById(row.rewardPetId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardItemId || 0}" data-field="rewardItemId"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.level != null ? row.level : 1}" data-field="level" min="1"></td>
                 <td><input type="checkbox" ${(row.hasShield ? 'checked' : '')} data-field="hasShield"></td>
                 <td><button type="button" class="kyse-btn kyse-btn-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>
             `;
+            const bossInput = tr.querySelector('[data-field="bossPetId"]');
+            const bossNameCell = tr.querySelector('.spt-boss-name');
+            if (bossInput && bossNameCell) {
+                bossInput.addEventListener('change', function () {
+                    const id = parseInt(this.value, 10) || 0;
+                    bossNameCell.textContent = getPetNameById(id);
+                });
+            }
+            const rewardInput = tr.querySelector('[data-field="rewardPetId"]');
+            const rewardNameCell = tr.querySelector('.spt-reward-pet-name');
+            if (rewardInput && rewardNameCell) {
+                rewardInput.addEventListener('change', function () {
+                    const id = parseInt(this.value, 10) || 0;
+                    rewardNameCell.textContent = getPetNameById(id);
+                });
+            }
             tbody.appendChild(tr);
         }
 

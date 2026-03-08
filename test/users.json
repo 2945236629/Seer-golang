@@ -8,8 +8,8 @@
       "color": 3381759,
       "registerTime": 1769569200,
       "roleCreated": true,
-      "session": "\ufffdz,M\ufffdd\ufffdy\ufffd\ufffd~\ufffd;ʺ\ufffd",
-      "sessionHex": "907a2c4db664b579eefc7e983bcabaaa"
+      "session": "��F5G����ϙ�=\u003e��",
+      "sessionHex": "85cd463547b2bd94b8cf99e83d3e9af6"
     },
     "100000002": {
       "userId": 100000002,
@@ -19,8 +19,8 @@
       "color": 0,
       "registerTime": 1769656737,
       "roleCreated": true,
-      "session": "\ufffd\ufffd\ufffd\ufffd\u00265\ufffd4\ufffd\ufffdQ\ufffd\ufffdc`\ufffd",
-      "sessionHex": "81c5fdbc2635c6348ba151fcd06360bd"
+      "session": ";D9Z\u00144��#���A\u0026��",
+      "sessionHex": "3b44395a1434b7cb23b0a4a941268e83"
     },
     "100000003": {
       "userId": 100000003,
@@ -109,14 +109,14 @@
           "dv": 11,
           "nature": 24,
           "exp": 75,
-          "name": "未知精灵",
+          "name": "闪光皮皮",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -125,6 +125,23 @@
           "level": 1,
           "dv": 0,
           "nature": 0,
+          "exp": 0,
+          "name": "克洛亚",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
+        },
+        {
+          "id": 10,
+          "catchTime": 1772464497,
+          "level": 2,
+          "dv": 19,
+          "nature": 13,
           "exp": 0,
           "name": "",
           "ev_hp": 0,
@@ -155,7 +172,7 @@
           "expireTime": 360000
         },
         "300001": {
-          "count": 10,
+          "count": 2,
           "expireTime": 360000
         },
         "300011": {
@@ -293,9 +310,9 @@
         "isFollowing": false,
         "func": "AAACAAAAAAAAAAAAAAAAAAAAAAA="
       },
-      "mapId": 5,
-      "posX": 365,
-      "posY": 190,
+      "mapId": 1,
+      "posX": 686,
+      "posY": 485,
       "fitments": [],
       "allFitments": [],
       "texture": 1,
@@ -322,7 +339,7 @@
       "towerBossIndex": 0,
       "curFreshStage": 0,
       "maxFreshStage": 0,
-      "maxArenaWins": 0,
+      "maxArenaWins": 1,
       "twoTimes": 0,
       "threeTimes": 0,
       "autoFight": 0,
@@ -345,7 +362,7 @@
       "expPool": 0,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1771610159,
+      "lastOnline": 1772975526,
       "miningCount": {
         "1": 1,
         "2": 3,
@@ -354,6 +371,30 @@
         "6": 1
       },
       "miningDate": 20483,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
       "soulBeadBufs": [
         {
           "obtainTime": 1770572898,
@@ -364,18 +405,18 @@
     "100000002": {
       "nick": "1111",
       "color": 16737536,
-      "coins": 109960000,
+      "coins": 109862450,
       "gold": 830,
       "energy": 100,
       "pets": [
         {
-          "id": 300,
-          "catchTime": 1770730260,
+          "id": 85,
+          "catchTime": 1769703456,
           "level": 100,
-          "dv": 31,
-          "nature": 0,
+          "dv": 28,
+          "nature": 14,
           "exp": 0,
-          "name": "",
+          "name": "依依",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
@@ -383,29 +424,13 @@
           "ev_sd": 0,
           "ev_sp": 0,
           "skills": [
-            10995,
-            11000,
-            20500,
-            10999
+            20110,
+            10238,
+            10241,
+            10239
           ],
-          "trait": 1021
-        },
-        {
-          "id": 1400232,
-          "catchTime": 1770730194,
-          "level": 100,
-          "dv": 31,
-          "nature": 0,
-          "exp": 0,
-          "name": "",
-          "ev_hp": 0,
-          "ev_attack": 0,
-          "ev_defence": 0,
-          "ev_sa": 0,
-          "ev_sd": 0,
-          "ev_sp": 0,
-          "skills": null,
-          "trait": 1021
+          "trait": 0,
+          "cur_hp": 314
         },
         {
           "id": 70,
@@ -414,15 +439,34 @@
           "dv": 31,
           "nature": 8,
           "exp": 0,
-          "name": "",
+          "name": "雷伊",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 255,
           "ev_sd": 0,
           "ev_sp": 255,
-          "skills": null,
-          "trait": 0
+          "skills": [],
+          "trait": 0,
+          "cur_hp": 283
+        },
+        {
+          "id": 300,
+          "catchTime": 1770730260,
+          "level": 100,
+          "dv": 31,
+          "nature": 0,
+          "exp": 0,
+          "name": "谱尼",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 1021,
+          "cur_hp": 381
         },
         {
           "id": 166,
@@ -431,15 +475,16 @@
           "dv": 31,
           "nature": 4,
           "exp": 417,
-          "name": "未知精灵",
+          "name": "闪光波克尔",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 255,
           "ev_sd": 0,
           "ev_sp": 255,
-          "skills": null,
-          "trait": 0
+          "skills": [],
+          "trait": 0,
+          "cur_hp": 321
         },
         {
           "id": 1400212,
@@ -448,32 +493,33 @@
           "dv": 31,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "神之涅槃·谱尼",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1021
         },
         {
-          "id": 1400211,
-          "catchTime": 1770730163,
+          "id": 309,
+          "catchTime": 1770588540,
           "level": 100,
-          "dv": 31,
+          "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "熔火灵猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
-          "ev_sa": 255,
+          "ev_sa": 0,
           "ev_sd": 0,
-          "ev_sp": 255,
-          "skills": null,
-          "trait": 1021
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 1027,
+          "cur_hp": 42
         }
       ],
       "items": {
@@ -521,6 +567,26 @@
           "count": 1,
           "expireTime": 360000
         },
+        "100233": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
+        "100234": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
+        "100235": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
+        "100236": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
         "100338": {
           "count": 1,
           "expireTime": 360000
@@ -537,9 +603,45 @@
           "count": 1,
           "expireTime": 360000
         },
+        "100346": {
+          "count": 1,
+          "expireTime": 360000
+        },
+        "100347": {
+          "count": 1,
+          "expireTime": 360000
+        },
+        "100348": {
+          "count": 1,
+          "expireTime": 360000
+        },
+        "100349": {
+          "count": 1,
+          "expireTime": 360000
+        },
         "100717": {
           "count": 1,
           "expireTime": 360000
+        },
+        "100747": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
+        "100748": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
+        "100749": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
+        },
+        "100750": {
+          "count": 1,
+          "expireTime": 360000,
+          "level": 1
         },
         "300001": {
           "count": 91,
@@ -550,30 +652,56 @@
           "expireTime": 360000
         },
         "300003": {
-          "count": 97,
+          "count": 96,
           "expireTime": 360000
         },
         "300004": {
-          "count": 78,
-          "expireTime": 360000
-        },
-        "300006": {
-          "count": 1,
+          "count": 74,
           "expireTime": 360000
         },
         "300011": {
-          "count": 3,
+          "count": 1,
+          "expireTime": 360000
+        },
+        "300014": {
+          "count": 1,
+          "expireTime": 360000
+        },
+        "300015": {
+          "count": 985,
+          "expireTime": 360000
+        },
+        "300017": {
+          "count": 2,
+          "expireTime": 360000
+        },
+        "300018": {
+          "count": 1,
+          "expireTime": 360000
+        },
+        "300019": {
+          "count": 1,
+          "expireTime": 360000
+        },
+        "300152": {
+          "count": 1,
           "expireTime": 360000
         },
         "400001": {
-          "count": 97
+          "count": 115
+        },
+        "400002": {
+          "count": 5
         },
         "400014": {
           "count": 2
         },
-        "400107": {
+        "400051": {
           "count": 1,
           "expireTime": 360000
+        },
+        "400107": {
+          "count": 1
         },
         "400501": {
           "count": 2,
@@ -613,10 +741,10 @@
         }
       },
       "clothes": [
-        100338,
-        100339,
         100341,
-        100340
+        100717,
+        100340,
+        100338
       ],
       "tasks": {
         "1": {
@@ -644,6 +772,9 @@
         "402": {
           "status": "3"
         },
+        "405": {
+          "status": "3"
+        },
         "407": {
           "status": "3"
         },
@@ -652,6 +783,31 @@
         },
         "5": {
           "status": "completed"
+        },
+        "79": {
+          "status": "3",
+          "buf": {
+            "0": 1,
+            "1": 1,
+            "10": 0,
+            "11": 0,
+            "12": 0,
+            "13": 0,
+            "14": 0,
+            "15": 0,
+            "16": 0,
+            "17": 0,
+            "18": 0,
+            "19": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0,
+            "8": 0,
+            "9": 0
+          }
         },
         "85": {
           "status": "3"
@@ -693,6 +849,31 @@
             "9": 0
           }
         },
+        "95": {
+          "status": "3",
+          "buf": {
+            "0": 1,
+            "1": 1,
+            "10": 0,
+            "11": 0,
+            "12": 0,
+            "13": 0,
+            "14": 0,
+            "15": 0,
+            "16": 0,
+            "17": 0,
+            "18": 0,
+            "19": 0,
+            "2": 1,
+            "3": 1,
+            "4": 1,
+            "5": 1,
+            "6": 1,
+            "7": 0,
+            "8": 0,
+            "9": 0
+          }
+        },
         "96": {
           "status": "1"
         }
@@ -715,7 +896,7 @@
         "state": 1,
         "nick": "NoNo",
         "color": 3394815,
-        "superNono": 5,
+        "superNono": 4,
         "vipLevel": 0,
         "vipStage": 0,
         "vipValue": 0,
@@ -723,7 +904,7 @@
         "vipEndTime": 1772255725,
         "freshManBonus": 0,
         "superEnergy": 0,
-        "superLevel": 12,
+        "superLevel": 11,
         "superStage": 1,
         "power": 10010,
         "mate": 10000,
@@ -740,11 +921,26 @@
         "isFollowing": false,
         "func": "+A0DAAAAAAAAAAAAAAAAAAAAAAA="
       },
-      "mapId": 10,
-      "posX": 310,
-      "posY": 380,
+      "mapId": 5,
+      "posX": 667,
+      "posY": 497,
       "fitments": [],
-      "allFitments": [],
+      "allFitments": [
+        {
+          "id": 500824,
+          "x": 0,
+          "y": 0,
+          "dir": 0,
+          "status": 0
+        },
+        {
+          "id": 500824,
+          "x": 0,
+          "y": 0,
+          "dir": 0,
+          "status": 0
+        }
+      ],
       "texture": 1,
       "dsFlag": 0,
       "badge": 0,
@@ -764,7 +960,7 @@
       "monKingWin": 0,
       "monBtlMedal": 0,
       "messWin": 0,
-      "curStage": 18,
+      "curStage": 3,
       "maxStage": 21,
       "towerBossIndex": 0,
       "curFreshStage": 0,
@@ -789,31 +985,14 @@
           "dv": 24,
           "nature": 15,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
-          "trait": 0
-        },
-        {
-          "id": 13,
-          "catchTime": 1769663188,
-          "level": 5,
-          "dv": 4,
-          "nature": 1,
-          "exp": 0,
-          "name": "未知精灵",
-          "ev_hp": 0,
-          "ev_attack": 0,
-          "ev_defence": 0,
-          "ev_sa": 0,
-          "ev_sd": 0,
-          "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -823,14 +1002,14 @@
           "dv": 31,
           "nature": 1,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -840,14 +1019,14 @@
           "dv": 4,
           "nature": 1,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -857,14 +1036,14 @@
           "dv": 31,
           "nature": 0,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -874,14 +1053,14 @@
           "dv": 4,
           "nature": 1,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -891,14 +1070,14 @@
           "dv": 4,
           "nature": 1,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -908,14 +1087,14 @@
           "dv": 29,
           "nature": 6,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -925,14 +1104,14 @@
           "dv": 31,
           "nature": 5,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -942,14 +1121,14 @@
           "dv": 19,
           "nature": 11,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -959,14 +1138,14 @@
           "dv": 29,
           "nature": 20,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "小蘑菇",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -976,14 +1155,14 @@
           "dv": 31,
           "nature": 4,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "闪光波克尔",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -993,31 +1172,14 @@
           "dv": 28,
           "nature": 14,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "依依",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
-          "trait": 0
-        },
-        {
-          "id": 47,
-          "catchTime": 1769705892,
-          "level": 21,
-          "dv": 3,
-          "nature": 23,
-          "exp": 0,
-          "name": "未知精灵",
-          "ev_hp": 0,
-          "ev_attack": 0,
-          "ev_defence": 0,
-          "ev_sa": 0,
-          "ev_sd": 0,
-          "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1027,31 +1189,14 @@
           "dv": 26,
           "nature": 6,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "比比鼠",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
-          "trait": 0
-        },
-        {
-          "id": 38,
-          "catchTime": 1770575002,
-          "level": 13,
-          "dv": 19,
-          "nature": 5,
-          "exp": 0,
-          "name": "",
-          "ev_hp": 0,
-          "ev_attack": 0,
-          "ev_defence": 0,
-          "ev_sa": 0,
-          "ev_sd": 0,
-          "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1061,14 +1206,14 @@
           "dv": 9,
           "nature": 19,
           "exp": 0,
-          "name": "",
+          "name": "火炎贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1078,14 +1223,14 @@
           "dv": 25,
           "nature": 2,
           "exp": 0,
-          "name": "",
+          "name": "火炎贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1095,14 +1240,14 @@
           "dv": 3,
           "nature": 2,
           "exp": 0,
-          "name": "",
+          "name": "火炎贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1112,14 +1257,14 @@
           "dv": 27,
           "nature": 19,
           "exp": 0,
-          "name": "",
+          "name": "火炎贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1129,14 +1274,14 @@
           "dv": 3,
           "nature": 18,
           "exp": 0,
-          "name": "",
+          "name": "火炎贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1146,14 +1291,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "克洛亚",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1163,14 +1308,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "熔火灵猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1033
         },
         {
@@ -1180,32 +1325,15 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "熔火灵猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1027
-        },
-        {
-          "id": 308,
-          "catchTime": 1770588161,
-          "level": 1,
-          "dv": 0,
-          "nature": 0,
-          "exp": 0,
-          "name": "",
-          "ev_hp": 0,
-          "ev_attack": 0,
-          "ev_defence": 0,
-          "ev_sa": 0,
-          "ev_sd": 0,
-          "ev_sp": 0,
-          "skills": null,
-          "trait": 1018
         },
         {
           "id": 308,
@@ -1214,14 +1342,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "熔火灵猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1231,14 +1359,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "克洛亚",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1248,14 +1376,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "熔火灵猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1006
         },
         {
@@ -1265,14 +1393,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "伊优达",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1022
         },
         {
@@ -1282,19 +1410,121 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "熔火灵猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1042
         },
         {
           "id": 170,
           "catchTime": 1770712095,
+          "level": 1,
+          "dv": 0,
+          "nature": 0,
+          "exp": 0,
+          "name": "利齿鱼",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 1012
+        },
+        {
+          "id": 10,
+          "catchTime": 1771182757,
+          "level": 50,
+          "dv": 10,
+          "nature": 7,
+          "exp": 0,
+          "name": "皮皮",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
+        },
+        {
+          "id": 1400212,
+          "catchTime": 1770730184,
+          "level": 100,
+          "dv": 31,
+          "nature": 0,
+          "exp": 0,
+          "name": "神之涅槃·谱尼",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 1021
+        },
+        {
+          "id": 13,
+          "catchTime": 1769662780,
+          "level": 3,
+          "dv": 24,
+          "nature": 15,
+          "exp": 0,
+          "name": "比比鼠",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
+        },
+        {
+          "id": 254,
+          "catchTime": 1771941984,
+          "level": 19,
+          "dv": 11,
+          "nature": 7,
+          "exp": 0,
+          "name": "嘟咕噜",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
+        },
+        {
+          "id": 13,
+          "catchTime": 1769673009,
+          "level": 5,
+          "dv": 26,
+          "nature": 6,
+          "exp": 0,
+          "name": "比比鼠",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
+        },
+        {
+          "id": 41,
+          "catchTime": 1772698814,
           "level": 1,
           "dv": 0,
           "nature": 0,
@@ -1307,14 +1537,14 @@
           "ev_sd": 0,
           "ev_sp": 0,
           "skills": null,
-          "trait": 1012
+          "trait": 1030
         },
         {
-          "id": 10,
-          "catchTime": 1771182757,
-          "level": 50,
-          "dv": 10,
-          "nature": 7,
+          "id": 172,
+          "catchTime": 1772130061,
+          "level": 1,
+          "dv": 0,
+          "nature": 0,
           "exp": 0,
           "name": "",
           "ev_hp": 0,
@@ -1324,7 +1554,41 @@
           "ev_sd": 0,
           "ev_sp": 0,
           "skills": null,
-          "trait": 0
+          "trait": 1034
+        },
+        {
+          "id": 729,
+          "catchTime": 1772979327,
+          "level": 1,
+          "dv": 0,
+          "nature": 0,
+          "exp": 0,
+          "name": "",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": null,
+          "trait": 1041
+        },
+        {
+          "id": 729,
+          "catchTime": 1772979327,
+          "level": 1,
+          "dv": 0,
+          "nature": 0,
+          "exp": 0,
+          "name": "",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": null,
+          "trait": 1041
         }
       ],
       "friends": [
@@ -1334,23 +1598,53 @@
           "addTime": 1769756367
         }
       ],
-      "expPool": 899980000,
+      "expPool": 885544557,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1771610156,
+      "lastOnline": 1772980393,
       "defeatedSptBossIds": [
         113,
         166,
         171,
         300,
         174,
-        42
+        42,
+        347,
+        34,
+        1000
       ],
       "miningCount": {
-        "1": 5
+        "3": 1,
+        "6": 1
       },
-      "miningDate": 20492,
+      "miningDate": 20519,
+      "followPetCatchTime": 1770714121,
       "flyMode": 4,
+      "leiyiLastDay": 20517,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
       "soulBeadBufs": [
         {
           "obtainTime": 1770571569,
@@ -1388,13 +1682,7 @@
           "obtainTime": 1770636659,
           "buf": "AQAAAAAAAAAAAAAAAAAAAAAAAAA="
         }
-      ],
-      "soulBeadTransform": {
-        "obtainTime": 1771346511,
-        "itemID": 172,
-        "rewardPetClass": 172,
-        "expireTime": 1771347411
-      }
+      ]
     },
     "100000005": {
       "nick": "开源号",
@@ -1417,7 +1705,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1010
         },
         {
@@ -1456,7 +1744,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -1473,7 +1761,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1023
         },
         {
@@ -1490,7 +1778,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1027
         },
         {
@@ -1507,7 +1795,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         }
       ],
@@ -1890,7 +2178,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2039,7 +2327,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2056,7 +2344,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2073,7 +2361,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1007
         },
         {
@@ -2112,7 +2400,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1008
         },
         {
@@ -2129,7 +2417,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2168,7 +2456,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1028
         },
         {
@@ -2273,7 +2561,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1027
         },
         {
@@ -2290,7 +2578,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1027
         },
         {
@@ -2329,7 +2617,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1008
         },
         {
@@ -2412,7 +2700,7 @@
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1023
         },
         {
@@ -2422,14 +2710,14 @@
           "dv": 31,
           "nature": 19,
           "exp": 0,
-          "name": "",
+          "name": "火炎贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2439,14 +2727,14 @@
           "dv": 7,
           "nature": 5,
           "exp": 0,
-          "name": "",
+          "name": "皮皮",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2456,14 +2744,14 @@
           "dv": 20,
           "nature": 24,
           "exp": 0,
-          "name": "",
+          "name": "皮皮",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2473,14 +2761,14 @@
           "dv": 10,
           "nature": 20,
           "exp": 0,
-          "name": "",
+          "name": "皮皮",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         }
       ],
@@ -2504,7 +2792,31 @@
         "2001": 1
       },
       "miningDate": 20492,
-      "followPetCatchTime": 1770378843
+      "followPetCatchTime": 1770378843,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
     },
     "100000006": {
       "nick": "用户1",
@@ -2602,7 +2914,31 @@
       "expPool": 0,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1769949943
+      "lastOnline": 1769949943,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
     },
     "100000007": {
       "nick": "100000007",
@@ -2700,7 +3036,31 @@
       "expPool": 99999,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1769951888
+      "lastOnline": 1769951888,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
     },
     "100000008": {
       "nick": "666",
@@ -2716,14 +3076,14 @@
           "dv": 31,
           "nature": 12,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "艾克里桑",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1023
         },
         {
@@ -2733,14 +3093,14 @@
           "dv": 31,
           "nature": 2,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "盖亚",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1023
         },
         {
@@ -2750,14 +3110,14 @@
           "dv": 31,
           "nature": 13,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "伊优",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         },
         {
@@ -2767,14 +3127,14 @@
           "dv": 2,
           "nature": 21,
           "exp": 0,
-          "name": "未知精灵",
+          "name": "小鳍鱼",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         }
       ],
@@ -2924,6 +3284,30 @@
       "defeatedSptBossIds": [
         70,
         34
+      ],
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
       ]
     },
     "100000009": {
@@ -2940,14 +3324,14 @@
           "dv": 29,
           "nature": 24,
           "exp": 0,
-          "name": "",
+          "name": "小火猴",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         }
       ],
@@ -3085,7 +3469,31 @@
       "expPool": 0,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1770710505
+      "lastOnline": 1770710505,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
     },
     "539959368": {
       "nick": "539959368",
@@ -3183,7 +3591,31 @@
       "expPool": 0,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1769769724
+      "lastOnline": 1769769724,
+      "leiyiToday": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiCurrent": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "leiyiTotal": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
     }
   }
 }

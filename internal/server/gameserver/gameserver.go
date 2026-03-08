@@ -63,7 +63,8 @@ type BattleState struct {
 	IsActive       bool
 	OpponentUserID int64 // PvP 时对方 UID，0 表示 PvE
 	// 技能效果：异常状态 status[0..19]，能力等级 battleLv[0..5]=攻击/防御/特攻/特防/速度/命中（-6~+6）
-	PlayerStatus   [20]byte
+        AllowedPetIndexes []int
+        PlayerStatus   [20]byte
 	EnemyStatus    [20]byte
 	PlayerBattleLv [6]int8
 	EnemyBattleLv  [6]int8
@@ -279,6 +280,12 @@ type BattleState struct {
 	RoundCount     int
 	LastHitWasCrit bool
 	// 谱尼七封印/真身：记录由 2411 传入的门索引（1~7 为七封印，8 为真身，0 为普通战斗）
+	// BossRegion 记录 2411 挑战 BOSS 时传入的 param2（如谱尼 1~8 门、玄武/青龙守护兽与真身、异能王封印与终极试炼）
+	BossRegion uint32
+	// PuniTotalLives 多命 BOSS 总命数：用于谱尼轮回封印/真身以及异能王终极试炼等复数命条场景
+	PuniTotalLives int
+	// PuniCurrentLife 当前第几命（从 1 开始）；仅在 PuniTotalLives>0 时使用
+	PuniCurrentLife int
 	PuniDoorIndex int
 	// 谱尼专用扩展状态
 	// 元素封印：标记是否已通过异常状态“破解”（异常DOT已经可以正常削血，这里只做标记留待后续扩展）
@@ -312,6 +319,9 @@ type BattleState struct {
 	IsDarkPortalBattle bool
 	// IsBossChallenge 本场是否为「对应 BOSS 挑战」（2411/2421 发起），仅此时发放该 BOSS 的 SPT 精元/精灵奖励；勇者之塔/试炼之塔/2408 野怪不设
 	IsBossChallenge bool
+	// 雷伊体能训练：是否为雷伊特训战斗，以及当前特训索引（0~5），由 2411 FightInviteManager.fightWithBoss("雷伊幻影", 10000+index) 标记
+	IsLeiyiTrain   bool
+	LeiyiTrainIndex int
 	// 116 - n 回合内每次防御（受到攻击）造成伤害的 1/5 恢复自身体力
 	PlayerDefendHealRounds byte
 	EnemyDefendHealRounds  byte

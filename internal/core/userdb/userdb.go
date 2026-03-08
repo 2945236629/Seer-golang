@@ -58,6 +58,8 @@ type GameData struct {
 	Pets            []Pet                   `json:"pets"`
 	Items           map[string]Item         `json:"items"`
 	Clothes         []int                   `json:"clothes"`
+	// TransformID 当前人物变身套装 ID（PEOPLE_TRANSFROM 2111 / suitID），0 表示未变身
+	TransformID int `json:"transformId,omitempty"`
 	Tasks           map[string]Task         `json:"tasks"`
 	PetBook         map[string]PetBookEntry `json:"petBook"`
 	Nono            NonoData                `json:"nono"`
@@ -98,6 +100,12 @@ type GameData struct {
 	EnergyTimes     int                     `json:"energyTimes"`
 	LearnTimes      int                     `json:"learnTimes"`
 	Achievements    Achievements            `json:"achievements"`
+	// HonorValue 荣誉值（70003），用于荣誉兑换（70002）
+	HonorValue int `json:"honorValue,omitempty"`
+	// ExchangeInfo 兑换记录：exchangeID -> 次数（70001/70002）
+	ExchangeInfo map[int]int `json:"exchangeInfo,omitempty"`
+	// GoldDiscountExchangeTimes 金豆优惠兑换次数（80007/70004 参数=0 使用）
+	GoldDiscountExchangeTimes int `json:"goldDiscountExchangeTimes,omitempty"`
 	StoragePets     []Pet                   `json:"storagePets"`
 	Friends         []Friend                `json:"friends"`
 	ExpPool         int                     `json:"expPool"` // 经验池
@@ -113,12 +121,24 @@ type GameData struct {
 	FollowPetCatchTime int `json:"followPetCatchTime,omitempty"`
 	// FlyMode 当前飞行状态（0=未飞行 1=飞行），用于 2001/2003 的 actionType，使同图玩家可见飞行状态
 	FlyMode int `json:"flyMode,omitempty"`
+	// TimePokeLastDay / TimePokeUsed 时间胶囊（2110）每日使用限制
+	TimePokeLastDay int `json:"timePokeLastDay,omitempty"`
+	TimePokeUsed    int `json:"timePokeUsed,omitempty"`
+	// 雷伊训练状态（2393）：today/current/total 各 6 项 + 上次记录的日期
+	LeiyiLastDay int      `json:"leiyiLastDay,omitempty"`
+	LeiyiToday   [6]int   `json:"leiyiToday,omitempty"`
+	LeiyiCurrent [6]int   `json:"leiyiCurrent,omitempty"`
+	LeiyiTotal   [6]int   `json:"leiyiTotal,omitempty"`
 	// SoulBeads 元神珠列表（精灵融合产物），obtainTime 为唯一 ID，ItemID 为 PetClass（用于孵化时确定精灵类型）
 	SoulBeads []SoulBead `json:"soulBeads,omitempty"`
 	// SoulBeadBufs 各元神珠的能量吸收进度，obtainTime -> 20 字节 buf（每字节 1=该步已完成），需到对应地区吸取
 	SoulBeadBufs []SoulBeadBuf `json:"soulBeadBufs,omitempty"`
 	// SoulBeadTransform 当前正在赋形/孵化中的元神珠（最多一个），用于 2356/2357/2358 与登录 1001 的 obtainTm/soulBeadItemID/expireTm
 	SoulBeadTransform *SoulBeadTransformState `json:"soulBeadTransform,omitempty"`
+	// PetHatch 精元分子转化仪正在孵化中的精灵（最多一个），用于 2315/2316/2303 在背包中显示孵化成功的精灵
+	PetHatch *PetHatchState `json:"petHatch,omitempty"`
+	// MapEvents 1020 地图/活动行为打点计数：eventId -> 次数
+	MapEvents map[int]int `json:"mapEvents,omitempty"`
 }
 
 // SoulBeadTransformState 正在赋形中的元神珠（转化仪中）
@@ -127,6 +147,14 @@ type SoulBeadTransformState struct {
 	ItemID         uint32 `json:"itemID"`         // 元神珠对应的 PetClass，2356/1001 的 soulBeadItemID
 	RewardPetClass uint32 `json:"rewardPetClass"` // 赋形完成时将发放的精灵类型（2357 时随机确定，供客户端动画 swf 与 2358 一致）
 	ExpireTime     int64  `json:"expireTime"`     // Unix 秒，赋形完成时间，客户端用于显示剩余孵化时间
+}
+
+// PetHatchState 分子转化仪内正在孵化的精灵（由精元放入产生）
+// 与 SoulBeadTransform 独立，兩套系統可同時進行。
+type PetHatchState struct {
+	ObtainTime uint32 `json:"obtainTime"` // 作为孵化完成时的 catchTime，用于前端標識這顆蛋
+	PetID      uint32 `json:"petId"`      // 即將孵化出的精靈 ID（BreedMonID）
+	ExpireTime int64  `json:"expireTime"` // Unix 秒，孵化完成時間
 }
 
 // SoulBead 元神珠（精灵融合产物）
@@ -158,12 +186,16 @@ type Pet struct {
 	EVSpeed   int    `json:"ev_sp"`
 	Skills    []int  `json:"skills"`
 	Trait     int    `json:"trait"`
+	// CurHP 当前体力：0 表示使用 MaxHP（满血）；>0 且小于 MaxHP 表示战斗后剩余体力
+	CurHP int `json:"cur_hp,omitempty"`
 }
 
 // Item 物品数据
+// Level 用于装备强化（2609 EQUIP_UPDATA），普通道具 Level 为 0
 type Item struct {
 	Count      int `json:"count"`
 	ExpireTime int `json:"expireTime,omitempty"`
+	Level      int `json:"level,omitempty"`
 }
 
 // Task 任务数据
@@ -230,6 +262,35 @@ type Achievements struct {
 	List  []int `json:"list"`
 }
 
+// TeamMember 战队成员
+type TeamMember struct {
+	UserID   int64  `json:"userID"`
+	Nick     string `json:"nick"`
+	Role     int    `json:"role"`
+	JoinTime int64  `json:"joinTime"`
+}
+
+// TeamChatMessage 战队聊天消息
+type TeamChatMessage struct {
+	UserID int64  `json:"userID"`
+	Nick   string `json:"nick"`
+	Text   string `json:"text"`
+	Time   int64  `json:"time"`
+}
+
+// Team 战队数据
+type Team struct {
+	ID          int64             `json:"id"`
+	Name        string            `json:"name"`
+	Notice      string            `json:"notice"`
+	LeaderID    int64             `json:"leaderID"`
+	CreateTime  int64             `json:"createTime"`
+	Logo        int               `json:"logo"`
+	Members     []TeamMember      `json:"members"`
+	Applicants  []int64           `json:"applicants"`
+	ChatHistory []TeamChatMessage `json:"chatHistory"`
+}
+
 // Friend 好友数据
 type Friend struct {
 	UserID   int64 `json:"userID"`
@@ -249,6 +310,7 @@ type UserDB struct {
 	dbPath   string
 	users    map[int64]*User
 	gameData map[int64]*GameData
+	teams    map[int64]*Team
 	mu       sync.RWMutex
 	loaded   bool
 	mysqlDB  *sql.DB // 启用 UseMySQL 时使用，按分类表存取
@@ -258,6 +320,7 @@ type UserDB struct {
 type DBData struct {
 	Users    map[string]*User     `json:"users"`
 	GameData map[string]*GameData `json:"gameData"`
+	Teams    map[string]*Team     `json:"teams,omitempty"`
 }
 
 var (
@@ -272,6 +335,7 @@ func New(config Config) *UserDB {
 			config:   config,
 			users:    make(map[int64]*User),
 			gameData: make(map[int64]*GameData),
+			teams:    make(map[int64]*Team),
 		}
 		instance.init()
 	})
@@ -347,6 +411,7 @@ func (db *UserDB) load() {
 		fmt.Println("[UserDB] 用户数据库不存在，创建新数据库")
 		db.users = make(map[int64]*User)
 		db.gameData = make(map[int64]*GameData)
+		db.teams = make(map[int64]*Team)
 		// 延迟保存，避免死锁
 		go func() {
 			time.Sleep(100 * time.Millisecond)
@@ -360,6 +425,7 @@ func (db *UserDB) load() {
 		fmt.Printf("[UserDB] 读取数据库文件失败: %v\n", err)
 		db.users = make(map[int64]*User)
 		db.gameData = make(map[int64]*GameData)
+		db.teams = make(map[int64]*Team)
 		return
 	}
 
@@ -368,6 +434,7 @@ func (db *UserDB) load() {
 		fmt.Printf("[UserDB] 用户数据解析失败: %v\n", err)
 		db.users = make(map[int64]*User)
 		db.gameData = make(map[int64]*GameData)
+		db.teams = make(map[int64]*Team)
 		return
 	}
 
@@ -384,6 +451,13 @@ func (db *UserDB) load() {
 		var userID int64
 		fmt.Sscanf(k, "%d", &userID)
 		db.gameData[userID] = v
+	}
+
+	db.teams = make(map[int64]*Team)
+	for k, v := range dbData.Teams {
+		var teamID int64
+		fmt.Sscanf(k, "%d", &teamID)
+		db.teams[teamID] = v
 	}
 
 	userCount := len(db.users)
@@ -406,6 +480,7 @@ func (db *UserDB) save() {
 	dbData := DBData{
 		Users:    make(map[string]*User),
 		GameData: make(map[string]*GameData),
+		Teams:    make(map[string]*Team),
 	}
 
 	for id, user := range db.users {
@@ -414,6 +489,10 @@ func (db *UserDB) save() {
 
 	for id, data := range db.gameData {
 		dbData.GameData[fmt.Sprintf("%d", id)] = data
+	}
+
+	for id, team := range db.teams {
+		dbData.Teams[fmt.Sprintf("%d", id)] = team
 	}
 
 	data, err := json.MarshalIndent(dbData, "", "  ")
@@ -446,6 +525,7 @@ func (db *UserDB) ExportSnapshotToFile(path string) error {
 	dbData := DBData{
 		Users:    make(map[string]*User),
 		GameData: make(map[string]*GameData),
+		Teams:    make(map[string]*Team),
 	}
 
 	for id, user := range db.users {
@@ -460,6 +540,13 @@ func (db *UserDB) ExportSnapshotToFile(path string) error {
 			continue
 		}
 		dbData.GameData[fmt.Sprintf("%d", id)] = data
+	}
+
+	for id, team := range db.teams {
+		if team == nil {
+			continue
+		}
+		dbData.Teams[fmt.Sprintf("%d", id)] = team
 	}
 
 	bytes, err := json.MarshalIndent(dbData, "", "  ")
@@ -744,6 +831,9 @@ func (db *UserDB) GetOrCreateGameData(userID int64) *GameData {
 			Rank:  0,
 			List:  []int{},
 		},
+		HonorValue:              0,
+		ExchangeInfo:            map[int]int{},
+		GoldDiscountExchangeTimes: 0,
 		StoragePets:   []Pet{},
 		Friends:       []Friend{},
 		Blacklist:     []BlacklistEntry{},
@@ -1379,6 +1469,81 @@ func (db *UserDB) AddStoragePet(userID int64, pet Pet) bool {
 	data.StoragePets = append(data.StoragePets, pet)
 	db.SaveGameData(userID, data)
 	return true
+}
+
+func (db *UserDB) nextTeamIDLocked() int64 {
+	var maxID int64 = 1000
+	for id := range db.teams {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	return maxID + 1
+}
+
+func (db *UserDB) CreateTeam(leaderID int64, name string, logo int) *Team {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	teamID := db.nextTeamIDLocked()
+	leaderData := db.gameData[leaderID]
+	leaderNick := fmt.Sprintf("Seer%d", leaderID)
+	if leaderData != nil && leaderData.Nick != "" {
+		leaderNick = leaderData.Nick
+	}
+	team := &Team{
+		ID:         teamID,
+		Name:       name,
+		LeaderID:   leaderID,
+		CreateTime: time.Now().Unix(),
+		Logo:       logo,
+		Members: []TeamMember{{
+			UserID:   leaderID,
+			Nick:     leaderNick,
+			Role:     1,
+			JoinTime: time.Now().Unix(),
+		}},
+		Applicants:  []int64{},
+		ChatHistory: []TeamChatMessage{},
+	}
+	db.teams[teamID] = team
+	if leaderData != nil {
+		leaderData.CurrentServer = leaderData.CurrentServer
+	}
+	return team
+}
+
+func (db *UserDB) GetTeam(teamID int64) *Team {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.teams[teamID]
+}
+
+func (db *UserDB) SaveTeam(team *Team) {
+	if team == nil {
+		return
+	}
+	db.mu.Lock()
+	db.teams[team.ID] = team
+	db.mu.Unlock()
+	if db.mysqlDB == nil {
+		db.save()
+	}
+}
+
+func (db *UserDB) FindTeamByUserID(userID int64) *Team {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for _, team := range db.teams {
+		if team == nil {
+			continue
+		}
+		for _, member := range team.Members {
+			if member.UserID == userID {
+				return team
+			}
+		}
+	}
+	return nil
 }
 
 // checkItemTasks 检查物品相关任务

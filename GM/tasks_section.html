@@ -1,0 +1,31 @@
+        <!-- 任务奖励管理 -->
+        <div id="tasks" class="content-section">
+            <div class="page-block">
+                <div class="page-block-header">
+                    任务奖励配置（gm_task_config）
+                    <button type="button" class="kyse-btn kyse-btn-primary" onclick="saveTaskConfigs()">保存任务奖励配置</button>
+                </div>
+                <div class="page-block-body">
+                    <p class="weights-desc">通过任务 ID 配置任务完成后的奖励（精灵 / 道具 / 家具 / 赛尔豆 / 金豆 / 经验等）。建议先从 test/gm_task_config.json 初始化，再在此进行可视化调整。</p>
+                    <div class="mb-2 d-flex gap-2">
+                        <input type="text" class="form-control kyse-input" id="taskSearchInput" placeholder="按任务ID或名称搜索..." oninput="renderTaskConfigTable()">
+                        <button type="button" class="kyse-btn kyse-btn-secondary" onclick="loadTaskConfigs()">重新加载</button>
+                    </div>
+                    <div class="table-responsive" style="max-height:480px; overflow-y:auto;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:80px;">任务ID</th>
+                                    <th style="width:200px;">名称</th>
+                                    <th style="width:120px;">类型</th>
+                                    <th>奖励概要</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskConfigTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+

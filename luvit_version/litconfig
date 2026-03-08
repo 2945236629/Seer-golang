@@ -1,0 +1,9 @@
+-- Luvit 项目配置
+-- 用于 lit 包管理器
+
+return {
+  name = "reseer-client",
+  version = "1.0.0",
+  description = "赛尔号 Luvit 游戏客户端资源服务器",
+  -- 本项目仅使用 Luvit 内置模块 (http, fs, path, process)，无需额外依赖
+}

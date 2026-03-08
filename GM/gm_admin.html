@@ -269,6 +269,28 @@
                             </table>
                         </div>
                     </div>
+                    <div class="weights-section">
+                        <h6 class="weights-subtitle">NONO 芯片合成奖励(9004)</h6>
+                        <p class="weights-desc">配置 NONO 芯片制造机（9004 NONO_CHIP_MIXTURE）的合成规则：<strong>道具1 + 道具2 + 道具3 = 奖励道具 × 数量</strong>，成功率 0-100，可配置多条奖励道具及各自几率。</p>
+                        <div class="table-responsive">
+                            <table class="weights-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:90px;">道具1ID</th>
+                                        <th style="width:90px;">道具2ID</th>
+                                        <th style="width:90px;">道具3ID</th>
+                                        <th style="width:150px;">备注名称</th>
+                                        <th style="width:90px;">成功率(%)</th>
+                                        <th style="width:110px;">奖励道具ID</th>
+                                        <th style="width:80px;">数量</th>
+                                        <th style="width:80px;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="chipMixList"></tbody>
+                            </table>
+                        </div>
+                        <button type="button" class="kyse-btn kyse-btn-secondary mt-2" onclick="addChipMixRow()">添加规则</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -396,6 +418,28 @@
                                 <input type="number" class="form-control form-control-sm" id="roweiCoinPerHour" value="0" min="0">
                             </div>
                         </div>
+                    </div>
+                    <div class="weights-section mt-4">
+                        <h6 class="weights-subtitle">小游戏奖励（5002 GAME_OVER）</h6>
+                        <p class="weights-desc small text-muted">按 per/score 区间配置赛尔豆与经验池经验；所有小游戏统一使用该表。</p>
+                        <div class="table-responsive">
+                            <table class="weights-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:140px;">名称备注</th>
+                                        <th style="width:80px;">per最小</th>
+                                        <th style="width:80px;">per最大</th>
+                                        <th style="width:90px;">score最小</th>
+                                        <th style="width:90px;">score最大</th>
+                                        <th style="width:90px;">赛尔豆</th>
+                                        <th style="width:90px;">经验池</th>
+                                        <th style="width:80px;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="miniGameRewardList"></tbody>
+                            </table>
+                        </div>
+                        <button type="button" class="kyse-btn kyse-btn-secondary mt-2" onclick="addMiniGameRewardRow()">添加行</button>
                     </div>
                 </div>
             </div>
@@ -822,6 +866,8 @@
         let gachaListData = [];
         let allPets = [];   // 精灵列表（ID + 中文名），用于下拉选择与搜索
         let allItems = [];  // 道具列表（ID + 中文名），用于下拉选择与搜索
+        // NONO 芯片合成 GM：全局道具映射与 datalist
+        window._itemIdToName = window._itemIdToName || {};
         let addPetModalInstance, addItemModalInstance, editPetSkillsModalInstance, gachaAddModalInstance, gachaEditModalInstance;
         let editPetTraitModalInstance, editPetNatureModalInstance, addRewardPetModalInstance;
         let currentRewardRowIndex = -1;
@@ -840,6 +886,7 @@
             loadUsers();
             loadPetDatabase();   // 预加载精灵列表，供下拉与搜索使用
             loadItemDatabase();  // 预加载道具列表，供下拉与搜索使用
+            loadAllItemsForGM(); // 预加载道具列表供 NONO 芯片合成搜索
         };
         
         const sectionTitles = { dashboard: '仪表盘', users: '用户管理', pets: '精灵管理', gacha: '扭蛋机', weights: '权重管理', fusion: '精灵融合管理', maps: '地图管理', fightlevel: '勇者之塔' };
@@ -882,6 +929,7 @@
                 if (!data.success) { document.getElementById('weightsCapsuleList').innerHTML = '<tr><td colspan="2">加载失败</td></tr>'; return; }
                 const capsules = data.capsuleCatchRates || [];
                 const fusion = data.fusionSuccessRates || [];
+                const chipMix = data.chipMixtureRules || [];
                 const petIdToName = {};
                 let weightsPetList = [];
                 if (petsRes.ok) {
@@ -906,10 +954,18 @@
                     if (!f.rewardPets) f.rewardPets = [];
                 });
                 window._weightsFusion = fusion;
+                // 处理 NONO 芯片合成规则
+                chipMix.forEach(function(r, idx) {
+                    r._rowIndex = idx;
+                });
+                window._chipMixRules = chipMix;
                 renderWeightsFusionRows();
+                renderChipMixRows();
             } catch (e) {
                 document.getElementById('weightsCapsuleList').innerHTML = '<tr><td colspan="2">加载失败: ' + e.message + '</td></tr>';
                 document.getElementById('weightsFusionList').innerHTML = '<tr><td colspan="5">加载失败</td></tr>';
+                const chipTbody = document.getElementById('chipMixList');
+                if (chipTbody) chipTbody.innerHTML = '<tr><td colspan="8">加载失败</td></tr>';
             }
         }
         
@@ -939,6 +995,104 @@
                     '<td class="num-cell">' + numSpinHtml(idT, f.transmuteTm, 0, 999999) + '</td>' +
                     '<td class="num-cell">' + numSpinHtml(idV, f.vipTransmuteTm, 0, 999999) + '</td>' + col5 + '</tr>';
             }).join('');
+        }
+
+        // ---------- NONO 芯片合成 GM ----------
+        async function loadAllItemsForGM() {
+            try {
+                const res = await fetch(API + '/gm/items');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.success || !Array.isArray(data.data)) return;
+                const mp = {};
+                data.data.forEach(function(it) {
+                    mp[String(it.id)] = it.name || '';
+                });
+                window._itemIdToName = mp;
+                const dl = document.getElementById('itemOptions');
+                if (dl) {
+                    dl.innerHTML = data.data.map(function(it) {
+                        return '<option value="' + it.id + '">' + (it.name || '') + ' (ID:' + it.id + ')</option>';
+                    }).join('');
+                }
+            } catch (e) {
+                console.warn('loadAllItemsForGM error', e);
+            }
+        }
+
+        function renderChipMixRows() {
+            const tbody = document.getElementById('chipMixList');
+            if (!tbody) return;
+            const rules = window._chipMixRules || [];
+            const id2name = window._itemIdToName || {};
+            if (rules.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-muted">暂无配置</td></tr>';
+                return;
+            }
+            tbody.innerHTML = rules.map(function(r, idx) {
+                const m1 = r.mat1 || 0, m2 = r.mat2 || 0, m3 = r.mat3 || 0;
+                const rid = r.rewardItemId || r.rewardItemID || 0;
+                const name1 = id2name[String(m1)] || '';
+                const name2 = id2name[String(m2)] || '';
+                const name3 = id2name[String(m3)] || '';
+                const rname = id2name[String(rid)] || '';
+                return '<tr>' +
+                    '<td><input type="number" class="form-control form-control-sm" id="chip_m1_' + idx + '" list="itemOptions" placeholder="' + name1 + '" value="' + m1 + '"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" id="chip_m2_' + idx + '" list="itemOptions" placeholder="' + name2 + '" value="' + m2 + '"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" id="chip_m3_' + idx + '" list="itemOptions" placeholder="' + name3 + '" value="' + m3 + '"></td>' +
+                    '<td><input type="text" class="form-control form-control-sm" id="chip_name_' + idx + '" value="' + (r.name || '') + '"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" id="chip_rate_' + idx + '" value="' + (r.successRate || 0) + '" min="0" max="100"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" id="chip_reward_' + idx + '" list="itemOptions" placeholder="' + rname + '" value="' + rid + '"></td>' +
+                    '<td><input type="number" class="form-control form-control-sm" id="chip_cnt_' + idx + '" value="' + (r.rewardCount || 1) + '" min="1"></td>' +
+                    '<td><button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeChipMixRow(' + idx + ')">删除</button></td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        function addChipMixRow() {
+            if (!window._chipMixRules) window._chipMixRules = [];
+            window._chipMixRules.push({
+                id: 0,
+                name: '',
+                mat1: 0,
+                mat2: 0,
+                mat3: 0,
+                successRate: 100,
+                rewardItemId: 0,
+                rewardCount: 1
+            });
+            renderChipMixRows();
+        }
+
+        function collectChipMixRulesForSave() {
+            const rules = window._chipMixRules || [];
+            return rules.map(function(r, idx) {
+                const m1El = document.getElementById('chip_m1_' + idx);
+                const m2El = document.getElementById('chip_m2_' + idx);
+                const m3El = document.getElementById('chip_m3_' + idx);
+                const nameEl = document.getElementById('chip_name_' + idx);
+                const rateEl = document.getElementById('chip_rate_' + idx);
+                const rewardEl = document.getElementById('chip_reward_' + idx);
+                const cntEl = document.getElementById('chip_cnt_' + idx);
+                const next = {
+                    id: r.id || 0,
+                    name: (nameEl && nameEl.value) || r.name || '',
+                    mat1: m1El ? parseInt(m1El.value, 10) || 0 : (r.mat1 || 0),
+                    mat2: m2El ? parseInt(m2El.value, 10) || 0 : (r.mat2 || 0),
+                    mat3: m3El ? parseInt(m3El.value, 10) || 0 : (r.mat3 || 0),
+                    successRate: rateEl ? Math.max(0, Math.min(100, parseInt(rateEl.value, 10) || 0)) : (r.successRate || 0),
+                    rewardItemId: rewardEl ? (parseInt(rewardEl.value, 10) || 0) : (r.rewardItemId || r.rewardItemID || 0),
+                    rewardCount: cntEl ? Math.max(1, parseInt(cntEl.value, 10) || 1) : (r.rewardCount || 1)
+                };
+                return next;
+            });
+        }
+
+        function removeChipMixRow(idx) {
+            const rules = window._chipMixRules || [];
+            if (idx < 0 || idx >= rules.length) return;
+            rules.splice(idx, 1);
+            renderChipMixRows();
         }
         
         function openAddRewardModal(rowIndex) {
@@ -1168,6 +1322,7 @@
         async function saveWeights() {
             const capsules = window._weightsCapsules || [];
             const fusion = window._weightsFusion || [];
+            const chipMixRules = collectChipMixRulesForSave();
             const capsuleCatchRates = {};
             capsules.forEach(function(c) {
                 const el = document.getElementById(c._inputId);
@@ -1199,7 +1354,8 @@
                         fusionSuccessRates: fusionSuccessRates,
                         soulPearlTransmuteTm: soulPearlTransmuteTm,
                         soulPearlVipTransmuteTm: soulPearlVipTransmuteTm,
-                        soulPearlRewardPets: soulPearlRewardPets
+                        soulPearlRewardPets: soulPearlRewardPets,
+                        chipMixtureRules: chipMixRules
                     })
                 });
                 const data = await res.json();
@@ -1346,6 +1502,7 @@
                 rewardConfig = data.data || {};
                 if (!rewardConfig.collectRewards) rewardConfig.collectRewards = [];
                 if (!rewardConfig.roweiRewards) rewardConfig.roweiRewards = { baseExp: 0, expPerHour: 0, coinPerHour: 0 };
+                if (!rewardConfig.miniGames) rewardConfig.miniGames = [];
                 renderRewardTables();
             } catch (e) {
                 alert('加载奖励配置失败: ' + e.message);
@@ -1375,6 +1532,23 @@
             if (baseExpEl) baseExpEl.value = rowei.baseExp || 0;
             if (expHourEl) expHourEl.value = rowei.expPerHour || 0;
             if (coinHourEl) coinHourEl.value = rowei.coinPerHour || 0;
+
+            const miniBody = document.getElementById('miniGameRewardList');
+            if (miniBody) {
+                const list2 = rewardConfig.miniGames || [];
+                miniBody.innerHTML = list2.map(function (r, idx) {
+                    return '<tr>' +
+                        '<td><input type="text" class="form-control form-control-sm" value="' + (r.name || r.Name || '') + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'name\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.minPer != null ? r.minPer : (r.MinPer || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'minPer\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.maxPer != null ? r.maxPer : (r.MaxPer || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'maxPer\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.minScore != null ? r.minScore : (r.MinScore || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'minScore\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.maxScore != null ? r.maxScore : (r.MaxScore || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'maxScore\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.coins != null ? r.coins : (r.Coins || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'coins\',this.value)"></td>' +
+                        '<td><input type="number" class="form-control form-control-sm" value="' + (r.exp != null ? r.exp : (r.Exp || 0)) + '" oninput="updateRewardField(\'miniGames\',' + idx + ',\'exp\',this.value)"></td>' +
+                        '<td><button type="button" class="kyse-btn kyse-btn-danger kyse-btn-sm" onclick="removeRewardRow(\'miniGames\',' + idx + ')">删除</button></td>' +
+                        '</tr>';
+                }).join('') || '<tr><td colspan="8" class="text-muted">暂无配置，点击「添加行」新增</td></tr>';
+            }
         }
 
         function updateRewardField(section, idx, field, val) {
@@ -1397,6 +1571,21 @@
             if (!rewardConfig) rewardConfig = {};
             if (!rewardConfig.collectRewards) rewardConfig.collectRewards = [];
             rewardConfig.collectRewards.push({ activityId: 0, petId: 0, level: 5, dv: 31, nature: 0 });
+            renderRewardTables();
+        }
+
+        function addMiniGameRewardRow() {
+            if (!rewardConfig) rewardConfig = {};
+            if (!rewardConfig.miniGames) rewardConfig.miniGames = [];
+            rewardConfig.miniGames.push({
+                name: '',
+                minPer: 0,
+                maxPer: 100,
+                minScore: 0,
+                maxScore: 0,
+                coins: 0,
+                exp: 0
+            });
             renderRewardTables();
         }
 

@@ -358,9 +358,12 @@ func CalcHitChance(baseAccuracy, accStage, evaStage int) int {
 
 // CheckHit 检查是否命中
 func CheckHit(attacker, defender *Pet, skill *skills.Skill) bool {
-	// 命中等级修正
+	// 命中等级修正：
+	// - attacker.BattleLv[TRAIT_ACCURACY] 视为“命中阶段”
+	// - defender.BattleLv[TRAIT_ACCURACY] 视为“闪避阶段”
+	// 这样技能只需维护各自一条“命中相关能力”，服务端在此做差值。
 	accStage := attacker.BattleLv[TRAIT_ACCURACY]
-	evaStage := 0 // 闪避等级 (暂未实现)
+	evaStage := defender.BattleLv[TRAIT_ACCURACY]
 	finalAcc := CalcHitChance(skill.Accuracy, accStage, evaStage)
 	return rand.Intn(100) < finalAcc
 }

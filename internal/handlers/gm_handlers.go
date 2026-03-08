@@ -22,6 +22,14 @@ import (
 
 // RegisterGMHandlers 注册GM管理接口
 func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
+	// 初始化任務獎勵配置持久化與快取（只需一次）
+	if gs != nil && gs.UserDB != nil {
+		if taskConfigPersistence == nil {
+			SetTaskConfigPersistence(gs.UserDB)
+			LoadTaskConfig()
+		}
+	}
+
 	// 本地模式认证：kyse_seer 风格前端用，返回 isLocal 以跳过登录
 	mux.HandleFunc("/gm/auth/current", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -79,7 +87,7 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 		handleGMCreateUser(w, r, gs)
 	})
 
-	// 元神珠/精元转化设为1秒完成（元神赋形、精元孵化共用 SoulBeadTransform）
+	// 元神珠/精元转化设为1秒完成（元神赋形与精元孵化已拆分為獨立狀態）
 	mux.HandleFunc("/gm/user/transform-1sec", func(w http.ResponseWriter, r *http.Request) {
 		handleGMTransform1Sec(w, r, gs)
 	})
@@ -222,6 +230,31 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 		} else {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}
+	})
+
+	// 任务奖励配置：由 gm_task_config 驱动
+	mux.HandleFunc("/gm/tasks/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		switch r.Method {
+		case http.MethodGet:
+			handleGMTaskConfigGet(w, r)
+		case http.MethodPost:
+			handleGMTaskConfigSave(w, r)
+		default:
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// GM 手动发放某个任务的奖励给指定玩家
+	mux.HandleFunc("/gm/task/grant", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handleGMTaskGrant(w, r, gs)
 	})
 
 	// 元神珠列表（ID + 名称），供融合管理下拉选择
@@ -393,7 +426,15 @@ type BuffItemsConfig struct {
 	} `json:"studyItems"`
 }
 
-// RewardConfig GM 配置：赠宠 / 罗威等奖励
+// RewardItem 基础奖励条目：用于石头、阿瑞斯空间、时间胶囊等掉落
+type RewardItem struct {
+	ItemID uint32 `json:"itemId"`
+	Min    int    `json:"min"`
+	Max    int    `json:"max"`
+	Weight int    `json:"weight"`
+}
+
+// RewardConfig GM 配置：赠宠 / 罗威等奖励 / 活动掉落 / 小游戏奖励
 type RewardConfig struct {
 	CollectRewards []struct {
 		ActivityID uint32 `json:"activityId"`
@@ -407,6 +448,54 @@ type RewardConfig struct {
 		ExpPerHour  int `json:"expPerHour"`
 		CoinPerHour int `json:"coinPerHour"`
 	} `json:"roweiRewards"`
+
+	// 敲石头奖励（2105）
+	HitStone struct {
+		Normal []RewardItem `json:"normal"`
+		Super  []RewardItem `json:"super"`
+	} `json:"hitStone"`
+
+	// 阿瑞斯空间奖励（2106）
+	Atresia map[string]struct {
+		BonusID uint32       `json:"bonusId"`
+		Items   []RewardItem `json:"items"`
+		Pet     struct {
+			PetID uint32  `json:"petId"`
+			Rate  float64 `json:"rate"`
+		} `json:"pet"`
+	} `json:"atresia"`
+
+	// 时间胶囊奖励（2110）
+	TimePoke struct {
+		DailyLimit int          `json:"dailyLimit"`
+		Rewards    []RewardItem `json:"rewards"`
+	} `json:"timePoke"`
+
+	// 特效药效果配置（2610）
+	SpecialMedicine struct {
+		Items map[uint32]struct {
+			EffectID uint16 `json:"effectId"`
+			MaxTimes uint8  `json:"maxTimes"`
+		} `json:"items"`
+	} `json:"specialMedicine"`
+
+	// 雷伊训练上限（2393）
+	LeiyiTrain struct {
+		MaxPerAttr [6]int `json:"maxPerAttr"`
+	} `json:"leiyiTrain"`
+
+	// 小游戏奖励（5002 GAME_OVER）
+	// 按 per / score 区间配置赛尔豆、经验池经验以及可选物品掉落。
+	MiniGames []struct {
+		Name     string       `json:"name"`     // 备注：小游戏名称，仅供 GM 前端展示
+		MinPer   int          `json:"minPer"`   // 最低评价（含），0-100
+		MaxPer   int          `json:"maxPer"`   // 最高评价（含），0=不限制
+		MinScore int          `json:"minScore"` // 最低得分（含），0=不限制
+		MaxScore int          `json:"maxScore"` // 最低得分（含），0=不限制
+		Coins    int          `json:"coins"`    // 固定赠送赛尔豆
+		Exp      int          `json:"exp"`      // 固定赠送经验池经验
+		Items    []RewardItem `json:"items"`    // 可选额外物品掉落，结构与敲石头一致
+	} `json:"miniGames"`
 }
 
 // DefaultBuffItemsConfigUnpacked 解包协议默认 BUFF 道具配置。数据未填时使用。
@@ -416,7 +505,51 @@ func DefaultBuffItemsConfigUnpacked() BuffItemsConfig {
 
 // DefaultRewardConfigUnpacked 解包协议默认奖励配置。数据未填时使用。
 func DefaultRewardConfigUnpacked() RewardConfig {
-	return RewardConfig{}
+	cfg := RewardConfig{}
+
+	// 默认敲石头：普通给少量赛尔豆，超级给中量赛尔豆和少量矿石
+	cfg.HitStone.Normal = []RewardItem{
+		{ItemID: 1, Min: 50, Max: 100, Weight: 100},
+	}
+	cfg.HitStone.Super = []RewardItem{
+		{ItemID: 1, Min: 200, Max: 400, Weight: 100},
+		{ItemID: 400201, Min: 1, Max: 2, Weight: 20},
+	}
+
+	// 时间胶囊：每日 3 次，每次给 50~100 赛尔豆
+	cfg.TimePoke.DailyLimit = 3
+	cfg.TimePoke.Rewards = []RewardItem{
+		{ItemID: 1, Min: 50, Max: 100, Weight: 100},
+	}
+
+	// 雷伊训练：每项上限 10 次
+	for i := 0; i < 6; i++ {
+		cfg.LeiyiTrain.MaxPerAttr[i] = 10
+	}
+
+	// 特效药：留空，需在 GM 中配置具体 itemId → effectId
+	cfg.SpecialMedicine.Items = make(map[uint32]struct {
+		EffectID uint16 `json:"effectId"`
+		MaxTimes uint8  `json:"maxTimes"`
+	})
+
+	// 小游戏奖励：按 per 三档给少量赛尔豆，默认不发经验与物品
+	cfg.MiniGames = []struct {
+		Name     string       `json:"name"`
+		MinPer   int          `json:"minPer"`
+		MaxPer   int          `json:"maxPer"`
+		MinScore int          `json:"minScore"`
+		MaxScore int          `json:"maxScore"`
+		Coins    int          `json:"coins"`
+		Exp      int          `json:"exp"`
+		Items    []RewardItem `json:"items"`
+	}{
+		{Name: "小游戏低评价", MinPer: 0, MaxPer: 49, Coins: 50, Exp: 0},
+		{Name: "小游戏中评价", MinPer: 50, MaxPer: 79, Coins: 100, Exp: 0},
+		{Name: "小游戏高评价", MinPer: 80, MaxPer: 100, Coins: 150, Exp: 0},
+	}
+
+	return cfg
 }
 
 // handleGMBuffItemsGet 获取 BUFF 道具配置
@@ -495,6 +628,145 @@ func handleGMRewardsSave(w http.ResponseWriter, r *http.Request, gs *gameserver.
 	}
 	logger.Info("[GM] 更新奖励配置成功")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// handleGMTaskConfigGet 获取任务奖励配置列表（gm_task_config）
+func handleGMTaskConfigGet(w http.ResponseWriter, r *http.Request) {
+	list := GetTaskConfig()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"data":    list,
+	})
+}
+
+// handleGMTaskConfigSave 保存任务奖励配置列表
+func handleGMTaskConfigSave(w http.ResponseWriter, r *http.Request) {
+	var list []TaskConfigEntry
+	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "请求体无效: " + err.Error(),
+		})
+		return
+	}
+	// 基础校验：taskId > 0，数值非负
+	for _, e := range list {
+		if e.TaskID <= 0 {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("存在非法 taskId=%d", e.TaskID),
+			})
+			return
+		}
+		for _, it := range e.Rewards.Items {
+			if it.ItemID <= 0 || it.Count < 0 {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("任务 %d 中存在非法物品奖励", e.TaskID),
+				})
+				return
+			}
+		}
+		for _, p := range e.Rewards.Pets {
+			if p.PetID <= 0 {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": fmt.Sprintf("任务 %d 中存在非法精灵奖励", e.TaskID),
+				})
+				return
+			}
+		}
+	}
+	if err := SetTaskConfig(list); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "保存失败: " + err.Error(),
+		})
+		return
+	}
+	logger.Info(fmt.Sprintf("[GM] 更新任务奖励配置成功，条目数=%d", len(list)))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "保存成功",
+	})
+}
+
+// handleGMTaskGrant GM 为指定玩家发放某个任务的奖励
+func handleGMTaskGrant(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	var req struct {
+		UserID         int64         `json:"userId"`
+		TaskID         int           `json:"taskId"`
+		RewardsOverride *TaskRewards `json:"rewardsOverride,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "请求体无效: " + err.Error(),
+		})
+		return
+	}
+	if req.UserID == 0 || req.TaskID <= 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "userId 或 taskId 无效",
+		})
+		return
+	}
+	if gs == nil || gs.UserDB == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "服务器未初始化 UserDB",
+		})
+		return
+	}
+
+	user := gs.UserDB.GetOrCreateGameData(req.UserID)
+	if user == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	cfg, ok := GetTaskConfigByID(req.TaskID)
+	if !ok && req.RewardsOverride == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "该任务未配置奖励，请先在任务奖励配置中添加",
+		})
+		return
+	}
+
+	finalRewards := cfg.Rewards
+	if req.RewardsOverride != nil {
+		finalRewards = *req.RewardsOverride
+	}
+
+	petID, captureTm, items := ApplyTaskRewards(user, finalRewards, fmt.Sprintf("[GM任务发放 TaskID=%d]", req.TaskID))
+	gs.UserDB.SaveGameData(req.UserID, user)
+
+	logger.Info(fmt.Sprintf("[GM] 手动发放任务奖励: UserID=%d TaskID=%d", req.UserID, req.TaskID))
+
+	respItems := make([]map[string]interface{}, 0, len(items))
+	for _, it := range items {
+		respItems = append(respItems, map[string]interface{}{
+			"itemId": it.id,
+			"count":  it.count,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "发放成功",
+		"detail": map[string]interface{}{
+			"taskId":    req.TaskID,
+			"userId":    req.UserID,
+			"petId":     petID,
+			"captureTm": captureTm,
+			"items":     respItems,
+		},
+	})
 }
 
 // handleGMFreshFightGet 获取试炼之塔配置列表
@@ -1961,11 +2233,14 @@ func handleGMTransform1Sec(w http.ResponseWriter, r *http.Request, gs *gameserve
 		return
 	}
 	gameData := gs.UserDB.GetOrCreateGameData(req.UserID)
-	if gameData.SoulBeadTransform == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "该用户没有正在转化/孵化的元神珠或精元"})
-		return
+	// 元神賦形：如果有正在轉化的元神珠，設為 1 秒後完成
+	if gameData.SoulBeadTransform != nil {
+		gameData.SoulBeadTransform.ExpireTime = time.Now().Unix() + 1
 	}
-	gameData.SoulBeadTransform.ExpireTime = time.Now().Unix() + 1
+	// 精元孵化：如果有正在孵化的精靈，亦設為 1 秒後完成
+	if gameData.PetHatch != nil {
+		gameData.PetHatch.ExpireTime = time.Now().Unix() + 1
+	}
 	gs.UserDB.SaveGameData(req.UserID, gameData)
 	logger.Info(fmt.Sprintf("[GM] 元神珠/精元 1秒完成: UserID=%d", req.UserID))
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "已设为1秒后完成"})
@@ -2158,7 +2433,7 @@ func handleGMGachaSave(w http.ResponseWriter, r *http.Request, gs *gameserver.Ga
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "保存成功"})
 }
 
-// handleGMWeightsGet 获取权重配置（胶囊列表仅名称+捕捉率；精元列表+每精元融合成功率）
+// handleGMWeightsGet 获取权重配置（胶囊列表仅名称+捕捉率；精元列表+每精元融合成功率；NONO 芯片合成规则）
 func handleGMWeightsGet(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
 	cfg := GetWeightsConfig()
 	// 胶囊：若配置为空则用默认列表，保证前端始终有数据可展示
@@ -2168,9 +2443,35 @@ func handleGMWeightsGet(w http.ResponseWriter, r *http.Request, gs *gameserver.G
 	}
 	capsules := []map[string]interface{}{}
 	for id, rate := range capsuleRates {
-		name := GetItemName(mustParseInt(id))
-		if name == "" {
-			name = "胶囊#" + id
+		itemID := mustParseInt(id)
+		name := GetItemName(itemID)
+		// 若 items.xml 未加载或未配置，GetItemName 会返回 "未知道具"；此处对常见胶囊做兜底映射，
+		// 其余情况至少显示 “胶囊#ID”，避免 GM 页面出现一串“未知道具”。
+		if name == "" || name == "未知道具" {
+			switch itemID {
+			case 300001:
+				name = "普通精灵胶囊"
+			case 300002:
+				name = "中级精灵胶囊"
+			case 300003:
+				name = "高级精灵胶囊"
+			case 300004:
+				name = "超级精灵胶囊"
+			case 300005:
+				name = "特级精灵胶囊"
+			case 300006:
+				name = "无敌精灵胶囊"
+			case 300007:
+				name = "超能胶囊"
+			case 300008:
+				name = "赫星精灵胶囊"
+			case 300009:
+				name = "时空精灵胶囊"
+			case 300010:
+				name = "无敌精灵胶囊Ω"
+			default:
+				name = "胶囊#" + id
+			}
 		}
 		capsules = append(capsules, map[string]interface{}{
 			"itemID": id,
@@ -2200,6 +2501,7 @@ func handleGMWeightsGet(w http.ResponseWriter, r *http.Request, gs *gameserver.G
 		"success":            true,
 		"capsuleCatchRates":  capsules,
 		"fusionSuccessRates": fusionRates,
+		"chipMixtureRules":   cfg.ChipMixtureRules,
 	})
 }
 
@@ -2211,12 +2513,13 @@ func mustParseInt(s string) int {
 // handleGMWeightsUpdate 更新权重配置（支持按精元的融合成功率）
 func handleGMWeightsUpdate(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
 	var req struct {
-		CapsuleCatchRates        map[string]int            `json:"capsuleCatchRates"`
-		FusionSuccessRate        *int                      `json:"fusionSuccessRate"`
-		FusionSuccessRates       map[string]int            `json:"fusionSuccessRates"`
-		SoulPearlTransmuteTm     map[string]int            `json:"soulPearlTransmuteTm"`    // 元神珠 ID -> 普通用户转化时间(秒)
-		SoulPearlVipTransmuteTm  map[string]int            `json:"soulPearlVipTransmuteTm"` // 元神珠 ID -> VIP 转化时间(秒)
-		SoulPearlRewardPets      map[string][]WeightedPetEntry `json:"soulPearlRewardPets"`      // 元神珠 ID -> [{ petClass, weight }]，转化完成只给 1 只
+		CapsuleCatchRates        map[string]int                `json:"capsuleCatchRates"`
+		FusionSuccessRate        *int                          `json:"fusionSuccessRate"`
+		FusionSuccessRates       map[string]int                `json:"fusionSuccessRates"`
+		SoulPearlTransmuteTm     map[string]int                `json:"soulPearlTransmuteTm"`    // 元神珠 ID -> 普通用户转化时间(秒)
+		SoulPearlVipTransmuteTm  map[string]int                `json:"soulPearlVipTransmuteTm"` // 元神珠 ID -> VIP 转化时间(秒)
+		SoulPearlRewardPets      map[string][]WeightedPetEntry `json:"soulPearlRewardPets"`     // 元神珠 ID -> [{ petClass, weight }]，转化完成只给 1 只
+		ChipMixtureRules         []ChipMixtureRule             `json:"chipMixtureRules"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "参数错误: " + err.Error()})
@@ -2273,6 +2576,9 @@ func handleGMWeightsUpdate(w http.ResponseWriter, r *http.Request, gs *gameserve
 	}
 	if req.SoulPearlRewardPets != nil {
 		cfg.SoulPearlRewardPets = req.SoulPearlRewardPets
+	}
+	if req.ChipMixtureRules != nil {
+		cfg.ChipMixtureRules = req.ChipMixtureRules
 	}
 	SetWeightsConfig(cfg)
 	if err := SaveWeightsConfig(); err != nil {

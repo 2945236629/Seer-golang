@@ -1,6 +1,7 @@
 package mapogres
 
 import (
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -18,11 +19,13 @@ type Slot struct {
 }
 
 // monsterEntry 带等级与稀有标记的精灵配置（克洛斯星 10/11/12 等）
+// 为兼容 GM 页面，支持按精灵代码配置（PetID）以及名称配置（Name）。
 type monsterEntry struct {
-	Name     string // 精灵中文名，如 "皮皮", "#闪光皮皮"
-	LevelMin int    // 等级下限
-	LevelMax int    // 等级上限
-	Rare     bool   // 是否稀有（5% 概率刷新）
+	PetID    int    `json:"petId,omitempty"`    // 精灵ID（推荐方式）
+	Name     string `json:"name,omitempty"`     // 精灵中文名，如 "皮皮", "#闪光皮皮"（兼容旧配置）
+	LevelMin int    `json:"levelMin,omitempty"` // 等级下限
+	LevelMax int    `json:"levelMax,omitempty"` // 等级上限
+	Rare     bool   `json:"rare,omitempty"`     // 是否稀有（5% 概率刷新）
 }
 
 // mapConfig 一张地图的刷新配置，使用精灵中文名（与官方 XML / Lua 表保持一致）
@@ -41,12 +44,14 @@ type mapConfig struct {
 // - Common/Rare：普通/稀有精灵列表（带等级范围）
 // - Slots：槽位数量（Common/Rare 规则始终使用 4 槽，其他地图使用原 Slots 逻辑）
 // - RefreshIntervalSeconds：刷新间隔（秒），覆盖默认的 10 秒
+// - RarePercent：稀有精灵刷新几率（0-100，对 Common/Rare 规则生效）
 type GMMapConfig struct {
 	MapID                 int            `json:"mapId"`
 	Slots                 *int           `json:"slots,omitempty"`
 	RefreshIntervalSeconds *int           `json:"refreshIntervalSeconds,omitempty"`
 	Common                []monsterEntry `json:"common,omitempty"`
 	Rare                  []monsterEntry `json:"rare,omitempty"`
+	RarePercent           *int           `json:"rarePercent,omitempty"`
 }
 
 // 稀有精灵刷新概率（与需求一致，旧常量，实际逻辑已使用“10 个蛋里抽 3 个”的规则）
@@ -609,6 +614,24 @@ func getEffectiveConfig(mapID int, base mapConfig) (mapConfig, time.Duration) {
 	return effective, interval
 }
 
+// getEffectiveRarePercent 返回指定地图的稀有精灵刷新几率（0-100）
+func getEffectiveRarePercent(mapID int) int {
+	gmMapConfigsMu.RLock()
+	cfg, ok := gmMapConfigs[mapID]
+	gmMapConfigsMu.RUnlock()
+	if ok && cfg.RarePercent != nil {
+		v := *cfg.RarePercent
+		if v < 0 {
+			return 0
+		}
+		if v > 100 {
+			return 100
+		}
+		return v
+	}
+	return rareChancePercent
+}
+
 // GetAllMapsForGM 返回当前所有已知地图的配置（内置 + GM 覆盖），供 GM 页面展示。
 // 仅包含 Common/Rare/Slots 以及刷新间隔等信息。
 func GetAllMapsForGM() []GMMapConfig {
@@ -717,7 +740,17 @@ var nameToIDFallback = map[string]int{
 
 // resolveEntry 将 monsterEntry 解析为带等级的 Slot（等级在 LevelMin~LevelMax 间随机）
 func resolveEntry(e monsterEntry) Slot {
-	s := resolveMonsterName(e.Name)
+	var s Slot
+	// 优先使用精灵代码；若未提供则回退按名称解析
+	if e.PetID > 0 {
+		s = Slot{PetID: e.PetID}
+		// 若名称以 "#" 开头则认为是闪光
+		if strings.HasPrefix(e.Name, "#") {
+			s.Shiny = true
+		}
+	} else {
+		s = resolveMonsterName(e.Name)
+	}
 	if s.PetID <= 0 {
 		return s
 	}
@@ -809,7 +842,7 @@ func generateSlotsInternal(mapID int, writeCache bool) []Slot {
 			return nil
 		}
 
-		// 构造 10 个“蛋”：8 普通 + 1 稀有 + 1 空
+		// 构造 10 个“蛋”：根据 RarePercent 动态分配普通/稀有比例，保留 1 个空蛋
 		type eggType int
 		const (
 			eggCommon eggType = iota
@@ -817,10 +850,24 @@ func generateSlotsInternal(mapID int, writeCache bool) []Slot {
 			eggEmpty
 		)
 		eggs := make([]eggType, 0, 10)
-		for i := 0; i < 8; i++ {
+		// 9 个非空蛋：在普通与稀有之间按 RarePercent 分配
+		rp := getEffectiveRarePercent(requestedMapID) // 0-100
+		rareEggs := int(math.Round(float64(rp) / 100.0 * 9.0))
+		if rareEggs < 0 {
+			rareEggs = 0
+		}
+		if rareEggs > 9 {
+			rareEggs = 9
+		}
+		commonEggs := 9 - rareEggs
+		for i := 0; i < commonEggs; i++ {
 			eggs = append(eggs, eggCommon)
 		}
-		eggs = append(eggs, eggRare, eggEmpty)
+		for i := 0; i < rareEggs; i++ {
+			eggs = append(eggs, eggRare)
+		}
+		// 保留 1 个空蛋
+		eggs = append(eggs, eggEmpty)
 
 		// 从 10 个蛋里不放回地抽出 3 个
 		drawn := make([]Slot, 0, 3)

@@ -1175,6 +1175,34 @@ func (db *UserDB) SaveRewardConfig(data []byte) error {
 	return err
 }
 
+// LoadTaskConfig 从 gm_task_config 表读取任务奖励配置 JSON（id=1）。未启用 MySQL 时走离线文件。
+func (db *UserDB) LoadTaskConfig() ([]byte, error) {
+	if db.mysqlDB == nil {
+		return readOfflineConfig(db, "gm_task_config.json")
+	}
+	var data string
+	err := db.mysqlDB.QueryRow("SELECT data_json FROM gm_task_config WHERE id = 1").Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []byte(data), nil
+}
+
+// SaveTaskConfig 将任务奖励配置 JSON 写入 gm_task_config 表（id=1）。
+func (db *UserDB) SaveTaskConfig(data []byte) error {
+	if db.mysqlDB == nil {
+		writeOfflineConfig(db, "gm_task_config.json", data)
+		return nil
+	}
+	_, err := db.mysqlDB.Exec(
+		"INSERT INTO gm_task_config (id, data_json) VALUES (1, ?) ON DUPLICATE KEY UPDATE data_json = VALUES(data_json)",
+		string(data))
+	return err
+}
+
 // exportTableToJSON 将指定表的全部行导出为 JSON 数组文件，文件名为 db_<table>.json，写入 dir 目录。
 // 说明：
 // - 使用通用 SELECT *，按列名生成 map[string]interface{} 列表；

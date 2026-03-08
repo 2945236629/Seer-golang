@@ -20,7 +20,23 @@ type WeightedPetEntry struct {
 	Weight   int `json:"weight"`
 }
 
-// WeightsConfig 权重配置：胶囊捕捉率、精灵融合成功率、元神珠转化时间
+// ChipMixtureRule NONO 芯片合成规则（9004 NONO_CHIP_MIXTURE）
+// - mat1/mat2/mat3: 三个材料道具 ID（可相同，表示 3 个同道具）
+// - successRate: 合成成功几率 0-100
+// - rewardItemId / rewardCount: 合成成功时给予的道具及数量
+// - id/name: 兼容旧配置的配方 ID / 备注，可选
+type ChipMixtureRule struct {
+	ID           int    `json:"id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Mat1         int    `json:"mat1"`           // 材料1 道具ID
+	Mat2         int    `json:"mat2"`           // 材料2 道具ID
+	Mat3         int    `json:"mat3"`           // 材料3 道具ID
+	SuccessRate  int    `json:"successRate"`    // 成功率 0-100
+	RewardItemID int    `json:"rewardItemId"`   // 奖励道具ID
+	RewardCount  int    `json:"rewardCount"`    // 奖励数量
+}
+
+// WeightsConfig 权重配置：胶囊捕捉率、精灵融合成功率、元神珠转化时间、NONO 芯片合成
 type WeightsConfig struct {
 	CapsuleCatchRates        map[string]int            `json:"capsuleCatchRates"`        // 胶囊ID -> 捕捉率(0-100)
 	FusionSuccessRate        int                       `json:"fusionSuccessRate"`         // 精灵融合全局默认(0-100)，兼容旧配置
@@ -28,6 +44,7 @@ type WeightsConfig struct {
 	SoulPearlTransmuteTm     map[string]int            `json:"soulPearlTransmuteTm"`     // 元神珠 ID -> 普通用户转化时间(秒)，默认 1800
 	SoulPearlVipTransmuteTm  map[string]int            `json:"soulPearlVipTransmuteTm"` // 元神珠 ID -> VIP 用户转化时间(秒)，默认 900
 	SoulPearlRewardPets      map[string][]WeightedPetEntry `json:"soulPearlRewardPets"`  // 元神珠 ID -> [{ petClass, weight }]，转化完成只给 1 只
+	ChipMixtureRules         []ChipMixtureRule         `json:"chipMixtureRules,omitempty"` // NONO 芯片合成规则（9004）
 }
 
 var (
@@ -80,6 +97,7 @@ func loadDefaultWeights() {
 		SoulPearlTransmuteTm:    map[string]int{},
 		SoulPearlVipTransmuteTm: map[string]int{},
 		SoulPearlRewardPets:     map[string][]WeightedPetEntry{},
+		ChipMixtureRules:        []ChipMixtureRule{},
 	}
 	weightsConfigMu.Unlock()
 }
@@ -121,6 +139,9 @@ func LoadWeightsConfig() {
 		if cfg.SoulPearlRewardPets != nil {
 			weightsConfig.SoulPearlRewardPets = cfg.SoulPearlRewardPets
 		}
+		if cfg.ChipMixtureRules != nil {
+			weightsConfig.ChipMixtureRules = cfg.ChipMixtureRules
+		}
 		weightsConfigMu.Unlock()
 		logger.Info("[权重] 已从数据库加载配置")
 		return
@@ -157,6 +178,9 @@ func LoadWeightsConfig() {
 	}
 	if cfg.SoulPearlRewardPets != nil {
 		weightsConfig.SoulPearlRewardPets = cfg.SoulPearlRewardPets
+	}
+	if cfg.ChipMixtureRules != nil {
+		weightsConfig.ChipMixtureRules = cfg.ChipMixtureRules
 	}
 	weightsConfigMu.Unlock()
 	logger.Info("[权重] 已从文件加载配置")
@@ -281,6 +305,7 @@ func GetWeightsConfig() WeightsConfig {
 		SoulPearlTransmuteTm:    make(map[string]int),
 		SoulPearlVipTransmuteTm: make(map[string]int),
 		SoulPearlRewardPets:     make(map[string][]WeightedPetEntry),
+		ChipMixtureRules:        make([]ChipMixtureRule, 0, len(weightsConfig.ChipMixtureRules)),
 	}
 	for k, v := range weightsConfig.CapsuleCatchRates {
 		cfg.CapsuleCatchRates[k] = v
@@ -296,6 +321,9 @@ func GetWeightsConfig() WeightsConfig {
 	}
 	for k, v := range weightsConfig.SoulPearlRewardPets {
 		cfg.SoulPearlRewardPets[k] = append([]WeightedPetEntry(nil), v...)
+	}
+	if len(weightsConfig.ChipMixtureRules) > 0 {
+		cfg.ChipMixtureRules = append(cfg.ChipMixtureRules, weightsConfig.ChipMixtureRules...)
 	}
 	return cfg
 }
@@ -320,6 +348,9 @@ func SetWeightsConfig(cfg WeightsConfig) {
 	}
 	if cfg.SoulPearlRewardPets != nil {
 		weightsConfig.SoulPearlRewardPets = cfg.SoulPearlRewardPets
+	}
+	if cfg.ChipMixtureRules != nil {
+		weightsConfig.ChipMixtureRules = cfg.ChipMixtureRules
 	}
 	weightsConfigMu.Unlock()
 }
