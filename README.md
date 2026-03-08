@@ -138,8 +138,8 @@ go run ./cmd/gameserver
 | MYSQL_HOST | 主机（默认 127.0.0.1） |
 | MYSQL_PORT | 端口（默认 3306） |
 | MYSQL_DATABASE | 数据库名（默认 seer） |
-| MYSQL_USER | 用户名 |
-| MYSQL_PASSWORD | 密码 |
+| MYSQL_USER | 用户名 |(默认seer）
+| MYSQL_PASSWORD | 密码 |（默认abc.123)
 
 ## 启动流程
 
