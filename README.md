@@ -2,10 +2,11 @@
 
 赛尔号服务端 Go 语言实现，包含游戏服务器、登录服务器、资源服务器与 GM 管理后台。
 
-
 ## 友情链接
-三梦Kose服务端
-链接:https://github.com/BaiSugar/kose_seer
+
+三梦Kose服务端  
+链接：<https://github.com/BaiSugar/kose_seer>
+
 ## 项目结构
 
 ```
@@ -138,8 +139,13 @@ go run ./cmd/gameserver
 | MYSQL_HOST | 主机（默认 127.0.0.1） |
 | MYSQL_PORT | 端口（默认 3306） |
 | MYSQL_DATABASE | 数据库名（默认 seer） |
+<<<<<<< HEAD
 | MYSQL_USER | 用户名 |(默认seer）
 | MYSQL_PASSWORD | 密码 |（默认abc.123)
+=======
+| MYSQL_USER | 用户名 |
+| MYSQL_PASSWORD | 密码 |
+>>>>>>> e4635df (docs: README 改为简体中文)
 
 ## 启动流程
 
