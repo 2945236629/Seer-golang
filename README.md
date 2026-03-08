@@ -1,159 +1,163 @@
-# 賽爾號 Go 服務端
+# 赛尔号 Go 服务端
 
-賽爾號私服 Go 語言實作，包含遊戲伺服器、登入伺服器、資源伺服器與 GM 管理後台。
+赛尔号服务端 Go 语言实现，包含游戏服务器、登录服务器、资源服务器与 GM 管理后台。
 
-## 專案結構
+
+## 友情链接
+三梦Kose服务端
+链接:https://github.com/BaiSugar/kose_seer
+## 项目结构
 
 ```
 d:\go\
 ├── cmd/
 │   └── gameserver/
-│       └── main.go              # 主程式入口
+│       └── main.go              # 主程序入口
 ├── internal/
-│   ├── core/                    # 核心基礎設施
-│   │   ├── logger/              # 日誌
-│   │   ├── packet/              # 封包編解碼
-│   │   ├── protocolvalidator/   # 協議驗證
-│   │   ├── userdb/              # 用戶與遊戲資料（JSON / MySQL）
-│   │   ├── nonoformcache/       # 超能 NONO 形態快取
-│   │   └── soultransformcache/ # 元神變身快取
-│   ├── game/                    # 遊戲邏輯
-│   │   ├── battle/              # 戰鬥系統
-│   │   ├── skills/              # 技能與效果
-│   │   ├── pets/                # 精靈
+│   ├── core/                    # 核心基础设施
+│   │   ├── logger/              # 日志
+│   │   ├── packet/              # 封包编解码
+│   │   ├── protocolvalidator/   # 协议验证
+│   │   ├── userdb/              # 用户与游戏数据（JSON / MySQL）
+│   │   ├── nonoformcache/       # 超能 NONO 形态缓存
+│   │   └── soultransformcache/ # 元神变身缓存
+│   ├── game/                    # 游戏逻辑
+│   │   ├── battle/              # 战斗系统
+│   │   ├── skills/              # 技能与效果
+│   │   ├── pets/                # 精灵
 │   │   ├── sptboss/             # SPT Boss
-│   │   ├── mapogres/            # 地圖怪物
-│   │   └── typechart/           # 屬性克制表
-│   ├── handlers/                # 業務處理與 GM API
-│   │   ├── handlers.go          # 主處理器（戰鬥、精靈、地圖等）
+│   │   ├── mapogres/            # 地图怪物
+│   │   └── typechart/           # 属性克制表
+│   ├── handlers/                # 业务处理与 GM API
+│   │   ├── handlers.go          # 主处理器（战斗、精灵、地图等）
 │   │   ├── gm_handlers.go       # GM HTTP API
 │   │   ├── sptboss_gm.go        # SPT Boss GM
-│   │   ├── maps_gm.go           # 地圖 GM
-│   │   ├── dark_portal.go       # 暗黑武鬥場
-│   │   ├── arena.go             # 競技場
+│   │   ├── maps_gm.go           # 地图 GM
+│   │   ├── dark_portal.go       # 暗黑武斗场
+│   │   ├── arena.go             # 竞技场
 │   │   ├── gacha.go             # 扭蛋
-│   │   ├── task_config.go       # 任務配置
+│   │   ├── task_config.go       # 任务配置
 │   │   └── ...
-│   └── server/                  # 伺服器層
-│       ├── gameserver/          # 遊戲主伺服器（Socket 5000）
-│       ├── loginserver/         # 登入伺服器（1863）
-│       ├── resserver/           # 資源伺服器（32400、8088）
-│       └── loginip/             # 登入 IP 伺服器（32401）
-├── GM/                          # GM 網頁後台
-│   ├── gm_admin.html            # GM 管理主頁
+│   └── server/                  # 服务器层
+│       ├── gameserver/          # 游戏主服务器（Socket 5000）
+│       ├── loginserver/         # 登录服务器（1863）
+│       ├── resserver/           # 资源服务器（32400、8088）
+│       └── loginip/             # 登录 IP 服务器（32401）
+├── GM/                          # GM 网页后台
+│   ├── gm_admin.html            # GM 管理主页
 │   ├── gm_panel.html            # GM 面板
 │   ├── kyse.html                # 前端入口
-│   ├── tasks_section.html       # 任務區塊
+│   ├── tasks_section.html       # 任务区块
 │   └── skills.xml               # 技能配置
-├── data/                        # 遊戲資料 XML
+├── data/                        # 游戏数据 XML
 │   ├── skills.xml               # 技能表
-│   ├── spt.xml                  # 精靈表
+│   ├── spt.xml                  # 精灵表
 │   └── items.xml                # 道具表
-├── test/                        # 測試資料與編譯輸出
-│   ├── users.json               # 測試用戶
-│   ├── gm_*.json                # GM 配置檔
-│   └── gameserver_*.exe         # 編譯產物
+├── test/                        # 测试数据与编译输出
+│   ├── users.json               # 测试用户
+│   ├── gm_*.json                # GM 配置文件
+│   └── gameserver_*.exe         # 编译产物
 ├── go.mod
-├── 編譯.bat                     # 建置入口（呼叫 compile.ps1）
-└── compile.ps1                  # PowerShell 編譯腳本
+├── 编译.bat                     # 构建入口（调用 compile.ps1）
+└── compile.ps1                  # PowerShell 编译脚本
 ```
 
-## 模組說明
+## 模块说明
 
-### 伺服器層 (`internal/server/`)
+### 服务器层 (`internal/server/`)
 
-| 模組 | 埠號 | 說明 |
+| 模块 | 端口 | 说明 |
 |------|------|------|
-| **gameserver** | 5000 | 遊戲主伺服器，處理客戶端連線與協議 |
-| **loginserver** | 1863 | 登入伺服器，帳號驗證與伺服器列表 |
-| **resserver** | 32400, 8088 | 資源伺服器，提供遊戲資源與代理 |
-| **loginip** | 32401 | 登入 IP 伺服器，處理登入 IP 查詢 |
+| **gameserver** | 5000 | 游戏主服务器，处理客户端连接与协议 |
+| **loginserver** | 1863 | 登录服务器，账号验证与服务器列表 |
+| **resserver** | 32400, 8088 | 资源服务器，提供游戏资源与代理 |
+| **loginip** | 32401 | 登录 IP 服务器，处理登录 IP 查询 |
 
-### 核心模組 (`internal/core/`)
+### 核心模块 (`internal/core/`)
 
-| 模組 | 說明 |
+| 模块 | 说明 |
 |------|------|
-| **userdb** | 用戶與遊戲資料，支援 JSON 與 MySQL |
-| **packet** | 封包編解碼 |
-| **logger** | 日誌 |
-| **protocolvalidator** | 協議驗證 |
-| **nonoformcache** | 超能 NONO 形態快取 |
-| **soultransformcache** | 元神變身快取 |
+| **userdb** | 用户与游戏数据，支持 JSON 与 MySQL |
+| **packet** | 封包编解码 |
+| **logger** | 日志 |
+| **protocolvalidator** | 协议验证 |
+| **nonoformcache** | 超能 NONO 形态缓存 |
+| **soultransformcache** | 元神变身缓存 |
 
-### 遊戲邏輯 (`internal/game/`)
+### 游戏逻辑 (`internal/game/`)
 
-| 模組 | 說明 |
+| 模块 | 说明 |
 |------|------|
-| **battle** | 戰鬥系統 |
-| **skills** | 技能與效果 |
-| **pets** | 精靈 |
+| **battle** | 战斗系统 |
+| **skills** | 技能与效果 |
+| **pets** | 精灵 |
 | **sptboss** | SPT Boss |
-| **mapogres** | 地圖怪物 |
-| **typechart** | 屬性克制表 |
+| **mapogres** | 地图怪物 |
+| **typechart** | 属性克制表 |
 
-### 業務處理 (`internal/handlers/`)
+### 业务处理 (`internal/handlers/`)
 
-處理遊戲指令與 GM API，包含：戰鬥、精靈、地圖、暗黑武鬥場、競技場、扭蛋、任務配置、融合規則等。
+处理游戏指令与 GM API，包含：战斗、精灵、地图、暗黑武斗场、竞技场、扭蛋、任务配置、融合规则等。
 
-## 建置與執行
+## 构建与运行
 
-### 編譯
+### 编译
 
 ```powershell
-# 一般建置 → test/gameserver_yyyy-MM-dd_HHmm.exe
+# 普通构建 → test/gameserver_yyyy-MM-dd_HHmm.exe
 .\compile.ps1
 
-# Release 建置（-ldflags "-s -w"）
+# Release 构建（-ldflags "-s -w"）
 .\compile.ps1 -Release
 
-# 監聽變更自動重建
+# 监听变更自动重建
 .\compile.ps1 -Watch
 
-# 清理編譯產物
+# 清理编译产物
 .\compile.ps1 -Clean
 ```
 
-或使用 `編譯.bat` 進行建置。
+或使用 `编译.bat` 进行构建。
 
-### 執行
+### 运行
 
-執行編譯後的 `test/gameserver_*.exe`，或：
+运行编译后的 `test/gameserver_*.exe`，或：
 
 ```bash
 go run ./cmd/gameserver
 ```
 
-**啟動參數：**
-- `-y`：跳過免責申明確認，直接啟動
-- `-import-data-docs`：僅將 data/*.xml 導入 data_docs 表後退出
+**启动参数：**
+- `-y`：跳过免责声明确认，直接启动
+- `-import-data-docs`：仅将 data/*.xml 导入 data_docs 表后退出
 
-### 環境變數（MySQL）
+### 环境变量（MySQL）
 
-| 變數 | 說明 |
+| 变量 | 说明 |
 |------|------|
-| MYSQL_HOST | 主機（預設 127.0.0.1） |
-| MYSQL_PORT | 埠號（預設 3306） |
-| MYSQL_DATABASE | 資料庫名（預設 seer） |
-| MYSQL_USER | 使用者 |
-| MYSQL_PASSWORD | 密碼 |
+| MYSQL_HOST | 主机（默认 127.0.0.1） |
+| MYSQL_PORT | 端口（默认 3306） |
+| MYSQL_DATABASE | 数据库名（默认 seer） |
+| MYSQL_USER | 用户名 |
+| MYSQL_PASSWORD | 密码 |
 
-## 啟動流程
+## 启动流程
 
-1. 顯示免責聲明並設定對外 IP
-2. 設定資源目錄（可下載 gameres.rar 或手動指定）
-3. 連接 MySQL
-4. 啟動各伺服器：
-   - 遊戲伺服器（5000）
-   - 資源伺服器（32400、8088）
-   - 登入伺服器（1863）
-   - 登入 IP 伺服器（32401）
+1. 显示免责声明并设置对外 IP
+2. 设置资源目录（可下载 gameres.rar 或手动指定）
+3. 连接 MySQL
+4. 启动各服务器：
+   - 游戏服务器（5000）
+   - 资源服务器（32400、8088）
+   - 登录服务器（1863）
+   - 登录 IP 服务器（32401）
    - GM 管理（HTTP 8080）
 
-## 依賴
+## 依赖
 
 - Go 1.20+
 - [github.com/go-sql-driver/mysql](https://github.com/go-sql-driver/mysql)
 
-## 授權
+## 授权
 
-本專案僅供學習研究使用。
+本项目仅供学习研究使用。
