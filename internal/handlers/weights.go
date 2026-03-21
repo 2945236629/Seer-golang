@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -45,6 +46,8 @@ type WeightsConfig struct {
 	SoulPearlVipTransmuteTm  map[string]int            `json:"soulPearlVipTransmuteTm"` // 元神珠 ID -> VIP 用户转化时间(秒)，默认 900
 	SoulPearlRewardPets      map[string][]WeightedPetEntry `json:"soulPearlRewardPets"`  // 元神珠 ID -> [{ petClass, weight }]，转化完成只给 1 只
 	ChipMixtureRules         []ChipMixtureRule         `json:"chipMixtureRules,omitempty"` // NONO 芯片合成规则（9004）
+	// NonCaptureShinyPercent 非捕捉途径发放精灵时的异色几率（单位：百分比）。例如 0.003 表示 0.003%；0 表示关闭。战斗捕捉仍只看敌方/地图异色配置。
+	NonCaptureShinyPercent float64 `json:"nonCaptureShinyPercent"`
 }
 
 var (
@@ -98,8 +101,50 @@ func loadDefaultWeights() {
 		SoulPearlVipTransmuteTm: map[string]int{},
 		SoulPearlRewardPets:     map[string][]WeightedPetEntry{},
 		ChipMixtureRules:        []ChipMixtureRule{},
+		NonCaptureShinyPercent:  0.003, // 默认 0.003%
 	}
 	weightsConfigMu.Unlock()
+}
+
+func clampNonCaptureShinyPercent(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0.003
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+// applyNonCaptureShinyPercentFromJSON 若 JSON 含 nonCaptureShinyPercent 键则覆盖（兼容旧配置无此键时保留内存中的默认值）
+func applyNonCaptureShinyPercentFromJSON(data []byte, cfg WeightsConfig) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+	if _, ok := raw["nonCaptureShinyPercent"]; !ok {
+		return
+	}
+	weightsConfigMu.Lock()
+	weightsConfig.NonCaptureShinyPercent = clampNonCaptureShinyPercent(cfg.NonCaptureShinyPercent)
+	weightsConfigMu.Unlock()
+}
+
+// GetNonCaptureShinyProbability 非捕捉途径发放精灵时的异色概率（0~1），由 GM 配置的百分比 / 100 换算。
+func GetNonCaptureShinyProbability() float64 {
+	weightsConfigMu.RLock()
+	p := weightsConfig.NonCaptureShinyPercent / 100.0
+	weightsConfigMu.RUnlock()
+	if math.IsNaN(p) || math.IsInf(p, 0) || p <= 0 {
+		return 0
+	}
+	if p > 1 {
+		return 1
+	}
+	return p
 }
 
 // LoadWeightsConfig 从数据库或本地 JSON 加载（若已 SetWeightsPersistence 则从 DB，否则从 weights_config.json）
@@ -143,6 +188,7 @@ func LoadWeightsConfig() {
 			weightsConfig.ChipMixtureRules = cfg.ChipMixtureRules
 		}
 		weightsConfigMu.Unlock()
+		applyNonCaptureShinyPercentFromJSON(data, cfg)
 		logger.Info("[权重] 已从数据库加载配置")
 		return
 	}
@@ -183,6 +229,7 @@ func LoadWeightsConfig() {
 		weightsConfig.ChipMixtureRules = cfg.ChipMixtureRules
 	}
 	weightsConfigMu.Unlock()
+	applyNonCaptureShinyPercentFromJSON(data, cfg)
 	logger.Info("[权重] 已从文件加载配置")
 }
 
@@ -306,6 +353,7 @@ func GetWeightsConfig() WeightsConfig {
 		SoulPearlVipTransmuteTm: make(map[string]int),
 		SoulPearlRewardPets:     make(map[string][]WeightedPetEntry),
 		ChipMixtureRules:        make([]ChipMixtureRule, 0, len(weightsConfig.ChipMixtureRules)),
+		NonCaptureShinyPercent:  weightsConfig.NonCaptureShinyPercent,
 	}
 	for k, v := range weightsConfig.CapsuleCatchRates {
 		cfg.CapsuleCatchRates[k] = v
@@ -352,5 +400,6 @@ func SetWeightsConfig(cfg WeightsConfig) {
 	if cfg.ChipMixtureRules != nil {
 		weightsConfig.ChipMixtureRules = cfg.ChipMixtureRules
 	}
+	weightsConfig.NonCaptureShinyPercent = clampNonCaptureShinyPercent(cfg.NonCaptureShinyPercent)
 	weightsConfigMu.Unlock()
 }

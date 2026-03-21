@@ -1,0 +1,10 @@
+{
+  "ResDir": "I:\\gameres\\root",
+  "PublicIP": "127.0.0.1",
+  "GamePort": 5000,
+  "ResPort": 32400,
+  "ResPort80": 8088,
+  "LoginPort": 1863,
+  "LoginIPPort": 32401,
+  "GMPort": 8080
+}

@@ -71,6 +71,9 @@ func SetSPTBossConfig(cfg *sptboss.FullConfig) error {
 		cfg2 := sptboss.GetConfig()
 		return saveSPTBossConfigToPersistence(&cfg2)
 	}
+	for i := range cfg.SPTBosses {
+		sptboss.NormalizeSPTBossItemTitles(&cfg.SPTBosses[i])
+	}
 	sptboss.SetConfig(cfg)
 	return saveSPTBossConfigToPersistence(cfg)
 }
@@ -122,7 +125,9 @@ func mergeSPTBossConfig(builtIn, db sptboss.FullConfig) sptboss.FullConfig {
 	}
 	for _, it := range db.SPTBosses {
 		if it.BossPetID > 0 {
-			sptMap[it.BossPetID] = it
+			copyIt := it
+			sptboss.NormalizeSPTBossItemTitles(&copyIt)
+			sptMap[it.BossPetID] = copyIt
 		}
 	}
 	out.SPTBosses = out.SPTBosses[:0]

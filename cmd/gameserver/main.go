@@ -37,6 +37,7 @@ const (
 func main() {
 	skipDisclaimer := flag.Bool("y", false, "跳过免责申明确认，直接启动（适合双击运行或脚本启动）")
 	importDataDocs := flag.Bool("import-data-docs", false, "仅将 data/skills.xml、spt.xml、items.xml 导入 data_docs 表后退出")
+	configPrompt := flag.Bool("config-prompt", false, "强制在控制台交互设置 IP 与端口（忽略 res_path.json 中已写全的配置）")
 	flag.Parse()
 
 	// 根据可执行文件路径解析项目根目录，保证从 bin/ 或任意目录运行都能找到 gameres
@@ -128,8 +129,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	// 初始化日志
-	logger.Init()
+	// 初始化日志（控制台 + 运行目录 log 文件）
+	logger.InitWithLogDir(filepath.Join(exeDir, "log"))
 	if _, err := os.Stat(gmAdminPath); os.IsNotExist(err) {
 		logger.Error(fmt.Sprintf("GM 页面未找到，请确保存在: %s", gmAdminPath))
 	}
@@ -140,14 +141,72 @@ func main() {
 		os.Exit(0)
 	}
 
-	// 启动前选择对外暴露给客户端的服务器 IP（默认 127.0.0.1）
-	publicIP := promptPublicIP()
-	gameserver.SetPublicIP(publicIP)
-	// 资源服根地址，用于 1001 尾追加 set_user URL，供同机多开时按米米号识别超能 NONO 形态
-	handlers.SetResourceBaseURL("http://" + publicIP + ":32400")
+	// 从 res_path.json 读取配置（含各服务可选独立 IP）
+	startCfg, _ := readResPathConfig(resPathConfigPath)
+	skipInteractive := !*configPrompt && resPathConfigComplete(startCfg)
 
-	// 资源目录：优先从配置文件读取；首次运行无配置时由用户手动输入并保存
-	resDir := loadOrPromptResDir(resPathConfigPath, defaultResDir)
+	var publicIP string
+	var gamePort, resPort, resPort80, loginPort, loginIPPort, gmPort int
+	var resDir string
+
+	if skipInteractive {
+		fmt.Println("============================================================")
+		fmt.Println("已从 res_path.json 加载完整配置，跳过 IP、端口与资源目录交互。")
+		fmt.Println("如需在控制台重新配置，请使用启动参数: -config-prompt")
+		fmt.Println("============================================================")
+		publicIP = strings.TrimSpace(startCfg.PublicIP)
+		if publicIP == "" {
+			publicIP = "127.0.0.1"
+		}
+		gamePort = portOrDefault(startCfg.GamePort, 5000)
+		resPort = portOrDefault(startCfg.ResPort, 32400)
+		resPort80 = portOrDefault(startCfg.ResPort80, 8088)
+		loginPort = portOrDefault(startCfg.LoginPort, 1863)
+		loginIPPort = portOrDefault(startCfg.LoginIPPort, 32401)
+		gmPort = portOrDefault(startCfg.GMPort, 8080)
+		abs, err := filepath.Abs(strings.TrimSpace(startCfg.ResDir))
+		if err != nil {
+			fmt.Println("res_path.json 中 ResDir 无效:", err)
+			os.Exit(1)
+		}
+		resDir = abs
+	} else {
+		publicIP = promptPublicIP(startCfg.PublicIP)
+		gamePort = promptPort("游戏服务器（TCP）", portOrDefault(startCfg.GamePort, 5000))
+		resPort = promptPort("资源服务器（HTTP 静态）", portOrDefault(startCfg.ResPort, 32400))
+		resPort80 = promptPort("资源服务器备用 HTTP 端口", portOrDefault(startCfg.ResPort80, 8088))
+		loginPort = promptPort("登录服务器（TCP）", portOrDefault(startCfg.LoginPort, 1863))
+		loginIPPort = promptPort("登录 IP 服务器（HTTP）", portOrDefault(startCfg.LoginIPPort, 32401))
+		gmPort = promptPort("GM 管理后台（HTTP）", portOrDefault(startCfg.GMPort, 8080))
+		resDir = resolveResDir(defaultResDir, startCfg.ResDir)
+	}
+
+	startCfg.ResDir = resDir
+	startCfg.PublicIP = publicIP
+	startCfg.GamePort = gamePort
+	startCfg.ResPort = resPort
+	startCfg.ResPort80 = resPort80
+	startCfg.LoginPort = loginPort
+	startCfg.LoginIPPort = loginIPPort
+	startCfg.GMPort = gmPort
+
+	gameIP := resolveServiceIP(startCfg, startCfg.GameIP)
+	resIP := resolveServiceIP(startCfg, startCfg.ResIP)
+	loginTCPIP := resolveServiceIP(startCfg, startCfg.LoginTCPIP)
+	loginHTTPIP := resolveServiceIP(startCfg, startCfg.LoginHTTPIP)
+	gmIP := resolveServiceIP(startCfg, startCfg.GMIP)
+	_ = resolveServiceIP(startCfg, startCfg.ResPort80IP)
+
+	gameserver.SetPublicIP(gameIP)
+	handlers.SetResourceBaseURL("http://" + resIP + ":" + strconv.Itoa(resPort))
+
+	if err := saveResPathConfig(resPathConfigPath, startCfg); err != nil {
+		fmt.Println("警告: 无法保存 res_path.json:", err)
+	} else {
+		savedAbs, _ := filepath.Abs(resPathConfigPath)
+		fmt.Println("已将自定义 IP、端口与资源目录保存到文件:", savedAbs)
+		logger.Info(fmt.Sprintf("运行配置（res_path.json）已写入: %s", savedAbs))
+	}
 
 	logger.Info(fmt.Sprintf("项目根目录: %s", projectRoot))
 	logger.Info(fmt.Sprintf("GM 网页目录: %s", gmDir))
@@ -196,12 +255,14 @@ func main() {
 
 	// 启用 MySQL 且存在 users.json 时，将原有账号数据导入数据库（导入成功后重命名为 users.json.imported）
 	if dbConfig.UseMySQL {
-		if _, err := os.Stat(usersJSON); err == nil {
-			importedAccounts, importedGameData, err := gs.UserDB.ImportFromFile(usersJSON, filepath.Join(filepath.Dir(usersJSON), "users.json.imported"))
-			if err != nil {
-				logger.Error(fmt.Sprintf("从 users.json 导入 MySQL 失败: %v", err))
-			} else if importedAccounts > 0 || importedGameData > 0 {
-				logger.Info(fmt.Sprintf("已从 users.json 导入: 账号 %d 个，玩家数据 %d 条", importedAccounts, importedGameData))
+		if gs.UserDB != nil && gs.UserDB.UseMySQL() {
+			if _, err := os.Stat(usersJSON); err == nil {
+				importedAccounts, importedGameData, err := gs.UserDB.ImportFromFile(usersJSON, filepath.Join(filepath.Dir(usersJSON), "users.json.imported"))
+				if err != nil {
+					logger.Error(fmt.Sprintf("从 users.json 导入 MySQL 失败: %v", err))
+				} else if importedAccounts > 0 || importedGameData > 0 {
+					logger.Info(fmt.Sprintf("已从 users.json 导入: 账号 %d 个，玩家数据 %d 条", importedAccounts, importedGameData))
+				}
 			}
 		}
 		// 将 data/items.xml、data/skills.xml、data/spt.xml 导入 data_docs 表（仅当库中尚无或内容很短时），供技能/精灵/道具从数据库读取
@@ -267,10 +328,18 @@ func main() {
 	// 注册命令处理器
 	handlers.RegisterHandlers(gs)
 	
-	// 注册GM管理接口
+	// 注册GM管理接口：先綁到 API mux，再用 GMAuthWrapper 包一層簡單登入驗證
+	gmAPIMux := http.NewServeMux()
+	handlers.RegisterGMHandlers(gmAPIMux, gs)
+	protectedGMAPIMux := handlers.GMAuthWrapper(gmAPIMux)
+
+	// 提供 GM 靜態頁面與 API：同一個 HTTP 服務上，同源避免 CORS 問題
 	gmMux := http.NewServeMux()
-	handlers.RegisterGMHandlers(gmMux, gs)
-	
+
+	// GM API 統一走 /gm 前綴，交給帶驗證的 mux
+	gmMux.Handle("/gm/", protectedGMAPIMux)
+	gmMux.Handle("/gm", protectedGMAPIMux)
+
 	// 提供GM管理面板HTML文件（使用基于 exe 的路径）
 	gmMux.HandleFunc("/gm_panel.html", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, gmPanelPath)
@@ -278,28 +347,33 @@ func main() {
 	gmMux.HandleFunc("/gm_admin.html", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, gmAdminPath)
 	})
+	gmLoginPath := filepath.Join(gmDir, "gm_login.html")
+	gmMux.HandleFunc("/gm_login.html", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, gmLoginPath)
+	})
 	kysePath := filepath.Join(gmDir, "kyse.html")
 	gmMux.HandleFunc("/kyse.html", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, kysePath)
 	})
 	gmMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/kyse.html", http.StatusFound)
+		http.Redirect(w, r, "/gm_login.html", http.StatusFound)
 	})
-	
+
 	// 启动GM管理HTTP服务器
 	go func() {
 		gmServer := &http.Server{
-			Addr:    ":8080",
+			Addr:    fmt.Sprintf(":%d", gmPort),
 			Handler: gmMux,
 		}
-		logger.Info("GM管理面板启动在端口 8080")
-		logger.Info("访问 http://localhost:8080 打开管理面板")
+		logger.Info(fmt.Sprintf("GM管理面板启动在端口 %d", gmPort))
+		logger.Info(fmt.Sprintf("访问 http://%s:%d 打开管理面板（本机监听所有网卡，客户端请用配置的 GMIP/PublicIP）", gmIP, gmPort))
 		if err := gmServer.ListenAndServe(); err != nil {
 			logger.Error(fmt.Sprintf("GM管理服务器启动失败: %v", err))
 		}
 	}()
 
-	// 启动游戏服务器
+	// 使用自訂端口啟動遊戲伺服器
+	gs.Port = gamePort
 	err := gs.Start()
 	if err != nil {
 		logger.Error(fmt.Sprintf("启动游戏服务器失败: %v", err))
@@ -308,19 +382,25 @@ func main() {
 
 	// 创建并启动资源服务器（路径已按 exe 位置解析）
 	resConfig := resserver.Config{
-		ResPort:              32400,
-		ResPort80:            8088, // 原 80 需管理员权限，改为 8088 免权限
+		ResPort:              resPort,
+		ResPort80:            resPort80, // 原 80 需管理员权限，改为 8088 免权限
 		ResDir:               resDir,
 		ResProxyDir:          resProxyDir,
 		ResOfficialAddress:   "https://seer.61.com",
 		LocalServerMode:      true,
 		UseOfficialResources: false,
 		PureOfficialMode:     false,
-		LoginPort:            32401,             // 使用登录IP服务器的端口
-		LoginServerAddress:   fmt.Sprintf("%s:%d", publicIP, 32401), // 使用登录IP服务器的地址
+		LoginPort:            loginIPPort,
+		LoginServerAddress:   fmt.Sprintf("%s:%d", loginHTTPIP, loginIPPort),
 		OfficialLoginServer:  "115.238.192.7",
 		OfficialLoginPort:    9999,
 		PublicIP:             publicIP,
+		LoginHTTPIP:          startCfg.LoginHTTPIP,
+		ResHTTPHostIP:        startCfg.ResIP,
+		GameServerIP:         startCfg.GameIP,
+		LoginTCPIP:           startCfg.LoginTCPIP,
+		TCPLoginPort:         loginPort,
+		GameServerPort:       gamePort,
 	}
 
 	resServer := resserver.New(resConfig)
@@ -330,12 +410,12 @@ func main() {
 
 	// 创建并启动登录IP服务器
 	loginIPConfig := loginip.Config{
-		LoginIPPort:         32401,
+		LoginIPPort:         loginIPPort,
 		LocalServerMode:     true,
-		LoginPort:           1863,
+		LoginPort:           loginPort,
 		OfficialLoginServer: "115.238.192.7",
 		OfficialLoginPort:   9999,
-		PublicIP:            publicIP,
+		PublicIP:            loginTCPIP,
 	}
 
 	loginIPServer := loginip.New(loginIPConfig)
@@ -345,12 +425,12 @@ func main() {
 
 	// 创建并启动登录服务器
 	loginConfig := loginserver.Config{
-		LoginPort:       1863,
+		LoginPort:       loginPort,
 		ServerID:        1,
-		GameServerPort:  5000,
+		GameServerPort:  gamePort,
 		LocalServerMode: true,
 		UserDBPath:      usersJSON,
-		PublicIP:        publicIP,
+		PublicIP:        gameIP,
 	}
 
 	loginServer := loginserver.New(loginConfig)
@@ -424,9 +504,12 @@ func confirmDisclaimerInConsole() bool {
 	return line == "Y" || line == "YES"
 }
 
-// promptPublicIP 启动时提示用户输入对外暴露的服务器 IP；为空则使用默认 127.0.0.1。
-func promptPublicIP() string {
-	defaultIP := "127.0.0.1"
+// promptPublicIP 启动时提示用户输入对外暴露的服务器 IP；回车使用 savedDefault，若其为空则 127.0.0.1。
+func promptPublicIP(savedDefault string) string {
+	defaultIP := strings.TrimSpace(savedDefault)
+	if defaultIP == "" {
+		defaultIP = "127.0.0.1"
+	}
 	fmt.Println("============================================================")
 	fmt.Println("                    设置服务器对外 IP")
 	fmt.Println("============================================================")
@@ -446,9 +529,88 @@ func promptPublicIP() string {
 	return line
 }
 
-// resPathConfig 保存资源目录路径，供下次启动使用
+// resPathConfig 保存在 exe 同目录的 res_path.json：资源目录、总 IP（PublicIP）、各端口及可选的分服务 IP（未填则回退到 PublicIP）。
 type resPathConfig struct {
-	ResDir string `json:"ResDir"`
+	ResDir   string `json:"ResDir,omitempty"`
+	PublicIP string `json:"PublicIP,omitempty"`
+	// 各服务独立对外 IP，可省略；省略时使用 PublicIP
+	GameIP      string `json:"GameIP,omitempty"`
+	ResIP       string `json:"ResIP,omitempty"`
+	ResPort80IP string `json:"ResPort80IP,omitempty"`
+	LoginTCPIP  string `json:"LoginTCPIP,omitempty"`
+	LoginHTTPIP string `json:"LoginHTTPIP,omitempty"`
+	GMIP        string `json:"GMIP,omitempty"`
+
+	GamePort    int `json:"GamePort,omitempty"`
+	ResPort     int `json:"ResPort,omitempty"`
+	ResPort80   int `json:"ResPort80,omitempty"`
+	LoginPort   int `json:"LoginPort,omitempty"`
+	LoginIPPort int `json:"LoginIPPort,omitempty"`
+	GMPort      int `json:"GMPort,omitempty"`
+}
+
+func readResPathConfig(path string) (resPathConfig, error) {
+	var cfg resPathConfig
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// saveResPathConfig 将用户设置的 PublicIP、各端口、ResDir 及可选分服务 IP 写入可执行文件同目录下的 res_path.json（单文件，非目录）。
+func saveResPathConfig(path string, cfg resPathConfig) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(abs, data, 0644)
+}
+
+// portOrDefault 若 p 为合法端口则返回 p，否则返回 def（用于读取 json 中未填写的 0）
+func portOrDefault(p, def int) int {
+	if p <= 0 || p > 65535 {
+		return def
+	}
+	return p
+}
+
+// resPathConfigComplete 当 PublicIP 与有效 ResDir 均已写在 json 中时，可跳过控制台 IP/端口/资源目录交互（除非 -config-prompt）。
+func resPathConfigComplete(cfg resPathConfig) bool {
+	if strings.TrimSpace(cfg.PublicIP) == "" {
+		return false
+	}
+	rd := strings.TrimSpace(cfg.ResDir)
+	if rd == "" {
+		return false
+	}
+	abs, err := filepath.Abs(rd)
+	if err != nil {
+		return false
+	}
+	st, err := os.Stat(abs)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	return true
+}
+
+// resolveServiceIP 返回 override（若已填写），否则返回 PublicIP，再否则 127.0.0.1。
+func resolveServiceIP(cfg resPathConfig, override string) string {
+	if s := strings.TrimSpace(override); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(cfg.PublicIP); s != "" {
+		return s
+	}
+	return "127.0.0.1"
 }
 
 // downloadResourcePackage 将远程资源包压缩文件 (gameres.rar) 下载到默认资源目录的上级目录（即 gameres 所在目录）。
@@ -647,28 +809,27 @@ func extractResourcePackage(defaultResDir string) error {
 	return fmt.Errorf("自动解压失败：未能使用内置 7-Zip 运行时或系统 7z/UnRAR，请手动将 %s 解压到目录 %s", rarPath, parentDir)
 }
 
-// loadOrPromptResDir 从配置文件读取资源目录；若不存在或无效则提示用户输入并保存。
-// 首次运行时增加一个选项：直接从远程地址下载资源包压缩包（gameres.rar）到默认目录并自动解压，然后使用解压后的资源目录。
-func loadOrPromptResDir(configPath, defaultResDir string) (resDir string) {
+// resolveResDir 若 savedResDir 有效则直接使用；否则交互式选择资源目录（不写文件，由 main 统一保存 res_path.json）。
+// 首次运行时增加一个选项：直接从远程地址下载资源包压缩包（gameres.rar）到默认目录并自动解压。
+func resolveResDir(defaultResDir, savedResDir string) (resDir string) {
 	resDir = defaultResDir
 
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		var cfg resPathConfig
-		if json.Unmarshal(data, &cfg) == nil && strings.TrimSpace(cfg.ResDir) != "" {
-			abs, _ := filepath.Abs(cfg.ResDir)
-			if info, err := os.Stat(abs); err == nil && info.IsDir() {
-				return abs
-			}
+	if strings.TrimSpace(savedResDir) != "" {
+		abs, _ := filepath.Abs(strings.TrimSpace(savedResDir))
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			fmt.Println("已从 res_path.json 使用资源目录:", abs)
+			return abs
 		}
 	}
+
+	defAbs, _ := filepath.Abs(defaultResDir)
 
 	// 首次运行或配置无效：提供选项（1 手动输入本地路径，2 自动下载并解压资源包压缩包）
 	fmt.Println("============================================================")
 	fmt.Println("                    首次运行 - 设置资源目录")
 	fmt.Println("============================================================")
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("默认资源目录（推荐解压到此处）: %s\n", defaultResDir)
+	fmt.Printf("默认资源目录（推荐解压到此处）: %s\n", defAbs)
 	fmt.Println("请选择资源包来源：")
 	fmt.Println("  1) 手动输入本地资源目录路径（指向 gameres/root）")
 	fmt.Println("  2) 直接从远程地址下载资源包压缩包 (gameres.rar) 到默认目录并自动解压，然后使用解压后的资源目录")
@@ -682,37 +843,25 @@ func loadOrPromptResDir(configPath, defaultResDir string) (resDir string) {
 	if choice == "2" {
 		fmt.Println("将从远程服务器下载资源包压缩包（gameres.rar）。")
 		fmt.Println("请确保当前网络可以访问该地址，开始下载并解压...")
-		if err := downloadResourcePackage(defaultResDir); err != nil {
+		if err := downloadResourcePackage(defAbs); err != nil {
 			fmt.Println("下载资源包失败:", err)
 			fmt.Println("将转为手动选择本地资源目录。")
 			goto manualInput
 		}
-		if err := extractResourcePackage(defaultResDir); err != nil {
+		if err := extractResourcePackage(defAbs); err != nil {
 			fmt.Println("解压资源包失败:", err)
 			fmt.Println("将转为手动选择本地资源目录。")
 			goto manualInput
 		}
 
-		// 确认默认资源目录是否存在
-		if info, err := os.Stat(defaultResDir); err != nil || !info.IsDir() {
-			fmt.Println("已下载并解压资源包，但未找到预期的资源目录：", defaultResDir)
+		if info, err := os.Stat(defAbs); err != nil || !info.IsDir() {
+			fmt.Println("已下载并解压资源包，但未找到预期的资源目录：", defAbs)
 			fmt.Println("将转为手动选择本地资源目录。")
 			goto manualInput
 		}
 
-		// 保存配置并直接使用解压后的默认资源目录
-		cfg := resPathConfig{ResDir: defaultResDir}
-		data, err = json.MarshalIndent(cfg, "", "  ")
-		if err != nil {
-			fmt.Println("保存配置失败:", err)
-			os.Exit(1)
-		}
-		if err := os.WriteFile(configPath, data, 0644); err != nil {
-			fmt.Println("写入配置文件失败:", err)
-			os.Exit(1)
-		}
-		fmt.Println("资源包已下载并解压，资源目录已配置为:", defaultResDir)
-		return defaultResDir
+		fmt.Println("资源包已下载并解压，资源目录已配置为:", defAbs)
+		return defAbs
 	}
 
 	// 选项 1：手动输入本地资源目录路径
@@ -726,7 +875,7 @@ manualInput:
 	line = strings.TrimSpace(line)
 	if line == "" {
 		fmt.Println("未输入路径，将使用默认路径。")
-		return defaultResDir
+		return defAbs
 	}
 	abs, err := filepath.Abs(line)
 	if err != nil {
@@ -743,16 +892,30 @@ manualInput:
 		os.Exit(1)
 	}
 
-	cfg := resPathConfig{ResDir: abs}
-	data, err = json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		fmt.Println("保存配置失败:", err)
-		os.Exit(1)
-	}
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		fmt.Println("写入配置文件失败:", err)
-		os.Exit(1)
-	}
-	fmt.Println("已保存资源目录配置到:", configPath)
+	fmt.Println("将使用资源目录:", abs)
 	return abs
+}
+
+// promptPort 在启动时提示输入端口；留空则使用默认值
+func promptPort(label string, defaultPort int) int {
+	fmt.Println("============================================================")
+	fmt.Printf("请输入 %s 端口（回车默认 %d）：", label, defaultPort)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("读取输入失败，将使用默认端口。")
+		return defaultPort
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		fmt.Println("未输入，使用默认端口：", defaultPort)
+		return defaultPort
+	}
+	p, err := strconv.Atoi(line)
+	if err != nil || p <= 0 || p > 65535 {
+		fmt.Println("端口不合法，将使用默认端口。")
+		return defaultPort
+	}
+	fmt.Printf("已设置 %s 端口为：%d\n", label, p)
+	return p
 }

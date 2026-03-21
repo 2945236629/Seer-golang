@@ -30,8 +30,8 @@ import (
 
 // BOSS 防护罩血量缓存：userID -> "mapID_region" -> 当前血量（0 表示满血/未初始化）
 var (
-	bossHpCache   = make(map[int64]map[string]int)
-	bossHpCacheMu sync.RWMutex
+	bossHpCache       = make(map[int64]map[string]int)
+	bossHpCacheMu     sync.RWMutex
 	storyValueCache   = make(map[int64]map[uint32]uint32)
 	storyValueCacheMu sync.RWMutex
 )
@@ -450,13 +450,13 @@ func registerCoreHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(70001, handleGetExchangeInfo)        // 荣誉/交换
 	gs.RegisterCommandHandler(70000, handlePetGeneRecast)          // 精灵基因重铸
 	gs.RegisterCommandHandler(70002, handleExchangeItem)           // 兑换道具
-	gs.RegisterCommandHandler(70003, handleGetHonorValue)            // 荣誉值
-	gs.RegisterCommandHandler(70004, handleExchangeGoldNieoBean)     // 金豆兑换
-	gs.RegisterCommandHandler(70005, handleGetAchieveTitle)          // 成就称号（服务端可推送）
-	gs.RegisterCommandHandler(80003, handleActiveAchieve)            // 激活成就
-	gs.RegisterCommandHandler(80004, handleAchieveList80004)         // 成就列表（80004）
-	gs.RegisterCommandHandler(80005, handleAchieveCurrent)           // 当前成就
-	gs.RegisterCommandHandler(80006, handleAchieveInfo)              // 成就详情
+	gs.RegisterCommandHandler(70003, handleGetHonorValue)          // 荣誉值
+	gs.RegisterCommandHandler(70004, handleExchangeGoldNieoBean)   // 金豆兑换
+	gs.RegisterCommandHandler(70005, handleGetAchieveTitle)        // 成就称号（服务端可推送）
+	gs.RegisterCommandHandler(80003, handleActiveAchieve)          // 激活成就
+	gs.RegisterCommandHandler(80004, handleAchieveList80004)       // 成就列表（80004）
+	gs.RegisterCommandHandler(80005, handleAchieveCurrent)         // 当前成就
+	gs.RegisterCommandHandler(80006, handleAchieveInfo)            // 成就详情
 	gs.RegisterCommandHandler(80007, handleGetCurrentGoldNieoBean) // 获取优惠兑换所需赛尔豆
 	gs.RegisterCommandHandler(1106, handleGoldOnlineCheckRemain)
 	gs.RegisterCommandHandler(1104, handleGoldBuyProduct)   // 金豆购买商品
@@ -483,6 +483,10 @@ func registerCoreHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2918, handleTeamGetMemberList)
 	gs.RegisterCommandHandler(2928, handleTeamGetLogoInfo)
 	gs.RegisterCommandHandler(2929, handleTeamChat)
+	gs.RegisterCommandHandler(2951, handleHeadGetUsedInfo) // 总部已使用家具
+	gs.RegisterCommandHandler(2952, handleHeadGetAllInfo)  // 总部仓库家具
+	gs.RegisterCommandHandler(2953, handleHeadBuy)         // 总部购买家具
+	gs.RegisterCommandHandler(2954, handleHeadSetInfo)     // 总部设置家具
 	gs.RegisterCommandHandler(2962, handleArmUpWork)
 	gs.RegisterCommandHandler(2963, handleArmUpWorkLog)
 	gs.RegisterCommandHandler(4001, handleTeamPKSign)
@@ -510,12 +514,12 @@ func registerCoreHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(4101, handleTeamPKTeamCharts)
 	gs.RegisterCommandHandler(4102, handleTeamPKMemberCharts)
 	gs.RegisterCommandHandler(2481, handleTeamPKPetFight)
-	gs.RegisterCommandHandler(5001, handleJoinGame)        // 加入小游戏
-	gs.RegisterCommandHandler(5002, handleGameOver)        // 小游戏结束
-	gs.RegisterCommandHandler(5003, handleLeaveGame)       // 离开小游戏
-	gs.RegisterCommandHandler(5052, handleFbGameOver)      // 副本游戏结束
-	gs.RegisterCommandHandler(6001, handleWorkConnection)  // 工作连接
-	gs.RegisterCommandHandler(6003, handleAllConnection)   // 全部连接
+	gs.RegisterCommandHandler(5001, handleJoinGame)       // 加入小游戏
+	gs.RegisterCommandHandler(5002, handleGameOver)       // 小游戏结束
+	gs.RegisterCommandHandler(5003, handleLeaveGame)      // 离开小游戏
+	gs.RegisterCommandHandler(5052, handleFbGameOver)     // 副本游戏结束
+	gs.RegisterCommandHandler(6001, handleWorkConnection) // 工作连接
+	gs.RegisterCommandHandler(6003, handleAllConnection)  // 全部连接
 	// 系统/支付 完整协议
 	gs.RegisterCommandHandler(1005, handleGetImageAddress)
 	gs.RegisterCommandHandler(1102, handleMoneyBuyProduct)
@@ -563,27 +567,27 @@ func registerGameHandlers(gs *gameserver.GameServer) {
 	gs.RegisterCommandHandler(2003, handleListMapPlayer)
 	gs.RegisterCommandHandler(1004, handleMapHot) // 地图热点（宇宙地图热点数据）
 	gs.RegisterCommandHandler(2004, handleMapOgreList)
-	gs.RegisterCommandHandler(2401, handleInviteToFight)     // 邀请玩家对战（转发 2501 给被邀请方）
-	gs.RegisterCommandHandler(2402, handleInviteFightCancel) // 取消邀请/匹配（精灵王/巅峰/大师杯等）
-	gs.RegisterCommandHandler(2403, handleHandleFightInvite) // 接受/拒绝对战邀请（转发 2502 给邀请方）
-	gs.RegisterCommandHandler(2408, handleFightNpcMonster)   // 地图野怪战斗
-	gs.RegisterCommandHandler(2412, handleAttackBoss)        // 攻击 SPT BOSS（破除防护罩）
-	gs.RegisterCommandHandler(2441, handleFightLoadPercent)  // 战斗加载进度
-	gs.RegisterCommandHandler(2051, handleGetSimUserInfo)    // 获取简单用户信息
-	gs.RegisterCommandHandler(2052, handleGetMoreUserInfo)   // 获取详细用户信息
-	gs.RegisterCommandHandler(2053, handleRequestCount)      // 请求计数（邀请人数）
-	gs.RegisterCommandHandler(2054, handleGpGhaziMaxLevel)   // GP/擂台最大层数
+	gs.RegisterCommandHandler(2401, handleInviteToFight)      // 邀请玩家对战（转发 2501 给被邀请方）
+	gs.RegisterCommandHandler(2402, handleInviteFightCancel)  // 取消邀请/匹配（精灵王/巅峰/大师杯等）
+	gs.RegisterCommandHandler(2403, handleHandleFightInvite)  // 接受/拒绝对战邀请（转发 2502 给邀请方）
+	gs.RegisterCommandHandler(2408, handleFightNpcMonster)    // 地图野怪战斗
+	gs.RegisterCommandHandler(2412, handleAttackBoss)         // 攻击 SPT BOSS（破除防护罩）
+	gs.RegisterCommandHandler(2441, handleFightLoadPercent)   // 战斗加载进度
+	gs.RegisterCommandHandler(2051, handleGetSimUserInfo)     // 获取简单用户信息
+	gs.RegisterCommandHandler(2052, handleGetMoreUserInfo)    // 获取详细用户信息
+	gs.RegisterCommandHandler(2053, handleRequestCount)       // 请求计数（邀请人数）
+	gs.RegisterCommandHandler(2054, handleGpGhaziMaxLevel)    // GP/擂台最大层数
 	gs.RegisterCommandHandler(2055, handleUserPartyImageName) // 用户头像/涂鸦资源名
-	gs.RegisterCommandHandler(2101, handlePeopleWalk)        // 人物移动
-	gs.RegisterCommandHandler(2102, handleChat)              // 聊天
-	gs.RegisterCommandHandler(2104, handleAimat)             // 射击/瞄准（AIMAT）
-	gs.RegisterCommandHandler(2107, handleTransformUser)     // 射击命中后变身（TRANSFORM_USER），广播 2108 给同图
-	gs.RegisterCommandHandler(2105, handleHitStone)          // 敲石头奖励
-	gs.RegisterCommandHandler(2106, handlePrizeOfAtresia)    // 阿瑞斯空间奖励
-	gs.RegisterCommandHandler(2109, handleAttackBailuen)     // 攻击白伦
-	gs.RegisterCommandHandler(2110, handleGetTimePoke)       // 获取时光胶囊
-	gs.RegisterCommandHandler(2113, handleRemoveCoins)       // 移除赛尔豆
-	gs.RegisterCommandHandler(2393, handleLeiyiTrainStatus)  // 雷伊训练状态
+	gs.RegisterCommandHandler(2101, handlePeopleWalk)         // 人物移动
+	gs.RegisterCommandHandler(2102, handleChat)               // 聊天
+	gs.RegisterCommandHandler(2104, handleAimat)              // 射击/瞄准（AIMAT）
+	gs.RegisterCommandHandler(2107, handleTransformUser)      // 射击命中后变身（TRANSFORM_USER），广播 2108 给同图
+	gs.RegisterCommandHandler(2105, handleHitStone)           // 敲石头奖励
+	gs.RegisterCommandHandler(2106, handlePrizeOfAtresia)     // 阿瑞斯空间奖励
+	gs.RegisterCommandHandler(2109, handleAttackBailuen)      // 攻击白伦
+	gs.RegisterCommandHandler(2110, handleGetTimePoke)        // 获取时光胶囊
+	gs.RegisterCommandHandler(2113, handleRemoveCoins)        // 移除赛尔豆
+	gs.RegisterCommandHandler(2393, handleLeiyiTrainStatus)   // 雷伊训练状态
 	// 地图/玩家 完整协议
 	gs.RegisterCommandHandler(2061, handleChangeNickName)
 	gs.RegisterCommandHandler(2062, handleChangeDoodle) // 涂鸦/头像
@@ -601,7 +605,7 @@ func registerGameHandlers(gs *gameserver.GameServer) {
 	// 任务 / 新手奖励相关（2201/2202/2203）、每日任务（2231/2232/2233）、魂珠列表（2354）
 	gs.RegisterCommandHandler(2201, handleAcceptTask)
 	gs.RegisterCommandHandler(2202, handleCompleteTask)
-	gs.RegisterCommandHandler(2203, handleGetTaskBuf)        // 获取任务进度（GET_TASK_BUF），地图装置等依赖此接口
+	gs.RegisterCommandHandler(2203, handleGetTaskBuf) // 获取任务进度（GET_TASK_BUF），地图装置等依赖此接口
 	gs.RegisterCommandHandler(2192, handleTaskActivityValue)
 	gs.RegisterCommandHandler(2196, handleTaskActivityValue)
 	gs.RegisterCommandHandler(2289, handleTaskActivityValue)
@@ -1498,9 +1502,9 @@ func handleGetImageAddress(ctx *gameserver.HandlerContext) {
 
 // 1020 事件编号：根据解包脚本约定的含义（便于日志与 GM 查询）
 const (
-	eventIDMap698Enter         = 47  // 进入 698 名人练习室地图
-	eventIDMap698ClickVideo    = 48  // 698 点击学习视频按钮
-	eventIDMap698ClickExchange = 49  // 698 点击达人勋章兑换机
+	eventIDMap698Enter         = 47 // 进入 698 名人练习室地图
+	eventIDMap698ClickVideo    = 48 // 698 点击学习视频按钮
+	eventIDMap698ClickExchange = 49 // 698 点击达人勋章兑换机
 
 	eventIDMap10012StartGetNono = 127 // 10012 开始领取 Nono
 	eventIDMap10012NonoAnimEnd  = 128 // 10012 Nono 动画播放结束
@@ -2129,6 +2133,8 @@ func handleAddTaskBuf(ctx *gameserver.HandlerContext) {
 
 // handleGetDailyTaskBuf CMD 2234 获取每日任务缓存，响应: 8 字节 (0,0)，对齐 Lua task_handlers
 func handleGetDailyTaskBuf(ctx *gameserver.HandlerContext) {
+	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	body := make([]byte, 8)
 	ctx.GameServer.SendResponse(ctx.ClientData, 2234, ctx.UserID, ctx.SeqID, body)
 }
@@ -2327,12 +2333,8 @@ func handlePrizeOfAtresia(ctx *gameserver.HandlerContext) {
 					Name:      "",
 					Trait:     0,
 				}
-				// 放入背包或仓库
-				if len(user.Pets) < 6 {
-					user.Pets = append(user.Pets, newPet)
-				} else {
-					user.StoragePets = append(user.StoragePets, newPet)
-				}
+				// 放入背包或仓库（背包满6只自动进仓库）
+				addGrantedPetToBagOrStorage(user, newPet)
 			}
 		}
 	}
@@ -3065,7 +3067,8 @@ func handleRemoveCoins(ctx *gameserver.HandlerContext) {
 }
 
 // handleSetTitle CMD 3404 SETTITLE 设置当前称号
-// 请求: titleId(4)。响应: 4 字节 0 表示成功。对齐 seer_cmdlist ACHIEVETITLELIST(3403)/SETTITLE(3404)
+// 请求: titleId(4)。
+// 响应与客户端 SetTitleCmdListener 一致: userID(4) + titleID(4)；用于 UserManager.dispatchAction(uid, SET_TITLE, titleId) 刷新场景内称号显示
 func handleSetTitle(ctx *gameserver.HandlerContext) {
 	titleID := 0
 	if len(ctx.Body) >= 4 {
@@ -3076,7 +3079,9 @@ func handleSetTitle(ctx *gameserver.HandlerContext) {
 	if ctx.GameServer.UserDB != nil {
 		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
 	}
-	body := make([]byte, 4)
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(titleID))
 	ctx.GameServer.SendResponse(ctx.ClientData, 3404, ctx.UserID, ctx.SeqID, body)
 }
 
@@ -3122,7 +3127,7 @@ func handleAchieveInfo3402(ctx *gameserver.HandlerContext) {
 }
 
 // handleAchieveTitleList CMD 3403 ACHIEVETITLELIST 称号列表
-// 最小完整协议：curTitle(4) + count(4) + [titleId(4)]*count
+// 与客户端 AchieveTitleInfo.as 一致：count(4) + [titleId(4)]*count（无 curTitle 前缀；当前佩戴称号由登录包 actorInfo.curTitle 提供）
 func handleAchieveTitleList(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 	titleSet := map[int]struct{}{}
@@ -3139,10 +3144,9 @@ func handleAchieveTitleList(ctx *gameserver.HandlerContext) {
 		titles = append(titles, titleID)
 	}
 	sort.Ints(titles)
-	body := make([]byte, 8+len(titles)*4)
-	binary.BigEndian.PutUint32(body[0:4], uint32(user.CurTitle))
-	binary.BigEndian.PutUint32(body[4:8], uint32(len(titles)))
-	off := 8
+	body := make([]byte, 4+len(titles)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(titles)))
+	off := 4
 	for _, titleID := range titles {
 		binary.BigEndian.PutUint32(body[off:off+4], uint32(titleID))
 		off += 4
@@ -3256,9 +3260,13 @@ func handleMailGetUnread(ctx *gameserver.HandlerContext) {
 // handleRoomLogin CMD 10001 房间登录
 // 最小完整协议：userID(4) + roomID(4)
 func handleRoomLogin(ctx *gameserver.HandlerContext) {
+	roomID := uint32(ctx.UserID)
+	if len(ctx.Body) >= 4 {
+		roomID = binary.BigEndian.Uint32(ctx.Body[0:4])
+	}
 	body := make([]byte, 8)
 	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
-	binary.BigEndian.PutUint32(body[4:8], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], roomID)
 	ctx.GameServer.SendResponse(ctx.ClientData, 10001, ctx.UserID, ctx.SeqID, body)
 }
 
@@ -3274,8 +3282,11 @@ func handleGetRoomAddress(ctx *gameserver.HandlerContext) {
 	binary.BigEndian.PutUint32(body[0:4], roomID)
 	binary.BigEndian.PutUint32(body[4:8], uint32(len(ip)))
 	copy(body[8:8+len(ip)], ip)
-	binary.BigEndian.PutUint32(body[8+len(ip):12+len(ip)], 0)
+	// 关键修复：返回真实游戏服端口，客户端切房型后重新进基地时会据此建立房间连接。
+	// 之前返回 0 会导致部分客户端卡在“进入基地/房间中”。
+	binary.BigEndian.PutUint32(body[8+len(ip):12+len(ip)], uint32(ctx.GameServer.Port))
 	ctx.GameServer.SendResponse(ctx.ClientData, 10002, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[10002] 房间地址: user=%d room=%d addr=%s:%d", ctx.UserID, roomID, string(ip), ctx.GameServer.Port))
 }
 
 // handleLeaveRoom CMD 10003 离开房间
@@ -3303,11 +3314,28 @@ func handleBetrayFitment(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 	removed := uint32(0)
 	if itemID > 0 && len(user.AllFitments) > 0 {
+		usedCount := 0
+		for _, f := range user.Fitments {
+			if f.ID == int(itemID) {
+				usedCount++
+			}
+		}
 		newList := make([]userdb.Fitment, 0, len(user.AllFitments))
+		totalCount := 0
+		for _, fitment := range user.AllFitments {
+			if fitment.ID == int(itemID) {
+				totalCount++
+			}
+		}
+		maxRemovable := totalCount - usedCount
+		if maxRemovable < 0 {
+			maxRemovable = 0
+		}
 		need := int(count)
 		for _, fitment := range user.AllFitments {
-			if fitment.ID == int(itemID) && need > 0 {
+			if fitment.ID == int(itemID) && need > 0 && maxRemovable > 0 {
 				need--
+				maxRemovable--
 				removed++
 				continue
 			}
@@ -3327,62 +3355,177 @@ func handleBetrayFitment(ctx *gameserver.HandlerContext) {
 }
 
 // handleFitmentAll CMD 10007 全部家具
-// 最小完整协议：count(4) + [id(4)]*count
+// 完整协议：count(4) + [id(4)+usedCount(4)+allCount(4)]*count
+// 兼容旧客户端：前端已支持从完整格式解析
 func handleFitmentAll(ctx *gameserver.HandlerContext) {
 	targetUserID := ctx.UserID
 	if len(ctx.Body) >= 4 {
 		targetUserID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
 	}
 	user := ctx.GameServer.GetOrCreateUser(targetUserID)
-	body := make([]byte, 4+len(user.AllFitments)*4)
-	binary.BigEndian.PutUint32(body[0:4], uint32(len(user.AllFitments)))
+	allByID := map[int]int{}
+	for _, f := range user.AllFitments {
+		if f.ID < 500001 {
+			continue
+		}
+		allByID[f.ID]++
+	}
+	usedByID := map[int]int{}
+	for _, f := range user.Fitments {
+		if f.ID < 500001 {
+			continue
+		}
+		usedByID[f.ID]++
+	}
+	ids := make([]int, 0, len(allByID))
+	for id := range allByID {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	body := make([]byte, 4+len(ids)*12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(len(ids)))
 	off := 4
-	for _, fitment := range user.AllFitments {
-		binary.BigEndian.PutUint32(body[off:off+4], uint32(fitment.ID))
-		off += 4
+	for _, id := range ids {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(id))
+		binary.BigEndian.PutUint32(body[off+4:off+8], uint32(usedByID[id]))
+		binary.BigEndian.PutUint32(body[off+8:off+12], uint32(allByID[id]))
+		off += 12
 	}
 	ctx.GameServer.SendResponse(ctx.ClientData, 10007, ctx.UserID, ctx.SeqID, body)
 }
 
 // handleSetFitment CMD 10008 设置家具
-// 请求: itemID(4) + x(4) + y(4) + dir(4) + status(4)
+// 请求兼容两种格式：
+// 1) 单条：itemID(4) + x(4) + y(4) + dir(4) + status(4)
+// 2) 全量：roomID(4) + count(4) + [itemID + x + y + dir + status]*count
 // 最小完整协议：ret(4) + itemID(4)
 func handleSetFitment(ctx *gameserver.HandlerContext) {
-	itemID := 0
-	fitment := userdb.Fitment{}
-	if len(ctx.Body) >= 4 {
-		itemID = int(binary.BigEndian.Uint32(ctx.Body[0:4]))
-		fitment.ID = itemID
-	}
-	if len(ctx.Body) >= 8 {
-		fitment.X = int(binary.BigEndian.Uint32(ctx.Body[4:8]))
-	}
-	if len(ctx.Body) >= 12 {
-		fitment.Y = int(binary.BigEndian.Uint32(ctx.Body[8:12]))
-	}
-	if len(ctx.Body) >= 16 {
-		fitment.Dir = int(binary.BigEndian.Uint32(ctx.Body[12:16]))
-	}
-	if len(ctx.Body) >= 20 {
-		fitment.Status = int(binary.BigEndian.Uint32(ctx.Body[16:20]))
-	}
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
-	if itemID > 0 {
-		replaced := false
-		for index, current := range user.Fitments {
-			if current.ID == itemID {
-				user.Fitments[index] = fitment
-				replaced = true
-				break
-			}
+	if user == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 10008, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+
+	parseOne := func(body []byte, off int) (userdb.Fitment, int, bool) {
+		if len(body) < off+20 {
+			return userdb.Fitment{}, off, false
 		}
-		if !replaced {
-			user.Fitments = append(user.Fitments, fitment)
+		f := userdb.Fitment{
+			ID:     int(binary.BigEndian.Uint32(body[off : off+4])),
+			X:      int(binary.BigEndian.Uint32(body[off+4 : off+8])),
+			Y:      int(binary.BigEndian.Uint32(body[off+8 : off+12])),
+			Dir:    int(binary.BigEndian.Uint32(body[off+12 : off+16])),
+			Status: int(binary.BigEndian.Uint32(body[off+16 : off+20])),
+		}
+		return f, off + 20, true
+	}
+	normalize := func(f userdb.Fitment) (userdb.Fitment, bool) {
+		// 家具ID区间：500001+
+		if f.ID < 500001 {
+			return userdb.Fitment{}, false
+		}
+		if f.X < 0 {
+			f.X = 0
+		}
+		if f.Y < 0 {
+			f.Y = 0
+		}
+		if f.Dir < 0 {
+			f.Dir = 0
+		}
+		if f.Status < 0 {
+			f.Status = 0
+		}
+		return f, true
+	}
+
+	itemID := 0
+	updatedAll := false
+
+	// 优先按“全量保存”解析：roomID + count + list
+	if len(ctx.Body) >= 28 {
+		count := int(binary.BigEndian.Uint32(ctx.Body[4:8]))
+		expect := 8 + count*20
+		if count > 0 && len(ctx.Body) >= expect {
+			newList := make([]userdb.Fitment, 0, count)
+			off := 8
+			for i := 0; i < count; i++ {
+				f, next, ok := parseOne(ctx.Body, off)
+				if !ok {
+					break
+				}
+				if nf, valid := normalize(f); valid {
+					newList = append(newList, nf)
+					if itemID == 0 {
+						itemID = nf.ID
+					}
+				}
+				off = next
+			}
+			user.Fitments = newList
+			updatedAll = true
+		}
+	}
+
+	// 兼容单条保存（或全量解析失败时回退）
+	if !updatedAll && len(ctx.Body) >= 20 {
+		tryOffsets := []int{0}
+		// 兼容异常打包：前4字节可能是 roomID
+		if len(ctx.Body) >= 24 {
+			tryOffsets = []int{4, 0}
+		}
+		for _, off := range tryOffsets {
+			f, _, ok := parseOne(ctx.Body, off)
+			if !ok {
+				continue
+			}
+			nf, valid := normalize(f)
+			if !valid {
+				continue
+			}
+			itemID = nf.ID
+			replaced := false
+			for index, current := range user.Fitments {
+				if current.ID == itemID {
+					user.Fitments[index] = nf
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				user.Fitments = append(user.Fitments, nf)
+			}
+			break
+		}
+	}
+
+	if updatedAll || itemID > 0 {
+		// 补齐仓库计数，保持“已摆放数量 <= 仓库总量”
+		allCount := map[int]int{}
+		for _, af := range user.AllFitments {
+			if af.ID < 500001 {
+				continue
+			}
+			allCount[af.ID]++
+		}
+		usedCount := map[int]int{}
+		for _, uf := range user.Fitments {
+			if uf.ID < 500001 {
+				continue
+			}
+			usedCount[uf.ID]++
+		}
+		for id, used := range usedCount {
+			for allCount[id] < used {
+				user.AllFitments = append(user.AllFitments, userdb.Fitment{ID: id})
+				allCount[id]++
+			}
 		}
 		if ctx.GameServer.UserDB != nil {
 			ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
 		}
 	}
+
 	body := make([]byte, 8)
 	binary.BigEndian.PutUint32(body[4:8], uint32(itemID))
 	ctx.GameServer.SendResponse(ctx.ClientData, 10008, ctx.UserID, ctx.SeqID, body)
@@ -3950,16 +4093,16 @@ func simpleTeamPKBody(ctx *gameserver.HandlerContext, cmd int32, extra uint32) {
 	ctx.GameServer.SendResponse(ctx.ClientData, cmd, ctx.UserID, ctx.SeqID, body)
 }
 
-func handleTeamPKMatch(ctx *gameserver.HandlerContext)      { simpleTeamPKBody(ctx, 4013, 0) }
-func handleTeamPKResult(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4014, 0) }
+func handleTeamPKMatch(ctx *gameserver.HandlerContext)       { simpleTeamPKBody(ctx, 4013, 0) }
+func handleTeamPKResult(ctx *gameserver.HandlerContext)      { simpleTeamPKBody(ctx, 4014, 0) }
 func handleTeamPKMemberState(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4017, 0) }
-func handleTeamPKBattleInfo(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4018, 0) }
+func handleTeamPKBattleInfo(ctx *gameserver.HandlerContext)  { simpleTeamPKBody(ctx, 4018, 0) }
 func handleTeamPKBattleStart(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4019, 1) }
-func handleTeamPKBattleEnd(ctx *gameserver.HandlerContext)  { simpleTeamPKBody(ctx, 4020, 1) }
-func handleTeamPKReport(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4022, 0) }
-func handleTeamPKHistory(ctx *gameserver.HandlerContext)    { simpleTeamPKBody(ctx, 4023, 0) }
-func handleTeamPKSeason(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4024, 0) }
-func handleTeamPKRewardList(ctx *gameserver.HandlerContext) { simpleTeamPKBody(ctx, 4025, 0) }
+func handleTeamPKBattleEnd(ctx *gameserver.HandlerContext)   { simpleTeamPKBody(ctx, 4020, 1) }
+func handleTeamPKReport(ctx *gameserver.HandlerContext)      { simpleTeamPKBody(ctx, 4022, 0) }
+func handleTeamPKHistory(ctx *gameserver.HandlerContext)     { simpleTeamPKBody(ctx, 4023, 0) }
+func handleTeamPKSeason(ctx *gameserver.HandlerContext)      { simpleTeamPKBody(ctx, 4024, 0) }
+func handleTeamPKRewardList(ctx *gameserver.HandlerContext)  { simpleTeamPKBody(ctx, 4025, 0) }
 
 // handleGetRelationList CMD 2150 获取好友/黑名单列表
 // 对齐 Lua: friend_handlers.handleGetRelationList
@@ -4825,6 +4968,55 @@ func handleActiveAchieve(ctx *gameserver.HandlerContext) {
 	})
 }
 
+// grantAchievementTitleIfMissing 将称号 ID 写入 Achievements.List 并推送 70005、80004（与 handleActiveAchieve 一致）
+func grantAchievementTitleIfMissing(ctx *gameserver.HandlerContext, user *userdb.GameData, titleID int) {
+	if titleID <= 0 {
+		return
+	}
+	if user.Achievements.List == nil {
+		user.Achievements.List = []int{}
+	}
+	for _, id := range user.Achievements.List {
+		if id == titleID {
+			return
+		}
+	}
+	user.Achievements.List = append(user.Achievements.List, titleID)
+	user.Achievements.Total = len(user.Achievements.List)
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+	tBody := make([]byte, 4)
+	binary.BigEndian.PutUint32(tBody[0:4], uint32(titleID))
+	ctx.GameServer.SendResponse(ctx.ClientData, 70005, ctx.UserID, 0, tBody)
+	handleAchieveList80004(&gameserver.HandlerContext{
+		GameServer: ctx.GameServer,
+		ClientData: ctx.ClientData,
+		UserID:     ctx.UserID,
+		SeqID:      0,
+		Body:       nil,
+		CmdID:      80004,
+	})
+}
+
+// maybeGrantSPTBossTitleOnFirstDefeat 首次击败 SPT BOSS（挑战上下文）后按 GM/内置表授予称号
+func maybeGrantSPTBossTitleOnFirstDefeat(ctx *gameserver.HandlerContext, user *userdb.GameData, bossPetID int) {
+	entry, ok := sptboss.GetByPetID(bossPetID)
+	if !ok {
+		return
+	}
+	for _, titleID := range sptboss.ResolveRewardTitleIDs(entry, bossPetID) {
+		grantAchievementTitleIfMissing(ctx, user, titleID)
+	}
+}
+
+// maybeGrantDarkPortalTitleIfConfigured 暗黑武斗场首次击败后按 GM 配置的 rewardTitleId 授予称号
+func maybeGrantDarkPortalTitleIfConfigured(ctx *gameserver.HandlerContext, user *userdb.GameData, bossPetID int) {
+	if tid := GetDarkPortalBossTitleID(uint32(bossPetID)); tid > 0 {
+		grantAchievementTitleIfMissing(ctx, user, tid)
+	}
+}
+
 // handleAchieveList80004 CMD 80004 成就列表（AchieveListInfo）
 // 响应：count(4) + [achieveID(4)]*count
 func handleAchieveList80004(ctx *gameserver.HandlerContext) {
@@ -4971,7 +5163,7 @@ func handlePetGeneRecast(ctx *gameserver.HandlerContext) {
 		Exp:       0,
 		Name:      "",
 	}
-	user.Pets = append(user.Pets, newPet)
+	addGrantedPetToBagOrStorage(user, newPet)
 
 	if ctx.GameServer.UserDB != nil {
 		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
@@ -5252,6 +5444,7 @@ func handleAcceptTask(ctx *gameserver.HandlerContext) {
 	}
 
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	if user.Tasks == nil {
 		user.Tasks = make(map[string]userdb.Task)
 	}
@@ -5277,6 +5470,7 @@ func handleGetTaskBuf(ctx *gameserver.HandlerContext) {
 		taskID = binary.BigEndian.Uint32(ctx.Body[0:4])
 	}
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	flag := uint32(0)
 	bufBytes := make([]byte, 20)
 	if user.Tasks != nil {
@@ -5305,6 +5499,7 @@ func handleAcceptDailyTask(ctx *gameserver.HandlerContext) {
 		taskID = binary.BigEndian.Uint32(ctx.Body[0:4])
 	}
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	if user.Tasks == nil {
 		user.Tasks = make(map[string]userdb.Task)
 	}
@@ -5328,6 +5523,7 @@ func handleDeleteDailyTask(ctx *gameserver.HandlerContext) {
 		taskID = binary.BigEndian.Uint32(ctx.Body[0:4])
 	}
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	if user.Tasks != nil {
 		key := strconv.FormatUint(uint64(taskID), 10)
 		delete(user.Tasks, key)
@@ -5351,6 +5547,7 @@ func handleCompleteDailyTask(ctx *gameserver.HandlerContext) {
 		param = binary.BigEndian.Uint32(ctx.Body[4:8])
 	}
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	if user.Tasks == nil {
 		user.Tasks = make(map[string]userdb.Task)
 	}
@@ -5377,6 +5574,7 @@ func handleCompleteTask(ctx *gameserver.HandlerContext) {
 	}
 
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	persistDailyCampTaskRefreshIfNeeded(ctx, user)
 	if user.Tasks == nil {
 		user.Tasks = make(map[string]userdb.Task)
 	}
@@ -5457,7 +5655,7 @@ func buildTaskCompleteResponse(taskID, param uint32, user *userdb.GameData) []by
 				Exp:       0,
 				Name:      "",
 			}
-			user.Pets = append(user.Pets, newPet)
+			addGrantedPetToBagOrStorage(user, newPet)
 			logger.Info(fmt.Sprintf("[2202] 新手选宠: PetID=%d DV=%d Nature=%d", petID, randomDV, randomNature))
 		}
 	}
@@ -6094,10 +6292,10 @@ func handleNonoMolecularTransform(ctx *gameserver.HandlerContext) {
 		if user.PetHatch.ExpireTime > time.Now().Unix() {
 			remainingSec = user.PetHatch.ExpireTime - time.Now().Unix()
 		}
-		binary.BigEndian.PutUint32(body[0:4], 1)                                // flag=1 有孵化中
-		binary.BigEndian.PutUint32(body[4:8], uint32(remainingSec))             // leftTime
-		binary.BigEndian.PutUint32(body[8:12], user.PetHatch.PetID)             // petID
-		binary.BigEndian.PutUint32(body[12:16], user.PetHatch.ObtainTime)       // captmTime
+		binary.BigEndian.PutUint32(body[0:4], 1)                          // flag=1 有孵化中
+		binary.BigEndian.PutUint32(body[4:8], uint32(remainingSec))       // leftTime
+		binary.BigEndian.PutUint32(body[8:12], user.PetHatch.PetID)       // petID
+		binary.BigEndian.PutUint32(body[12:16], user.PetHatch.ObtainTime) // captmTime
 		logger.Info(fmt.Sprintf("[2316] 有孵化: leftTime=%d petID=%d captmTime=%d", remainingSec, user.PetHatch.PetID, user.PetHatch.ObtainTime))
 	}
 	ctx.GameServer.SendResponse(ctx.ClientData, 2316, ctx.UserID, ctx.SeqID, body)
@@ -6106,6 +6304,37 @@ func handleNonoMolecularTransform(ctx *gameserver.HandlerContext) {
 // handleTransformSoulBead CMD 2357 元神赋形（将元神珠放入转化仪）
 // 请求: obtainTime(4)
 // 响应: errorCode(4)，0 成功；103547 元神珠不存在，13034 已有元神珠正在赋形
+func addPetToBagOrStorage(user *userdb.GameData, pet userdb.Pet) bool {
+	if user == nil {
+		return false
+	}
+	// 统一规则：背包达到 6 只后，新精灵自动发往仓库
+	if len(user.Pets) >= 6 {
+		if user.StoragePets == nil {
+			user.StoragePets = []userdb.Pet{}
+		}
+		user.StoragePets = append(user.StoragePets, pet)
+		return false
+	}
+	user.Pets = append(user.Pets, pet)
+	return true
+}
+
+func applyNonCaptureShinyChance(pet *userdb.Pet) {
+	if pet == nil || pet.Shiny {
+		return
+	}
+	p := GetNonCaptureShinyProbability()
+	if p > 0 && rand.Float64() < p {
+		pet.Shiny = true
+	}
+}
+
+func addGrantedPetToBagOrStorage(user *userdb.GameData, pet userdb.Pet) bool {
+	applyNonCaptureShinyChance(&pet)
+	return addPetToBagOrStorage(user, pet)
+}
+
 func handleTransformSoulBead(ctx *gameserver.HandlerContext) {
 	if len(ctx.Body) < 4 {
 		resp := make([]byte, 4)
@@ -6250,14 +6479,7 @@ func handleSoulBeadToPet(ctx *gameserver.HandlerContext) {
 	}
 	userdb.AssignFusionTraitIfNeeded(&newPet)
 	user.SoulBeadTransform = nil
-	if len(user.Pets) >= 6 {
-		if user.StoragePets == nil {
-			user.StoragePets = []userdb.Pet{}
-		}
-		user.StoragePets = append(user.StoragePets, newPet)
-	} else {
-		user.Pets = append(user.Pets, newPet)
-	}
+	toBag := addGrantedPetToBagOrStorage(user, newPet)
 	if ctx.GameServer.UserDB != nil {
 		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
 	}
@@ -6266,7 +6488,11 @@ func handleSoulBeadToPet(ctx *gameserver.HandlerContext) {
 	binary.BigEndian.PutUint32(body[4:8], uint32(petClass))
 	binary.BigEndian.PutUint32(body[8:12], uint32(newCatchTime))
 	ctx.GameServer.SendResponse(ctx.ClientData, 2358, ctx.UserID, ctx.SeqID, body)
-	logger.Info(fmt.Sprintf("[2358] 元神孵化: UID=%d obtainTime=%d -> PetID=%d CatchTime=%d Trait=%d", ctx.UserID, obtainTime, petClass, newCatchTime, newPet.Trait))
+	target := "仓库"
+	if toBag {
+		target = "背包"
+	}
+	logger.Info(fmt.Sprintf("[2358] 元神孵化: UID=%d obtainTime=%d -> PetID=%d CatchTime=%d Trait=%d 去向=%s", ctx.UserID, obtainTime, petClass, newCatchTime, newPet.Trait, target))
 	// 登记客户端 IP -> 奖励精灵 ID，供资源服 /resource/pet/swf/1.swf 按 IP 返回对应赋形动画 swf
 	if ctx.ClientData != nil && ctx.ClientData.Socket != nil {
 		addr := ctx.ClientData.Socket.RemoteAddr().String()
@@ -6486,12 +6712,10 @@ func handlePetRelease(ctx *gameserver.HandlerContext) {
 				Trait:     0, // 精元孵化无特性
 			}
 			user.PetHatch = nil
-			if len(user.Pets) < 6 {
-				user.Pets = append(user.Pets, newPet)
+			if addGrantedPetToBagOrStorage(user, newPet) {
 				picked = &user.Pets[len(user.Pets)-1]
 				respFlag = 1
 			} else {
-				user.StoragePets = append(user.StoragePets, newPet)
 				// 客户端 addStorage 分支不期望 PetInfo，但 2304 响应格式一致，flag=0 表示进仓库
 				respFlag = 0
 			}
@@ -6715,7 +6939,11 @@ func handleGetPetList(ctx *gameserver.HandlerContext) {
 		off += 4
 		binary.BigEndian.PutUint32(body[off:off+4], 0) // skinID，占位，当前未实现皮肤系统
 		off += 4
-		binary.BigEndian.PutUint32(body[off:off+4], 0) // shiny，占位，当前未实现仓库异色持久化
+		if p.Shiny {
+			binary.BigEndian.PutUint32(body[off:off+4], 1)
+		} else {
+			binary.BigEndian.PutUint32(body[off:off+4], 0)
+		}
 		off += 4
 	}
 
@@ -6917,11 +7145,9 @@ func handlePetCollect(ctx *gameserver.HandlerContext) {
 	}
 
 	// 背包最多 6 只，其余进仓库
-	if len(user.Pets) < 6 {
-		user.Pets = append(user.Pets, newPet)
+	if addGrantedPetToBagOrStorage(user, newPet) {
 		logger.Info(fmt.Sprintf("[2311] 赠宠发放到背包: UID=%d Activity=%d PetID=%d CatchTime=%d", ctx.UserID, activityID, finalPetID, newCatchTime))
 	} else {
-		user.StoragePets = append(user.StoragePets, newPet)
 		logger.Info(fmt.Sprintf("[2311] 赠宠发放到仓库: UID=%d Activity=%d PetID=%d CatchTime=%d", ctx.UserID, activityID, finalPetID, newCatchTime))
 	}
 
@@ -7741,13 +7967,32 @@ func handlePetKingJoin(ctx *gameserver.HandlerContext) {
 			return
 		}
 
-		// 2503：准备对战（NoteReadyToFightInfo）——按 PvP 规则对双方分别构造 [我方, 对方]
-		setPvPBattleStates(ctx.GameServer, inviterUID, responderUID)
+		// 精灵大师杯：
+		// - mode=5 单精灵：走普通 PvP BattleState。
+		// - mode=6 多精灵：使用多精灵 BattleState（与邀请多精灵 PvP 一致），但 2503/2504 仍为普通 PvP 协议。
+		if mode == 6 && opponent.Mode == 6 {
+			inviterUser := ctx.GameServer.GetOrCreateUser(inviterUID)
+			responderUser := ctx.GameServer.GetOrCreateUser(responderUID)
+			inviterIndexes := choosePetWarIndexes(inviterUser)
+			responderIndexes := choosePetWarIndexes(responderUser)
+			if len(inviterIndexes) > 0 && len(responderIndexes) > 0 {
+				setMultiPvPBattleStates(ctx.GameServer, inviterUID, responderUID, inviterIndexes, responderIndexes)
+				logger.Info(fmt.Sprintf("[2413] 精灵大师杯多精灵匹配成功: UID=%d vs UID=%d mode=%d/%d pets1=%d pets2=%d",
+					inviterUID, responderUID, mode, opponent.Mode, len(inviterIndexes), len(responderIndexes)))
+			} else {
+				setPvPBattleStates(ctx.GameServer, inviterUID, responderUID)
+				logger.Info(fmt.Sprintf("[2413] 精灵大师杯多精灵匹配但队伍不足，回退单精灵: UID=%d vs UID=%d mode=%d/%d",
+					inviterUID, responderUID, mode, opponent.Mode))
+			}
+		} else {
+			setPvPBattleStates(ctx.GameServer, inviterUID, responderUID)
+			logger.Info(fmt.Sprintf("[2413] 精灵大师杯单精灵匹配成功: UID=%d vs UID=%d mode=%d/%d", inviterUID, responderUID, mode, opponent.Mode))
+		}
+
 		body2503Inviter, body2503Responder := buildNoteReadyToFightInfoPvPPerClient(ctx.GameServer, inviterUID, responderUID)
 		ctx.GameServer.SendResponse(inviterClient, 2503, inviterUID, 0, body2503Inviter)
 		ctx.GameServer.SendResponse(responderClient, 2503, responderUID, 0, body2503Responder)
 
-		// 2504：开始对战（FightStartInfo）——同样分别构造 [我方, 对方]
 		body2504Inviter, body2504Responder := buildNoteStartFightPvP(ctx.GameServer, inviterUID, responderUID)
 		if len(body2504Inviter) > 0 {
 			ctx.GameServer.SendResponse(inviterClient, 2504, inviterUID, 0, body2504Inviter)
@@ -7818,25 +8063,37 @@ func handleInviteFightCancel(ctx *gameserver.HandlerContext) {
 	}
 }
 
+// getBattlePets 返回当前对战使用的精灵列表：目前等同於玩家背包
+func getBattlePets(gs *gameserver.GameServer, uid int64) []userdb.Pet {
+	u := gs.GetOrCreateUser(uid)
+	return u.Pets
+}
+
 // handleHandleFightInvite CMD 2403 接受/拒绝对战邀请（HANDLE_FIGHT_INVITE）
-// 请求: inviterUserID(4) + result(4) + type(4)，result=1 接受、0 拒绝；type 为对战模式
+// 请求: inviterUserID(4) + result(4) + mode(4)，result=1 接受、0 拒绝；mode 为对战模式（1=单精灵，2=多精灵）
 // 向邀请方推送 NOTE_HANDLE_FIGHT_INVITE(2502)，body: responderUserID(4)+responderNick(16)+result(4)
 func handleHandleFightInvite(ctx *gameserver.HandlerContext) {
 	inviterUserID := int64(0)
 	result := uint32(0)
+	mode := uint32(1) // 默认单精灵
 	if len(ctx.Body) >= 12 {
 		inviterUserID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
 		result = binary.BigEndian.Uint32(ctx.Body[4:8])
+		mode = binary.BigEndian.Uint32(ctx.Body[8:12])
 	}
+
 	responder := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 	nick := responder.Nick
 	if nick == "" {
 		nick = fmt.Sprintf("用户%d", ctx.UserID)
 	}
+
+	// 回 ACK
 	bodyAck := make([]byte, 4)
 	binary.BigEndian.PutUint32(bodyAck[0:4], 0)
 	ctx.GameServer.SendResponse(ctx.ClientData, 2403, ctx.UserID, ctx.SeqID, bodyAck)
 
+	// 通知邀请方本次接受/拒绝结果
 	inviterClient := ctx.GameServer.GetClientByUserID(inviterUserID)
 	if inviterClient == nil {
 		return
@@ -7848,41 +8105,57 @@ func handleHandleFightInvite(ctx *gameserver.HandlerContext) {
 	ctx.GameServer.SendResponse(inviterClient, 2502, ctx.UserID, 0, noteBody)
 
 	if result == 0 {
+		// 拒绝邀请，仅做擂台旗帜等状态同步
 		OnArenaFightInviteRefused(ctx.GameServer, ctx.UserID, inviterUserID)
+		return
 	}
 
-	// 接受对战后：向双方推送 2503（准备对战）和 2504（开始对战），才能进入对战界面
-	// PvP 2503 按接收方分别发送：邀请方收 [邀请方,接受方]，接受方收 [接受方,邀请方]，保证各方 userInfoArray[0]=自己，客户端用其加载“我方/对方”模型，避免双方显示同一精灵模型
-	if result == 1 {
-		inviterClient := ctx.GameServer.GetClientByUserID(inviterUserID)
-		responderClient := ctx.ClientData
-		if inviterClient != nil && responderClient != nil {
-			// 2503：DLL 用 userInfoArray[0]=我方（左）、[1]=对方（右）。我方在前：邀请方收 [邀请方,接受方]、接受方收 [接受方,邀请方]
-				setPvPBattleStates(ctx.GameServer, inviterUserID, ctx.UserID)
-				body2503Inviter, body2503Responder := buildNoteReadyToFightInfoPvPPerClient(ctx.GameServer, inviterUserID, ctx.UserID)
-			ctx.GameServer.SendResponse(inviterClient, 2503, inviterUserID, 0, body2503Inviter)
-			ctx.GameServer.SendResponse(responderClient, 2503, ctx.UserID, 0, body2503Responder)
-			// 2504：DLL 按包顺序“第一项→我方位、第二项→对方位”绑定 3D 模型，必须发 [我方,对方]；FightStartInfo 按 userID 区分 myInfo/otherInfo（血条/技能/日志）
-			body2504Inviter, body2504Responder := buildNoteStartFightPvP(ctx.GameServer, inviterUserID, ctx.UserID)
-			if len(body2504Inviter) > 0 {
-				ctx.GameServer.SendResponse(inviterClient, 2504, inviterUserID, 0, body2504Inviter) // 邀请方收 [邀请方,接受方]=[我方,对方]
-			}
-			if len(body2504Responder) > 0 {
-				ctx.GameServer.SendResponse(responderClient, 2504, ctx.UserID, 0, body2504Responder) // 接受方收 [接受方,邀请方]=[我方,对方]
-			}
-			OnArenaFightInviteAccepted(ctx.GameServer, ctx.UserID, inviterUserID)
-			// PvP 初始化双方 BattleState
-			setPvPBattleStates(ctx.GameServer, inviterUserID, ctx.UserID)
-			inviterPetID, responderPetID := 7, 7
-			if u1 := ctx.GameServer.GetOrCreateUser(inviterUserID); len(u1.Pets) > 0 {
-				inviterPetID = u1.Pets[0].ID
-			}
-			if u2 := ctx.GameServer.GetOrCreateUser(ctx.UserID); len(u2.Pets) > 0 {
-				responderPetID = u2.Pets[0].ID
-			}
-			logger.Info(fmt.Sprintf("[2403] PvP 接受: UID=%d(PetID=%d) vs UID=%d(PetID=%d)，2503/2504 包序 [我方,对方]", inviterUserID, inviterPetID, ctx.UserID, responderPetID))
-		}
+	// result == 1 接受对战
+	inviterClient = ctx.GameServer.GetClientByUserID(inviterUserID)
+	responderClient := ctx.ClientData
+	if inviterClient == nil || responderClient == nil {
+		return
 	}
+
+	// 目前客户端对“多精灵邀请 PVP”的协议仍沿用普通 PVP 的 2503/2504 结构，
+	// mode=2 仅作为后续多精灵换宠/自动轮换的服务端状态标记，不单独使用 PetWar 多精灵 2503/2504，
+	// 以避免与精灵大乱斗协议混用导致载入卡 100%。
+	// 此处只初始化 BattleState 並發送 2503；真正的 2504 延後到雙方各自發出 2404(READY_TO_FIGHT) 時再由 handleReadyToFight 下發，
+	// 以確保 PetFightDLL 與相關資源已完整載入，避免 2504 早於 DLL 導致 Error #1065。
+	if mode == 2 {
+		inviterUser := ctx.GameServer.GetOrCreateUser(inviterUserID)
+		responderUser := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+		inviterIndexes := choosePetWarIndexes(inviterUser)
+		responderIndexes := choosePetWarIndexes(responderUser)
+		if len(inviterIndexes) > 0 && len(responderIndexes) > 0 {
+			setMultiPvPBattleStates(ctx.GameServer, inviterUserID, ctx.UserID, inviterIndexes, responderIndexes)
+			logger.Info(fmt.Sprintf("[2403] HANDLE_FIGHT_INVITE 多精灵接受: inviterUID=%d responderUID=%d mode=%d pets1=%d pets2=%d",
+				inviterUserID, ctx.UserID, mode, len(inviterIndexes), len(responderIndexes)))
+		} else {
+			// 回退到单精灵
+			setPvPBattleStates(ctx.GameServer, inviterUserID, ctx.UserID)
+			logger.Info(fmt.Sprintf("[2403] HANDLE_FIGHT_INVITE 多精灵接受但队伍不足，回退单精灵: inviterUID=%d responderUID=%d mode=%d",
+				inviterUserID, ctx.UserID, mode))
+		}
+	} else {
+		setPvPBattleStates(ctx.GameServer, inviterUserID, ctx.UserID)
+		logger.Info(fmt.Sprintf("[2403] HANDLE_FIGHT_INVITE 单精灵接受: inviterUID=%d responderUID=%d mode=%d", inviterUserID, ctx.UserID, mode))
+	}
+	body2503Inviter, body2503Responder := buildNoteReadyToFightInfoPvPPerClient(ctx.GameServer, inviterUserID, ctx.UserID)
+	ctx.GameServer.SendResponse(inviterClient, 2503, inviterUserID, 0, body2503Inviter)
+	ctx.GameServer.SendResponse(responderClient, 2503, ctx.UserID, 0, body2503Responder)
+	OnArenaFightInviteAccepted(ctx.GameServer, ctx.UserID, inviterUserID)
+
+	// 记录首发精灵信息到日志（此時僅 2503 已發，2504 將在 2404 時下發）
+	inviterPetID, responderPetID := 7, 7
+	if u1 := ctx.GameServer.GetOrCreateUser(inviterUserID); len(u1.Pets) > 0 {
+		inviterPetID = u1.Pets[0].ID
+	}
+	if u2 := ctx.GameServer.GetOrCreateUser(ctx.UserID); len(u2.Pets) > 0 {
+		responderPetID = u2.Pets[0].ID
+	}
+	logger.Info(fmt.Sprintf("[2403] PvP 接受: UID=%d(PetID=%d) vs UID=%d(PetID=%d)，已发 2503，等待双方 2404 再发 2504",
+		inviterUserID, inviterPetID, ctx.UserID, responderPetID))
 }
 
 // setPvPBattleStates 为 PvP 双方初始化 BattleState，使 2405 有状态、战斗能正常结算并发送 2506
@@ -7952,6 +8225,103 @@ func setPvPBattleStates(gs *gameserver.GameServer, inviterUID, responderUID int6
 	}
 }
 
+// setMultiPvPBattleStates 为“多精灵 PVP”（如精灵王多精灵 / 玩家邀请多精灵）初始化 BattleState。
+// 协议仍使用普通 PVP 的 2503/2504，只是服务端多维护一组 AllowedPetIndexes/ActivePetIndex，
+// 让 2405 在当前精灵被击败时能够自动切换到后备精灵，而不是整场战斗立刻结束。
+func setMultiPvPBattleStates(gs *gameserver.GameServer, player1UID, player2UID int64, player1Indexes, player2Indexes []int) {
+	petMgr := gamepets.GetInstance()
+
+	getFirstPetStats := func(uid int64, indexes []int) (firstIndex int, petID, level, hp, maxHp int) {
+		user := gs.GetOrCreateUser(uid)
+		firstIndex = -1
+		if user == nil || len(user.Pets) == 0 {
+			return -1, 7, 5, 0, 0
+		}
+		if len(indexes) == 0 {
+			indexes = make([]int, len(user.Pets))
+			for i := range user.Pets {
+				indexes[i] = i
+			}
+		}
+		// 选队伍中的第一只作为首发
+		for _, idx := range indexes {
+			if idx >= 0 && idx < len(user.Pets) {
+				firstIndex = idx
+				break
+			}
+		}
+		if firstIndex < 0 {
+			firstIndex = 0
+		}
+		p := user.Pets[firstIndex]
+		petID = p.ID
+		level = p.Level
+		if level <= 0 {
+			level = 5
+		}
+		ev := p.GetEVStats()
+		nature := p.Nature
+		st := petMgr.GetStats(petID, level, nature, ev, 0)
+		hp, maxHp = st.HP, st.MaxHP
+		if maxHp <= 0 {
+			maxHp = 1
+		}
+		if hp < 0 {
+			hp = 0
+		}
+		if hp > maxHp {
+			hp = maxHp
+		}
+		return
+	}
+
+	p1ActiveIdx, p1PetID, _, p1Hp, p1MaxHp := getFirstPetStats(player1UID, player1Indexes)
+	p2ActiveIdx, p2PetID, _, p2Hp, p2MaxHp := getFirstPetStats(player2UID, player2Indexes)
+
+	gs.BattleMu.Lock()
+	defer gs.BattleMu.Unlock()
+
+	// 玩家1
+	state1 := &gameserver.BattleState{
+		PlayerHP:          uint32(p1Hp),
+		PlayerMaxHP:       uint32(p1MaxHp),
+		EnemyHP:           uint32(p2Hp),
+		EnemyMaxHP:        uint32(p2MaxHp),
+		EnemyID:           p2PetID,
+		EnemyLevel:        5,
+		TotalPlayerPets:   len(player1Indexes),
+		DeadPlayerPets:    0,
+		IsActive:          true,
+		OpponentUserID:    player2UID,
+		AllowedPetIndexes: append([]int(nil), player1Indexes...),
+		ActivePetIndex:    p1ActiveIdx,
+	}
+	if state1.TotalPlayerPets <= 0 {
+		state1.TotalPlayerPets = 1
+	}
+	gs.BattleStates[player1UID] = state1
+
+	// 玩家2
+	state2 := &gameserver.BattleState{
+		PlayerHP:          uint32(p2Hp),
+		PlayerMaxHP:       uint32(p2MaxHp),
+		EnemyHP:           uint32(p1Hp),
+		EnemyMaxHP:        uint32(p1MaxHp),
+		EnemyID:           p1PetID,
+		EnemyLevel:        5,
+		TotalPlayerPets:   len(player2Indexes),
+		DeadPlayerPets:    0,
+		IsActive:          true,
+		OpponentUserID:    player1UID,
+		AllowedPetIndexes: append([]int(nil), player2Indexes...),
+		ActivePetIndex:    p2ActiveIdx,
+	}
+	if state2.TotalPlayerPets <= 0 {
+		state2.TotalPlayerPets = 1
+	}
+	gs.BattleStates[player2UID] = state2
+}
+
 // buildNoteReadyToFightInfoPvP 构建 PvP 的 2503 包体：userCount(4) + [FighetUserInfo(20) + petCount(4) + SimplePetInfo(76)] * 2，与 NoteReadyToFightInfo 解析一致
 func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, responderUID int64) []byte {
 	petMgr := gamepets.GetInstance()
@@ -7966,7 +8336,7 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 		copy(b[4:20], nb)
 		return b
 	}
-	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32, skinID uint32, shiny uint32) []byte {
+	buildSimplePetInfo := func(petID uint32, level uint32, hp uint32, maxHp uint32, catchTime uint32, skills [][2]uint32, shiny uint32) []byte {
 		b := make([]byte, 76)
 		binary.BigEndian.PutUint32(b[0:4], petID)
 		binary.BigEndian.PutUint32(b[4:8], level)
@@ -7993,8 +8363,8 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 		binary.BigEndian.PutUint32(b[56:60], 0)
 		binary.BigEndian.PutUint32(b[60:64], 0)
 		binary.BigEndian.PutUint32(b[64:68], 0)
-		binary.BigEndian.PutUint32(b[68:72], petID) // skinID：客户端用此加载精灵模型/图标，0 会导致蓝格占位
-		binary.BigEndian.PutUint32(b[72:76], shiny)
+		binary.BigEndian.PutUint32(b[68:72], petID) // skinID 使用精灵 ID，避免对方蓝格/不显示
+		binary.BigEndian.PutUint32(b[72:76], shiny) // 我方/对方真实异色
 		return b
 	}
 	getUserFirstPet := func(uid int64) (petID int, level int, catchTime uint32, hp, maxHp int, skills [][2]uint32, nick string) {
@@ -8056,11 +8426,11 @@ func buildNoteReadyToFightInfoPvP(gs *gameserver.GameServer, inviterUID, respond
 	out = append(out, buildFightUserInfo(uint32(inviterUID), nick1)...)
 	binary.BigEndian.PutUint32(tmp4, 1)
 	out = append(out, tmp4...)
-	out = append(out, buildSimplePetInfo(uint32(petID1), uint32(lv1), uint32(hp1), uint32(maxHp1), ct1, sk1, uint32(petID1), 0)...)
+	out = append(out, buildSimplePetInfo(uint32(petID1), uint32(lv1), uint32(hp1), uint32(maxHp1), ct1, sk1, 0)...)
 	out = append(out, buildFightUserInfo(uint32(responderUID), nick2)...)
 	binary.BigEndian.PutUint32(tmp4, 1)
 	out = append(out, tmp4...)
-	out = append(out, buildSimplePetInfo(uint32(petID2), uint32(lv2), uint32(hp2), uint32(maxHp2), ct2, sk2, uint32(petID2), 0)...)
+	out = append(out, buildSimplePetInfo(uint32(petID2), uint32(lv2), uint32(hp2), uint32(maxHp2), ct2, sk2, 0)...)
 	return out
 }
 
@@ -8208,80 +8578,97 @@ func buildNoteStartFightPvP(gs *gameserver.GameServer, inviterUID, responderUID 
 	return inviterBody, responderBody
 }
 
-// buildPvP2504BodyForUser 为 PvP 下 2404 构建当前用户的 2504 包体：isCanAuto + FightPetInfo*2
+// buildPvP2504BodyForUser 为 PvP 下 2404 构建当前用户的 2504 包体：我方 FightPetInfo + 对方 FightPetInfo（不修改 BattleState）
 func buildPvP2504BodyForUser(gs *gameserver.GameServer, myUID, opponentUID int64, battle *gameserver.BattleState) []byte {
 	petMgr := gamepets.GetInstance()
-
-	// 获取用户首发精灵信息（仅使用本场大乱斗随机到的三只）
-	getFirstPet := func(uid int64, indexes []int) (petID, level, hp, maxHp, catchTime uint32, petName string) {
-		u := gs.GetOrCreateUser(uid)
-		pets := getPetWarPetList(u, indexes)
-		if len(pets) > 0 {
-			pet := pets[0]
-			petID = uint32(pet.ID)
-			level = uint32(pet.Level)
-			catchTime = uint32(pet.CatchTime)
-			if catchTime == 0 {
-				catchTime = 0x69686700 + uint32(pet.ID)
-			}
-			petName = pet.Name
-			if petName == "" {
-				petName = fmt.Sprintf("Pet%d", pet.ID)
-			}
-			if len(petName) > 16 {
-				petName = petName[:16]
-			}
-
-			// 计算HP
-			ev := pet.GetEVStats()
-			nature := pet.Nature
-			stats := petMgr.GetStats(pet.ID, int(level), nature, ev, 0)
-			hp, maxHp = uint32(stats.HP), uint32(stats.MaxHP)
-			if maxHp <= 0 {
-				maxHp = 1
-			}
-			if hp < 0 {
-				hp = 0
-			}
-			if hp > maxHp {
-				hp = maxHp
-			}
+	const fightPetInfoSize = 50
+	buildFightPetInfo := func(uid uint32, petID int, name string, ct uint32, hp, maxHp, lv int, catchable uint32) []byte {
+		if petID <= 0 {
+			petID = 7
 		}
-		return
+		if maxHp <= 0 {
+			maxHp = 1
+		}
+		if hp < 0 {
+			hp = 0
+		}
+		if hp > maxHp {
+			hp = maxHp
+		}
+		buf := make([]byte, fightPetInfoSize)
+		binary.BigEndian.PutUint32(buf[0:4], uid)
+		binary.BigEndian.PutUint32(buf[4:8], uint32(petID))
+		nb := []byte(name)
+		if len(nb) > 16 {
+			nb = nb[:16]
+		}
+		copy(buf[8:24], nb)
+		binary.BigEndian.PutUint32(buf[24:28], ct)
+		binary.BigEndian.PutUint32(buf[28:32], uint32(hp))
+		binary.BigEndian.PutUint32(buf[32:36], uint32(maxHp))
+		binary.BigEndian.PutUint32(buf[36:40], uint32(lv))
+		binary.BigEndian.PutUint32(buf[40:44], catchable)
+		for i := 44; i < 50; i++ {
+			buf[i] = 0
+		}
+		return buf
+	}
+	// 我方：当前用户（大乱斗时用分配的精灵列表）
+	petsMe := getBattlePets(gs, myUID)
+	petID1, lv1, ct1, hp1, maxHp1 := 7, 5, uint32(0), int(battle.PlayerHP), int(battle.PlayerMaxHP)
+	if len(petsMe) > 0 {
+		idx := 0
+		if battle.ActivePetIndex >= 0 && battle.ActivePetIndex < len(petsMe) {
+			idx = battle.ActivePetIndex
+		}
+		petID1 = petsMe[idx].ID
+		if petsMe[idx].Level > 0 {
+			lv1 = petsMe[idx].Level
+		}
+		ct1 = uint32(petsMe[idx].CatchTime)
+		if ct1 == 0 {
+			ct1 = 0x69686700 + uint32(petID1)
+		}
+	}
+	name1 := petMgr.GetName(petID1)
+	if name1 == "" {
+		name1 = "精灵"
+	}
+	// 对方：对手（大乱斗时用分配的精灵列表）
+	petsOpp := getBattlePets(gs, opponentUID)
+	petID2, lv2, ct2 := battle.EnemyID, battle.EnemyLevel, uint32(0)
+	hp2, maxHp2 := int(battle.EnemyHP), int(battle.EnemyMaxHP)
+	if len(petsOpp) > 0 {
+		ct2 = uint32(petsOpp[0].CatchTime)
+		if ct2 == 0 {
+			ct2 = 0x69686700 + uint32(petID2)
+		}
+	}
+	name2 := petMgr.GetName(petID2)
+	if name2 == "" {
+		name2 = "精灵"
+	}
+	info1 := buildFightPetInfo(uint32(myUID), petID1, name1, ct1, hp1, maxHp1, lv1, 0)
+	info2 := buildFightPetInfo(uint32(opponentUID), petID2, name2, ct2, hp2, maxHp2, lv2, 0)
+	// 与 2403 推送的 2504 一致：包内顺序 [我方,对方]
+	out := make([]byte, 4+len(info1)+len(info2))
+	binary.BigEndian.PutUint32(out[0:4], 0)
+	copy(out[4:4+len(info1)], info1)
+	copy(out[4+len(info1):], info2)
+	// 确保第1段 userID 始终为接收方(myUID)，第2段为对方(opponentUID)，便于客户端正确识别"我方/对方"
+	firstUID := binary.BigEndian.Uint32(out[4:8])
+	firstPetID := binary.BigEndian.Uint32(out[8:12])
+	secondUID := binary.BigEndian.Uint32(out[54:58])
+	secondPetID := binary.BigEndian.Uint32(out[58:62])
+
+	// 验证：第一条 userID 必须等于接收方 userID
+	if firstUID != uint32(myUID) {
+		logger.Warning(fmt.Sprintf("[2504-2404] ⚠️ 包第1段 userID(%d) != 接收方UID(%d)，可能导致客户端识别错误！", firstUID, myUID))
 	}
 
-	// 构建单个 FightPetInfo (46 bytes)
-	buildFightPetInfo := func(userID, petID, level, hp, maxHp, catchTime uint32, petName string) []byte {
-		b := make([]byte, 46) // 4+4+16+4+4+4+4+4+6
-		binary.BigEndian.PutUint32(b[0:4], userID)
-		binary.BigEndian.PutUint32(b[4:8], petID)
-		nameBytes := []byte(petName)
-		if len(nameBytes) > 16 {
-			nameBytes = nameBytes[:16]
-		}
-		copy(b[8:24], nameBytes)
-		binary.BigEndian.PutUint32(b[24:28], catchTime)
-		binary.BigEndian.PutUint32(b[28:32], hp)
-		binary.BigEndian.PutUint32(b[32:36], maxHp)
-		binary.BigEndian.PutUint32(b[36:40], level)
-		binary.BigEndian.PutUint32(b[40:44], 0) // catchable = false
-		// battleLv (6 bytes) - 默认全0
-		return b
-	}
-
-	// 获取双方精灵信息
-	myPetID, myLv, myHp, myMaxHp, myCatchTime, myName := getFirstPet(myUID, getPetWarBattleIndexes(gs, myUID))
-	oppPetID, oppLv, oppHp, oppMaxHp, oppCatchTime, oppName := getFirstPet(opponentUID, getPetWarBattleIndexes(gs, opponentUID))
-
-	// 构建包体：isCanAuto(4) + [我方FightPetInfo(46) + 对方FightPetInfo(46)]
-	body := make([]byte, 0, 4+46*2)
-	tmp4 := make([]byte, 4)
-	binary.BigEndian.PutUint32(tmp4, 1) // isCanAuto = true
-	body = append(body, tmp4...)
-	body = append(body, buildFightPetInfo(uint32(myUID), myPetID, myLv, myHp, myMaxHp, myCatchTime, myName)...)
-	body = append(body, buildFightPetInfo(uint32(opponentUID), oppPetID, oppLv, oppHp, oppMaxHp, oppCatchTime, oppName)...)
-
-	return body
+	logger.Info(fmt.Sprintf("[2504-2404] UID=%d 包体: 第1段 userID=%d petID=%d(name=%s), 第2段 userID=%d petID=%d(name=%s)",
+		myUID, firstUID, firstPetID, name1, secondUID, secondPetID, name2))
+	return out
 }
 
 // ==================== 新手战斗（2411 -> 2503） ====================
@@ -8644,11 +9031,11 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 			off += 8
 		}
 		binary.BigEndian.PutUint32(b[52:56], catchTime)
-		binary.BigEndian.PutUint32(b[56:60], 0)        // catchMap = 0（Lua 注释：官服为0）
-		binary.BigEndian.PutUint32(b[60:64], 0)        // catchRect
-		binary.BigEndian.PutUint32(b[64:68], 0)        // catchLevel = 0（官服为0）
-		binary.BigEndian.PutUint32(b[68:72], petID)    // skinID：客户端用此加载精灵模型/图标，0 会导致敌方切换时蓝格占位、模型不切换
-		binary.BigEndian.PutUint32(b[72:76], shiny)    // shiny：与前端 PetInfo 结构对齐，这里先统一按 0 发送
+		binary.BigEndian.PutUint32(b[56:60], 0)     // catchMap = 0（Lua 注释：官服为0）
+		binary.BigEndian.PutUint32(b[60:64], 0)     // catchRect
+		binary.BigEndian.PutUint32(b[64:68], 0)     // catchLevel = 0（官服为0）
+		binary.BigEndian.PutUint32(b[68:72], petID) // skinID：客户端用此加载精灵模型/图标，0 会导致敌方切换时蓝格占位、模型不切换
+		binary.BigEndian.PutUint32(b[72:76], shiny) // shiny：与前端 PetInfo 结构对齐，这里先统一按 0 发送
 		return b
 	}
 
@@ -8727,7 +9114,11 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 				petSkills = append(petSkills, [2]uint32{10001, 20})
 			}
 
-			out = append(out, buildSimplePetInfo(uint32(petID), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills, uint32(petID), 0)...)
+			petShiny := uint32(0)
+			if pet.Shiny {
+				petShiny = 1
+			}
+			out = append(out, buildSimplePetInfo(uint32(petID), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills, uint32(petID), petShiny)...)
 		}
 	} else {
 		// 没有精灵时发送默认精灵
@@ -8738,7 +9129,11 @@ func buildNoteReadyToFightInfo(ctx *gameserver.HandlerContext, enemyID uint32) [
 	out = append(out, buildFightUserInfo(0, "")...)
 	binary.BigEndian.PutUint32(tmp4, 1)
 	out = append(out, tmp4...)
-	out = append(out, buildSimplePetInfo(enemyID, uint32(enemyLevel), uint32(enemyStats.HP), uint32(enemyStats.MaxHP), 0, enemySkills, enemyID, 0)...)
+	enemyShiny := uint32(0)
+	if curBattle != nil && curBattle.EnemyShiny {
+		enemyShiny = 1
+	}
+	out = append(out, buildSimplePetInfo(enemyID, uint32(enemyLevel), uint32(enemyStats.HP), uint32(enemyStats.MaxHP), 0, enemySkills, enemyID, enemyShiny)...)
 
 	logger.Info(fmt.Sprintf("[2503] NoteReadyToFight: 发送玩家精灵数=%d 敌人ID=%d", playerPetCount, enemyID))
 	return out
@@ -9033,7 +9428,11 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 			if len(petSkills) == 0 {
 				petSkills = append(petSkills, [2]uint32{10001, 20})
 			}
-			out = append(out, buildSimplePetInfo(uint32(pid), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills, uint32(pid), 0)...)
+			petShiny := uint32(0)
+			if pet.Shiny {
+				petShiny = 1
+			}
+			out = append(out, buildSimplePetInfo(uint32(pid), uint32(petLevel), uint32(petStats.HP), uint32(petStats.MaxHP), petCatch, petSkills, uint32(pid), petShiny)...)
 		}
 	} else {
 		out = append(out, buildSimplePetInfo(uint32(playerPetID), uint32(playerLevel), uint32(playerStats.HP), uint32(playerStats.MaxHP), playerCatch, playerSkills, uint32(playerPetID), 0)...)
@@ -9093,24 +9492,27 @@ func buildNoteReadyToFightInfoTower(ctx *gameserver.HandlerContext, bossIDs []in
 
 // handleReadyToFight CMD 2404 战斗初始化
 // 对齐 Lua: fight_handlers.handleReadyToFight
-// PvP：若已有 BattleState 且 OpponentUserID != 0，仅回 2504（我方/对方顺序）+ 2301，不覆盖状态，否则 2505/2506 无法发给对方。
+// PvP：若已有 BattleState 且 OpponentUserID != 0，基於當前狀態構建 2504 並回 2301，不覆盖状态。
 // PvE：在服务端记录战斗状态，向客户端发送 2504 + 2301。
 func handleReadyToFight(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
 
-	// PvP 已由 2403 推送 2503+2504 并 setPvPBattleStates；客户端仍会发 2404 确认。此时不可覆盖 BattleState，否则 OpponentUserID 丢失，2505/2506 无法发给对方。
+	// PvP：BattleState 已由 2403 初始化，這裡根據既有狀態構建 2504，不得覆蓋，否則 OpponentUserID 等資訊會丟失導致雙方不同步。
 	ctx.GameServer.BattleMu.RLock()
 	battle, pvpExists := ctx.GameServer.BattleStates[ctx.UserID]
 	if pvpExists && battle.IsActive && battle.OpponentUserID != 0 {
+		opponentUID := battle.OpponentUserID
 		ctx.GameServer.BattleMu.RUnlock()
-		// 仅回 2504（我方第一条、对方第二条）+ 2301，不写 BattleState
-		ack := make([]byte, 4)
-		ctx.GameServer.SendResponse(ctx.ClientData, 2404, ctx.UserID, ctx.SeqID, ack)
+		// 回 PvP 版 2504（我方第一條、對方第二條）+ 2301，不覆蓋 BattleState
+		body2504 := buildPvP2504BodyForUser(ctx.GameServer, ctx.UserID, opponentUID, battle)
+		if len(body2504) > 0 {
+			ctx.GameServer.SendResponse(ctx.ClientData, 2504, ctx.UserID, ctx.SeqID, body2504)
+		}
 		if len(user.Pets) > 0 {
 			petInfoBody := buildFullPetInfo(user.Pets[0])
 			ctx.GameServer.SendResponse(ctx.ClientData, 2301, ctx.UserID, ctx.SeqID, petInfoBody)
 		}
-		logger.Info(fmt.Sprintf("[2404] PvP 已就绪: UID=%d 仅回 2504+2301，不覆盖 BattleState", ctx.UserID))
+		logger.Info(fmt.Sprintf("[2404] PvP 已就绪: UID=%d 回 2504+2301，不覆盖 BattleState", ctx.UserID))
 		return
 	}
 	ctx.GameServer.BattleMu.RUnlock()
@@ -9503,6 +9905,7 @@ func handleReadyToFight(ctx *gameserver.HandlerContext) {
 	// 保留「对应 BOSS 挑战」标记：2411/2421 已设 IsBossChallenge=true，2404 后 2405 仅在此为 true 时发放 SPT 精元/精灵
 	if prev, ok := ctx.GameServer.BattleStates[ctx.UserID]; ok && prev != nil {
 		battleState.IsBossChallenge = prev.IsBossChallenge
+		battleState.EnemyShiny = prev.EnemyShiny
 	}
 	ctx.GameServer.BattleStates[ctx.UserID] = battleState
 	ctx.GameServer.BattleMu.Unlock()
@@ -9605,6 +10008,11 @@ func handleFightNpcMonster(ctx *gameserver.HandlerContext) {
 	}
 	battle.EnemyID = enemyID
 	battle.EnemyLevel = enemyLevel
+	if slotIndex >= 0 && slotIndex < len(slots) {
+		battle.EnemyShiny = slots[slotIndex].Shiny
+	} else {
+		battle.EnemyShiny = false
+	}
 	battle.IsActive = true
 	ctx.GameServer.BattleStates[ctx.UserID] = battle
 	ctx.GameServer.BattleMu.Unlock()
@@ -9701,6 +10109,41 @@ func hasCompletedTutorial(gameData *userdb.GameData) bool {
 	return true
 }
 
+// maybeResetDailyCampTasks 跨過上海時區「每日 12:00」週期後，清除 GM 任務配置中 type=daily 的任務狀態（不論是否完成），供精靈訓練營每日刷新。
+func maybeResetDailyCampTasks(user *userdb.GameData) bool {
+	if user == nil {
+		return false
+	}
+	cur := DailyCampNoonPeriodStart(time.Now())
+	if user.DailyCampTaskNoon == cur {
+		return false
+	}
+	ids := GetDailyTaskIDs()
+	if len(ids) > 0 && user.Tasks != nil {
+		for _, id := range ids {
+			if id <= 0 || id > 500 {
+				continue
+			}
+			delete(user.Tasks, strconv.Itoa(id))
+		}
+	}
+	user.DailyCampTaskNoon = cur
+	return true
+}
+
+// persistDailyCampTaskRefreshIfNeeded 若觸發了每日任務週期重置則寫庫（在線跨正午時生效）。
+func persistDailyCampTaskRefreshIfNeeded(ctx *gameserver.HandlerContext, user *userdb.GameData) {
+	if user == nil {
+		return
+	}
+	if !maybeResetDailyCampTasks(user) {
+		return
+	}
+	if ctx != nil && ctx.GameServer != nil && ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+	}
+}
+
 // handleLogin 处理登录命令
 func handleLogin(ctx *gameserver.HandlerContext) {
 	// 同一账户只允许一个在线会话：若该 UID 已在其他连接登录，踢掉旧连接
@@ -9708,6 +10151,10 @@ func handleLogin(ctx *gameserver.HandlerContext) {
 
 	// 获取用户游戏数据
 	gameData := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+	// 精靈訓練營每日任務：每個上海 12:00 週期重置（不論是否完成）
+	if maybeResetDailyCampTasks(gameData) && ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, gameData)
+	}
 	// 所有用户上线时地图ID固定为1（传送舱）
 	gameData.MapID = 1
 
@@ -9909,8 +10356,9 @@ func buildLoginResponse(userID int64, account *userdb.User, gameData *userdb.Gam
 	writeU32(uint32(gameData.LoginCnt))
 	writeU32(uint32(gameData.Inviter))
 	writeU32(uint32(gameData.NewInviteeCnt))
-	writeU32(uint32(gameData.Nono.VipLevel))
-	writeU32(uint32(gameData.Nono.VipValue))
+	// 客户端 UI 将这两个字段作为“超能等级/超能能量”来源显示
+	writeU32(uint32(gameData.Nono.SuperLevel))
+	writeU32(uint32(gameData.Nono.SuperEnergy))
 	writeU32(uint32(gameData.Nono.VipStage))
 	writeU32(uint32(gameData.Nono.AutoCharge))
 
@@ -10291,7 +10739,11 @@ func buildFullPetInfo(p userdb.Pet) []byte {
 
 	// 7. Skin & Shiny（与前端 PetInfo 结构对齐：skinID 后紧跟 shiny）
 	writeU32(0) // skinID，当前未实现皮肤系统，固定为 0
-	writeU32(0) // shiny，当前未实现持久化异色，统一返回 0 占位
+	if p.Shiny {
+		writeU32(1)
+	} else {
+		writeU32(0)
+	}
 
 	return buf
 }
@@ -10651,6 +11103,9 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 				if p.DV > 0 {
 					petDV = uint32(p.DV)
 				}
+				if p.Shiny {
+					petShiny = 1
+				}
 				break
 			}
 		}
@@ -10662,6 +11117,9 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 					if p.DV > 0 {
 						petDV = uint32(p.DV)
 					}
+					if p.Shiny {
+						petShiny = 1
+					}
 					break
 				}
 			}
@@ -10671,7 +11129,6 @@ func buildPeopleInfo(userID int64, user *userdb.GameData, sysTime int64, posX, p
 	writeU32(petID)
 	writeU32(petDV)
 	// 与前端 UserInfo.setForPeoleInfo 对齐：依次写入 petShiny / petSkin / fightFlag。
-	// 当前后端尚未持久化异色与皮肤信息，统一返回 0 作为占位值，保证包体结构正确。
 	writeU32(petShiny)
 	writeU32(petSkin)
 	writeU32(0) // fightFlag
@@ -11244,6 +11701,41 @@ func buildAttackValue(userID uint32, skillID uint32, atkTimes uint32, lostHP uin
 	return buf[:off]
 }
 
+// sendPvPZeroTurn2505 构造并向双方推送一次“零伤害 2505”，用于：
+// - 双方本回合都没有出招（例如双方都仅换宠/仅用道具），但仍需推进回合并让客户端 nextRound。
+// 注意：调用方需自行决定并清理本回合 PvP 标记（PvPHasSelected/PvPChangedPetThisRound 等）。
+func sendPvPZeroTurn2505(gs *gameserver.GameServer, uid, opponentUID int64, battle, opponentBattle *gameserver.BattleState) {
+	if gs == nil || battle == nil || opponentBattle == nil || uid == 0 || opponentUID == 0 {
+		return
+	}
+	avMe := buildAttackValue(
+		uint32(uid), 0, 0, 0, 0,
+		int32(battle.PlayerHP), battle.PlayerMaxHP,
+		0, 0, 0,
+		battle.PlayerStatus, battle.PlayerBattleLv,
+	)
+	avOpp := buildAttackValue(
+		uint32(opponentUID), 0, 0, 0, 0,
+		int32(opponentBattle.PlayerHP), opponentBattle.PlayerMaxHP,
+		0, 0, 0,
+		opponentBattle.PlayerStatus, opponentBattle.PlayerBattleLv,
+	)
+
+	bodyForMe := make([]byte, 0, len(avMe)+len(avOpp))
+	bodyForMe = append(bodyForMe, avMe...)
+	bodyForMe = append(bodyForMe, avOpp...)
+	bodyForOpp := make([]byte, 0, len(avMe)+len(avOpp))
+	bodyForOpp = append(bodyForOpp, avOpp...)
+	bodyForOpp = append(bodyForOpp, avMe...)
+
+	if c := gs.GetClientByUserID(uid); c != nil {
+		gs.SendResponse(c, 2505, uid, 0, bodyForMe)
+	}
+	if c := gs.GetClientByUserID(opponentUID); c != nil {
+		gs.SendResponse(c, 2505, opponentUID, 0, bodyForOpp)
+	}
+}
+
 // capDisplayHP 将 HP 限制在前端可安全显示的上限内，避免血条超出血槽。
 // 服务端 Boss 真实血量可设至 99999999，结算用 BattleState 中的值；仅 2504/2505 下发的显示值按比例压缩到 displayHPMax，客户端用 (dispHP/dispMax) 绘制比例，血条不溢出。
 const displayHPMax = 9999
@@ -11586,6 +12078,35 @@ func handleUseSkill(ctx *gameserver.HandlerContext) {
 		return
 	}
 	// 注意：保持锁定直到更新完战斗状态
+
+	// ==================== PvP 回合同步：雙方都選好技能後再結算 ====================
+	// 规则：
+	// - 若為 PvP（OpponentUserID != 0），第一位玩家發送 2405 時，只在自身 BattleState 上記錄本回合選擇的技能並設置 PvPHasSelected。
+	// - 當第二位玩家也發送 2405 時，檢查到雙方皆已選招，才繼續向下執行完整一回合的結算邏輯（本函數剩餘部分）。
+	if battle.OpponentUserID != 0 {
+		battle.PvPSelectedSkillID = skillID
+		battle.PvPHasSelected = true
+
+		opponentUID := battle.OpponentUserID
+		opponentBattle, ok := ctx.GameServer.BattleStates[opponentUID]
+		if ok && opponentBattle.IsActive {
+			if !opponentBattle.PvPHasSelected {
+				// 对方本回合已切换精灵（PvPChangedPetThisRound）：切换算作对方本回合行动，可立即结算，不需等待。
+				if opponentBattle.PvPChangedPetThisRound {
+					logger.Info(fmt.Sprintf("[2405-PvP] UID=%d 出招，对方 UID=%d 已切换精灵，直接结算", ctx.UserID, opponentUID))
+				} else {
+					// 對方本回合尚未選擇技能：僅記錄本方選擇，等待對方 2405
+					ctx.GameServer.BattleMu.Unlock()
+					logger.Info(fmt.Sprintf("[2405-PvP] UID=%d 已选择技能 %d，等待对方 UID=%d 选择技能", ctx.UserID, skillID, opponentUID))
+					return
+				}
+			}
+			// 若雙方均已選招，則繼續向下執行一次完整回合結算
+		} else {
+			// 對方戰鬥狀態已失效，後續按 PvE 單人邏輯結算
+			logger.Warning(fmt.Sprintf("[2405-PvP] 对方 UID=%d 战斗状态已失效，按 PvE 逻辑结算本回合", opponentUID))
+		}
+	}
 
 	// 盖亚挑战条件：每使用一次技能计为一回合；同时重置谱尼部分阶段性统计
 	battle.RoundCount++
@@ -11949,7 +12470,22 @@ func handleUseSkill(ctx *gameserver.HandlerContext) {
 	initEnemySkillPP(battle, battle.EnemyID, battle.EnemyLevel, skillMgr)
 
 	// 先手判定：按技能先制 + 速度比较（雷伊/盖亚 +6；魔狮迪露 体力低于一半时 +6）
-	enemySkillForTurn, enemySkillIDForTurn := pickEnemySkill(skillMgr, battle.EnemyID, battle.EnemyLevel)
+	var enemySkillForTurn *gameskills.Skill
+	var enemySkillIDForTurn uint32
+	if battle.OpponentUserID != 0 {
+		// PvP：敌方技能由对方玩家在其 BattleState 上通过 2405 选择，
+		// 在双方均已选招后，直接读取对方记录的 PvPSelectedSkillID，
+		// 而不再调用怪物 AI 的 pickEnemySkill。
+		if opponentBattle, ok := ctx.GameServer.BattleStates[battle.OpponentUserID]; ok && opponentBattle.IsActive {
+			enemySkillIDForTurn = opponentBattle.PvPSelectedSkillID
+			if enemySkillIDForTurn != 0 {
+				enemySkillForTurn = skillMgr.Get(int(enemySkillIDForTurn))
+			}
+		}
+	} else {
+		// PvE：仍然使用原有怪物 AI 逻辑自动选择敌方技能。
+		enemySkillForTurn, enemySkillIDForTurn = pickEnemySkill(skillMgr, battle.EnemyID, battle.EnemyLevel)
+	}
 	playerPriority := skill.Priority
 	// 454 - 当自身血量少于 1/n 时先制 +m
 	if battle.PlayerPriorityBonusWhenLowHPRounds > 0 && battle.PlayerMaxHP > 0 && battle.PlayerHP < battle.PlayerMaxHP/uint32(battle.PlayerPriorityBonusWhenLowHPDivisor) {
@@ -17796,6 +18332,17 @@ afterEnemyTurn:
 
 	// PvP 时需用对方 userID 填第二个 AttackValue，客户端才能正确匹配"对方"血条与图标
 	opponentUID := battle.OpponentUserID
+	// 若为 PvP，本回合结算完毕后需清除双方“已选择技能”标记，等待下一回合重新选招/换宠。
+	if opponentUID != 0 {
+		if opponentBattle, ok := ctx.GameServer.BattleStates[opponentUID]; ok {
+			opponentBattle.PvPHasSelected = false
+			opponentBattle.PvPSelectedSkillID = 0
+			opponentBattle.PvPChangedPetThisRound = false
+		}
+		battle.PvPHasSelected = false
+		battle.PvPSelectedSkillID = 0
+		battle.PvPChangedPetThisRound = false
+	}
 	ctx.GameServer.BattleMu.Unlock()
 
 	// 构建 2505 响应：两个 AttackValue（出手顺序：盖亚261 时敌人先手，否则玩家先手）
@@ -18015,13 +18562,7 @@ afterEnemyTurn:
 							Exp:    0,
 							Name:   "",
 						}
-						// SPT 奖励精灵：先统一放入仓库，由前端 BossCmdListener 通过 2304 (PET_RELEASE)
-						// 按 PetManager.setIn 捕获时间将其转入背包；这样与前端解包协议保持一致，
-						// 避免直接写入背包导致 2304 查不到仓库记录、奖励精灵无法实时出现在精灵背包。
-						if user.StoragePets == nil {
-							user.StoragePets = []userdb.Pet{}
-						}
-						user.StoragePets = append(user.StoragePets, newPet)
+						addGrantedPetToBagOrStorage(user, newPet)
 						if ctx.GameServer.UserDB != nil {
 							ctx.GameServer.UserDB.RecordCatch(ctx.UserID, entry.RewardPetID)
 						}
@@ -18029,6 +18570,7 @@ afterEnemyTurn:
 						// 推送 CMD 8004 通知客户端弹窗显示获得精灵
 						body8004 := buildBossMonster8004Body(0, uint32(entry.RewardPetID), uint32(newCatchTime), 0, 0)
 						ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, 0, body8004)
+						maybeGrantSPTBossTitleOnFirstDefeat(ctx, user, battle.EnemyID)
 					}
 				} else if entry, ok := sptboss.GetByPetID(battle.EnemyID); ok && entry.RewardItemID > 0 && battle.EnemyID != petIDGaiya {
 					// 精元奖励（雷伊、纳多雷等）；盖亚(261)由 pushGaiyaRewardOrNotice 单独处理
@@ -18055,6 +18597,7 @@ afterEnemyTurn:
 						// 推送 CMD 8004 通知客户端弹窗显示获得精元
 						body8004 := buildBossMonster8004Body(0, 0, 0, uint32(entry.RewardItemID), 1)
 						ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, 0, body8004)
+						maybeGrantSPTBossTitleOnFirstDefeat(ctx, user, battle.EnemyID)
 					}
 				} else if battle.BattleMapID == sptboss.MapIDYiNengWang && battle.EnemyID == 1000 {
 					// 地图 677 异能王：击败六重试炼(region 0~5)或终极试炼(region 6)后完成任务并发放对应之魂/精元（首次）
@@ -18097,6 +18640,9 @@ afterEnemyTurn:
 							body2202 := buildTaskCompleteResponse(uint32(taskID), 0, user)
 							ctx.GameServer.SendResponse(ctx.ClientData, 2202, ctx.UserID, 0, body2202)
 							logger.Info(fmt.Sprintf("[2405] 地图677 击败 region=%d，完成任务 %d，发放道具 %d，推送 2202", region, taskID, itemID))
+							if yt := sptboss.ResolveYiNengTitleID(region); yt > 0 {
+								grantAchievementTitleIfMissing(ctx, user, yt)
+							}
 						}
 					}
 				} else if _, ok := sptboss.GetByPetID(battle.EnemyID); ok &&
@@ -18113,6 +18659,7 @@ afterEnemyTurn:
 					}
 					if !alreadyDefeated {
 						user.DefeatedSPTBossIds = append(user.DefeatedSPTBossIds, battle.EnemyID)
+						maybeGrantSPTBossTitleOnFirstDefeat(ctx, user, battle.EnemyID)
 					}
 				}
 			} else if battle.IsDarkPortalBattle {
@@ -18141,18 +18688,14 @@ afterEnemyTurn:
 								Exp:       0,
 								Name:      "",
 							}
-							// 暗黑武斗场奖励精灵也统一先进入仓库，前端通过 2304 (PET_RELEASE)
-							// 根据精灵捕捉时间决定是否放入背包或保留在仓库，保证与原版前端解包/交互一致。
-							if user.StoragePets == nil {
-								user.StoragePets = []userdb.Pet{}
-							}
-							user.StoragePets = append(user.StoragePets, newPet)
+							addGrantedPetToBagOrStorage(user, newPet)
 							if ctx.GameServer.UserDB != nil {
 								ctx.GameServer.UserDB.RecordCatch(ctx.UserID, rewardPetID)
 							}
 							logger.Info(fmt.Sprintf("[2405] 首次击败暗黑武斗场 BOSS PetID=%d，奖励精灵 PetID=%d CatchTime=%d", battle.EnemyID, rewardPetID, newCatchTime))
 							body8004 := buildBossMonster8004Body(0, uint32(rewardPetID), uint32(newCatchTime), 0, 0)
 							ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, 0, body8004)
+							maybeGrantDarkPortalTitleIfConfigured(ctx, user, battle.EnemyID)
 						} else if rewardItemID > 0 {
 							// 奖励精元
 							if user.Items == nil {
@@ -18195,6 +18738,7 @@ afterEnemyTurn:
 								// 推送 CMD 8004 通知客户端弹窗显示获得精元
 								body8004 := buildBossMonster8004Body(0, 0, 0, uint32(rewardItemID), 1)
 								ctx.GameServer.SendResponse(ctx.ClientData, 8004, ctx.UserID, 0, body8004)
+								maybeGrantDarkPortalTitleIfConfigured(ctx, user, battle.EnemyID)
 							} else {
 								// 背包中已有精元或对应的精灵，记录击败成就但不给予奖励
 								user.DefeatedSPTBossIds = append(user.DefeatedSPTBossIds, battle.EnemyID)
@@ -18205,11 +18749,13 @@ afterEnemyTurn:
 									reason = "已有对应精灵"
 								}
 								logger.Info(fmt.Sprintf("[2405] 击败暗黑武斗场 BOSS PetID=%d，但%s，不给予精元奖励 ItemID=%d", battle.EnemyID, reason, rewardItemID))
+								maybeGrantDarkPortalTitleIfConfigured(ctx, user, battle.EnemyID)
 							}
 						} else {
 							// 无奖励，仅记录击败成就
 							user.DefeatedSPTBossIds = append(user.DefeatedSPTBossIds, battle.EnemyID)
 							logger.Info(fmt.Sprintf("[2405] 击败暗黑武斗场 BOSS PetID=%d，无奖励", battle.EnemyID))
+							maybeGrantDarkPortalTitleIfConfigured(ctx, user, battle.EnemyID)
 						}
 					}
 				} else if _, ok := darkPortalBossRewards[uint32(battle.EnemyID)]; ok {
@@ -18224,6 +18770,7 @@ afterEnemyTurn:
 					}
 					if !alreadyDefeated {
 						user.DefeatedSPTBossIds = append(user.DefeatedSPTBossIds, battle.EnemyID)
+						maybeGrantDarkPortalTitleIfConfigured(ctx, user, battle.EnemyID)
 					}
 				}
 			}
@@ -18389,10 +18936,7 @@ afterEnemyTurn:
 					newPet := userdb.Pet{
 						ID: entry.RewardPetID, CatchTime: newCatchTime, Level: 1, DV: rand.Intn(32), Nature: rand.Intn(25), Exp: 0, Name: "",
 					}
-					if user.StoragePets == nil {
-						user.StoragePets = []userdb.Pet{}
-					}
-					user.StoragePets = append(user.StoragePets, newPet)
+					addGrantedPetToBagOrStorage(user, newPet)
 					if ctx.GameServer.UserDB != nil {
 						ctx.GameServer.UserDB.RecordCatch(ctx.UserID, entry.RewardPetID)
 					}
@@ -18449,10 +18993,7 @@ afterEnemyTurn:
 					newPet := userdb.Pet{
 						ID: rewardPetID, CatchTime: newCatchTime, Level: 1, DV: rand.Intn(32), Nature: rand.Intn(25), Exp: 0, Name: "",
 					}
-					if user.StoragePets == nil {
-						user.StoragePets = []userdb.Pet{}
-					}
-					user.StoragePets = append(user.StoragePets, newPet)
+					addGrantedPetToBagOrStorage(user, newPet)
 					if ctx.GameServer.UserDB != nil {
 						ctx.GameServer.UserDB.RecordCatch(ctx.UserID, rewardPetID)
 					}
@@ -18688,8 +19229,78 @@ func handleUsePetItem(ctx *gameserver.HandlerContext) {
 		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
 	}
 
-	// 若在战斗中，使用 HP 药也视为本回合行动，立刻结算敌方一次攻击（与 2407 切换精灵一致）
-	if inBattle && battle.IsActive {
+	// PvP：使用道具也视为本回合行动（不出招）。当对方已选择技能并在 2405 等待时，这里需触发一次回合结算；
+	// 若双方本回合都未出招（例如双方都用道具），则补发一次零伤害 2505 推进回合。
+	if inBattle && battle != nil && battle.IsActive && battle.OpponentUserID != 0 {
+		gs := ctx.GameServer
+		opponentUID := int64(0)
+		var opponentSkillID uint32
+		var needResolveByOpponentSkill bool
+		var needZeroTurn bool
+
+		gs.BattleMu.Lock()
+		curBattle, ok := gs.BattleStates[ctx.UserID]
+		if !ok || curBattle == nil || !curBattle.IsActive || curBattle.OpponentUserID == 0 {
+			gs.BattleMu.Unlock()
+			return
+		}
+		// 标记本回合已行动（用道具），不出招
+		curBattle.PvPHasSelected = true
+		curBattle.PvPSelectedSkillID = 0
+
+		opponentUID = curBattle.OpponentUserID
+		opponentBattle, okOpp := gs.BattleStates[opponentUID]
+		if okOpp && opponentBattle != nil && opponentBattle.IsActive {
+			if opponentBattle.PvPHasSelected {
+				opponentSkillID = opponentBattle.PvPSelectedSkillID
+				if opponentSkillID != 0 {
+					needResolveByOpponentSkill = true
+				} else if !opponentBattle.PvPChangedPetThisRound {
+					// 对方也用道具（或其他“无技能行动”）：补发零伤害 2505
+					needZeroTurn = true
+				} else {
+					// 对方本回合主动切换精灵且未出招：仍视为双方都无技能行动，补发零伤害 2505
+					needZeroTurn = true
+				}
+			} else if opponentBattle.PvPChangedPetThisRound {
+				// 对方本回合已主动换宠：道具 + 换宠 也算一回合（无技能），补发零伤害 2505
+				needZeroTurn = true
+			}
+			if needZeroTurn {
+				// 清理本回合标记，准备下一回合
+				curBattle.PvPHasSelected = false
+				curBattle.PvPSelectedSkillID = 0
+				curBattle.PvPChangedPetThisRound = false
+				opponentBattle.PvPHasSelected = false
+				opponentBattle.PvPSelectedSkillID = 0
+				opponentBattle.PvPChangedPetThisRound = false
+				gs.BattleMu.Unlock()
+				sendPvPZeroTurn2505(gs, ctx.UserID, opponentUID, curBattle, opponentBattle)
+				return
+			}
+		}
+		gs.BattleMu.Unlock()
+
+		if needResolveByOpponentSkill && opponentUID != 0 && opponentSkillID != 0 {
+			// 触发：让“已选择技能的一方”再执行一次 2405 结算（不会覆盖状态，只会完成本回合结算并广播 2505）
+			if opponentClient := gs.GetClientByUserID(opponentUID); opponentClient != nil {
+				b := make([]byte, 4)
+				binary.BigEndian.PutUint32(b[0:4], opponentSkillID)
+				handleUseSkill(&gameserver.HandlerContext{
+					UserID:     opponentUID,
+					CmdID:      2405,
+					SeqID:      0,
+					Body:       b,
+					ClientData: opponentClient,
+					GameServer: gs,
+				})
+			}
+		}
+		return
+	}
+
+	// PvE：若在战斗中，使用 HP 药也视为本回合行动，立刻结算敌方一次攻击（与 2407 切换精灵一致）
+	if inBattle && battle != nil && battle.IsActive {
 		petMgr := gamepets.GetInstance()
 
 		ctx.GameServer.BattleMu.Lock()
@@ -19101,6 +19712,10 @@ func handleChangePet(ctx *gameserver.HandlerContext) {
 	// 这样战斗结束后背包首发仍然与客户端显示一致。
 	playerWasDead := false // 上一只精灵是否被击败（强制切换 vs 主动切换）
 	var opponentUID int64  // PvP 时对方 UID，用于推送 2407 使对方客户端更新“对方换宠”显示
+	needZeroTurn := false
+	needResolveByOpponentSkill := false
+	var opponentSkillID uint32
+	var battleForZero, opponentBattleForZero *gameserver.BattleState
 	ctx.GameServer.BattleMu.Lock()
 	if battle, exists := ctx.GameServer.BattleStates[ctx.UserID]; exists && battle != nil && battle.IsActive {
 		playerWasDead = (battle.PlayerHP == 0) // 在更新前保存：被击败后切换视为新战斗开始
@@ -19158,6 +19773,47 @@ func handleChangePet(ctx *gameserver.HandlerContext) {
 		}
 		battle.PlayerHP = uint32(hp)
 		battle.PlayerMaxHP = uint32(petStats.MaxHP)
+
+		// ==================== PvP：切换精灵也视为本回合行动 ====================
+		// - 被击败后的强制换宠（playerWasDead==true）不计为“主动行动”，避免误结束回合；
+		// - 主动换宠时：标记 PvPChangedPetThisRound=true；
+		//   若对方已在 2405 选择技能并等待，则这里触发一次对方 2405 结算；
+		//   若双方都主动换宠（或对方用道具/无技能行动），则补发一次零伤害 2505 推进回合。
+		if opponentUID != 0 && !playerWasDead {
+			battle.PvPChangedPetThisRound = true
+			if opponentBattle, ok := ctx.GameServer.BattleStates[opponentUID]; ok && opponentBattle != nil && opponentBattle.IsActive {
+				// 双方都主动换宠：补发零伤害 2505 结束本回合
+				if opponentBattle.PvPChangedPetThisRound {
+					needZeroTurn = true
+					// 清除本回合标记，准备下一回合
+					battle.PvPChangedPetThisRound = false
+					opponentBattle.PvPChangedPetThisRound = false
+					battle.PvPHasSelected = false
+					battle.PvPSelectedSkillID = 0
+					opponentBattle.PvPHasSelected = false
+					opponentBattle.PvPSelectedSkillID = 0
+					battleForZero = battle
+					opponentBattleForZero = opponentBattle
+				} else if opponentBattle.PvPHasSelected {
+					// 对方已行动：若对方选择了技能，则触发对方结算；否则（用道具等无技能行动）补发零伤害 2505
+					if opponentBattle.PvPSelectedSkillID != 0 {
+						needResolveByOpponentSkill = true
+						opponentSkillID = opponentBattle.PvPSelectedSkillID
+					} else {
+						needZeroTurn = true
+						// 清除本回合标记，准备下一回合
+						battle.PvPChangedPetThisRound = false
+						opponentBattle.PvPChangedPetThisRound = false
+						battle.PvPHasSelected = false
+						battle.PvPSelectedSkillID = 0
+						opponentBattle.PvPHasSelected = false
+						opponentBattle.PvPSelectedSkillID = 0
+						battleForZero = battle
+						opponentBattleForZero = opponentBattle
+					}
+				}
+			}
+		}
 	}
 	ctx.GameServer.BattleMu.Unlock()
 
@@ -19173,6 +19829,29 @@ func handleChangePet(ctx *gameserver.HandlerContext) {
 		time.Sleep(50 * time.Millisecond)
 		if otherClient := ctx.GameServer.GetClientByUserID(opponentUID); otherClient != nil {
 			ctx.GameServer.SendResponse(otherClient, 2407, opponentUID, 0, body)
+		}
+	}
+
+	// PvP：若本回合需要补发“零伤害 2505”或触发对方技能结算，在 2407 推送之后执行，避免客户端模型/血条顺序错乱。
+	if opponentUID != 0 {
+		if needZeroTurn && battleForZero != nil && opponentBattleForZero != nil {
+			// 让切换信息先被客户端处理
+			time.Sleep(30 * time.Millisecond)
+			sendPvPZeroTurn2505(ctx.GameServer, ctx.UserID, opponentUID, battleForZero, opponentBattleForZero)
+		} else if needResolveByOpponentSkill && opponentSkillID != 0 {
+			// 触发：让“已选择技能的一方”再执行一次 2405 结算
+			if opponentClient := ctx.GameServer.GetClientByUserID(opponentUID); opponentClient != nil {
+				b := make([]byte, 4)
+				binary.BigEndian.PutUint32(b[0:4], opponentSkillID)
+				handleUseSkill(&gameserver.HandlerContext{
+					UserID:     opponentUID,
+					CmdID:      2405,
+					SeqID:      0,
+					Body:       b,
+					ClientData: opponentClient,
+					GameServer: ctx.GameServer,
+				})
+			}
 		}
 	}
 
@@ -19670,6 +20349,7 @@ func handleCatchMonster(ctx *gameserver.HandlerContext) {
 	newPet := userdb.Pet{
 		ID:        bossID,
 		CatchTime: int(newCatchTime),
+		Shiny:     exists && battle != nil && battle.EnemyShiny,
 		Level:     catchLevel, // 等级与对战中的敌人等级一致
 		DV:        randomDV,
 		Nature:    randomNature,
@@ -19677,16 +20357,10 @@ func handleCatchMonster(ctx *gameserver.HandlerContext) {
 		Name:      "",
 	}
 	// 野外/副本捕捉的精灵默认不带特性；后续需通过“特性开启芯片”等道具获得特性
-	// 背包已满 6 只则放入仓库，否则放入背包（与 SPT 奖励精灵一致）
-	if len(user.Pets) >= 6 {
-		if user.StoragePets == nil {
-			user.StoragePets = []userdb.Pet{}
-		}
-		user.StoragePets = append(user.StoragePets, newPet)
-		logger.Info(fmt.Sprintf("[2409] 捕捉成功: PetID=%d Level=%d Capsule=%d CatchTime=%d -> 仓库(背包已满)", bossID, catchLevel, capsuleID, newCatchTime))
+	if addPetToBagOrStorage(user, newPet) {
+		logger.Info(fmt.Sprintf("[2409] 捕捉成功: PetID=%d Level=%d Shiny=%v Capsule=%d CatchTime=%d -> 背包", bossID, catchLevel, newPet.Shiny, capsuleID, newCatchTime))
 	} else {
-		user.Pets = append(user.Pets, newPet)
-		logger.Info(fmt.Sprintf("[2409] 捕捉成功: PetID=%d Level=%d Capsule=%d CatchTime=%d -> 背包", bossID, catchLevel, capsuleID, newCatchTime))
+		logger.Info(fmt.Sprintf("[2409] 捕捉成功: PetID=%d Level=%d Shiny=%v Capsule=%d CatchTime=%d -> 仓库(背包已满)", bossID, catchLevel, newPet.Shiny, capsuleID, newCatchTime))
 	}
 
 	// 清理战斗状态
@@ -19729,10 +20403,44 @@ func calculateSuperNonoTypeByLevel(level int) int {
 	return 1 // 形态1：等级1-3
 }
 
-// updateSuperNonoTypeByLevel 根据超能等级更新形态
+// getNonoRemainingDays 计算超能剩余天数（向上取整，最少 0）
+func getNonoRemainingDays(user *userdb.GameData) int {
+	if user == nil || user.Nono.VipEndTime <= 0 {
+		return 0
+	}
+	now := time.Now().Unix()
+	if user.Nono.VipEndTime <= now {
+		return 0
+	}
+	remainSec := user.Nono.VipEndTime - now
+	days := int((remainSec + 86400 - 1) / 86400)
+	if days < 0 {
+		return 0
+	}
+	return days
+}
+
+// updateSuperNonoTypeByLevel 根据超能等级与剩余天数更新形态
+// 规则：
+// - SuperEnergy = 剩余天数
+// - 剩余天数 <= 0：非超能形态(0)
+// - 剩余天数 > 365：年费形态(5)
+// - 其余：按超能等级映射 1~5
 func updateSuperNonoTypeByLevel(user *userdb.GameData) {
-	calculatedType := calculateSuperNonoTypeByLevel(user.Nono.SuperLevel)
-	user.Nono.SuperNono = calculatedType
+	if user == nil {
+		return
+	}
+	days := getNonoRemainingDays(user)
+	user.Nono.SuperEnergy = days
+	if days <= 0 {
+		user.Nono.SuperNono = 0
+		return
+	}
+	if days > 365 {
+		user.Nono.SuperNono = 5
+		return
+	}
+	user.Nono.SuperNono = calculateSuperNonoTypeByLevel(user.Nono.SuperLevel)
 }
 
 // registerSuperNonoToCache 将当前连接的超能等级登记到资源服缓存中，供 /resource/nono/super/* 按等级换算形态
@@ -20142,14 +20850,30 @@ func handleNonoExeList(ctx *gameserver.HandlerContext) {
 // handleNonoCharge CMD 9016 NONO充电
 func handleNonoCharge(ctx *gameserver.HandlerContext) {
 	user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
-	if user.Nono.SuperEnergy+1000 > 99999 {
-		user.Nono.SuperEnergy = 99999
-	} else {
-		user.Nono.SuperEnergy += 1000
+	// 新规则：100 金豆续费 30 天，可无限叠加
+	const rechargeCostGold = 100
+	const rechargeDays = 30
+	if user.Gold < rechargeCostGold {
+		logger.Warning(fmt.Sprintf("[9016] NONO续费失败(金豆不足): uid=%d gold=%d need=%d", ctx.UserID, user.Gold, rechargeCostGold))
+		ctx.GameServer.SendResponse(ctx.ClientData, 9016, ctx.UserID, ctx.SeqID, []byte{})
+		return
 	}
+	user.Gold -= rechargeCostGold
+	now := time.Now().Unix()
+	base := now
+	if user.Nono.VipEndTime > base {
+		base = user.Nono.VipEndTime
+	}
+	user.Nono.VipEndTime = base + int64(rechargeDays*24*60*60)
+	if user.Nono.SuperLevel < 1 {
+		user.Nono.SuperLevel = 1
+	}
+	updateSuperNonoTypeByLevel(user)
 	if ctx.GameServer.UserDB != nil {
 		ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
 	}
+	logger.Info(fmt.Sprintf("[9016] NONO续费成功: uid=%d costGold=%d remainDays=%d vipEnd=%d superLevel=%d superNono=%d",
+		ctx.UserID, rechargeCostGold, user.Nono.SuperEnergy, user.Nono.VipEndTime, user.Nono.SuperLevel, user.Nono.SuperNono))
 	ctx.GameServer.SendResponse(ctx.ClientData, 9016, ctx.UserID, ctx.SeqID, []byte{})
 }
 
@@ -21116,6 +21840,28 @@ func handlePetShow(ctx *gameserver.HandlerContext) {
 		}
 	}
 
+	// 计算异色标记（背包/仓库都查）
+	if catchTime > 0 {
+		for _, pet := range user.Pets {
+			if uint32(pet.CatchTime) == catchTime {
+				if pet.Shiny {
+					petShiny = 1
+				}
+				break
+			}
+		}
+		if petShiny == 0 && user.StoragePets != nil {
+			for _, pet := range user.StoragePets {
+				if uint32(pet.CatchTime) == catchTime {
+					if pet.Shiny {
+						petShiny = 1
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// 构建响应
 	body := make([]byte, 28)
 	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
@@ -21123,7 +21869,7 @@ func handlePetShow(ctx *gameserver.HandlerContext) {
 	binary.BigEndian.PutUint32(body[8:12], petID)
 	binary.BigEndian.PutUint32(body[12:16], reqFlag)
 	binary.BigEndian.PutUint32(body[16:20], petDV)
-	binary.BigEndian.PutUint32(body[20:24], petShiny) // shiny，占位，当前未实现持久化异色
+	binary.BigEndian.PutUint32(body[20:24], petShiny)
 	binary.BigEndian.PutUint32(body[24:28], 0)        // skinID = 0，暂不区分皮肤
 
 	ctx.GameServer.SendResponse(ctx.ClientData, 2305, ctx.UserID, ctx.SeqID, body)
@@ -22371,7 +23117,8 @@ func handleGetSimUserInfo(ctx *gameserver.HandlerContext) {
 	putU32(uint32(user.TeacherID))
 	putU32(uint32(user.StudentID))
 	putU32(uint32(user.GraduationCount))
-	putU32(uint32(user.Nono.VipLevel))
+	// 2051 的该字段前端用于显示“X级超能NoNo”
+	putU32(uint32(user.Nono.SuperLevel))
 
 	// 战队相关（当前未实现）
 	putU32(0) // teamId
@@ -22541,6 +23288,40 @@ func handleFitmentUsering(ctx *gameserver.HandlerContext) {
 	if fitments == nil {
 		fitments = []userdb.Fitment{}
 	}
+	// 读取时自愈：过滤非法家具数据，避免前端进入基地时因脏数据卡住
+	oldLen := len(fitments)
+	cleaned := make([]userdb.Fitment, 0, len(fitments))
+	changed := false
+	for _, f := range fitments {
+		if f.ID < 500001 {
+			changed = true
+			continue
+		}
+		if f.X < 0 || f.Y < 0 || f.Dir < 0 || f.Status < 0 {
+			if f.X < 0 {
+				f.X = 0
+			}
+			if f.Y < 0 {
+				f.Y = 0
+			}
+			if f.Dir < 0 {
+				f.Dir = 0
+			}
+			if f.Status < 0 {
+				f.Status = 0
+			}
+			changed = true
+		}
+		cleaned = append(cleaned, f)
+	}
+	if changed {
+		user.Fitments = cleaned
+		fitments = cleaned
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(targetUserID, user)
+		}
+		logger.Warning(fmt.Sprintf("[10006] 检测并修复脏家具数据: owner=%d old=%d new=%d", targetUserID, oldLen, len(cleaned)))
+	}
 
 	roomID := targetUserID // 房间ID默认使用用户ID
 
@@ -22567,6 +23348,302 @@ func handleFitmentUsering(ctx *gameserver.HandlerContext) {
 
 	ctx.GameServer.SendResponse(ctx.ClientData, 10006, ctx.UserID, ctx.SeqID, body)
 	logger.Info(fmt.Sprintf("[10006] 正在使用的家具: owner=%d visitor=%d count=%d", targetUserID, ctx.UserID, len(fitments)))
+}
+
+// handleHeadGetUsedInfo CMD 2951 总部已使用家具
+// 请求: teamID(4)（可选）
+// 响应: teamID(4) + headquartersID(4) + count(4) + [id(4)+x(4)+y(4)+dir(4)+status(4)]*count
+func handleHeadGetUsedInfo(ctx *gameserver.HandlerContext) {
+	teamID := int64(0)
+	if len(ctx.Body) >= 4 {
+		teamID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	if teamID == 0 {
+		if team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID); team != nil {
+			teamID = team.ID
+		}
+	}
+	if teamID == 0 {
+		teamID = ctx.UserID
+	}
+	ownerUserID := ctx.UserID
+	if team := ctx.GameServer.UserDB.GetTeam(teamID); team != nil && team.LeaderID > 0 {
+		ownerUserID = team.LeaderID
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ownerUserID)
+	fitments := user.HeadFitments
+	if fitments == nil {
+		fitments = []userdb.Fitment{}
+	}
+
+	body := make([]byte, 0, 12+len(fitments)*20)
+	putU32 := func(v uint32) {
+		t := make([]byte, 4)
+		binary.BigEndian.PutUint32(t, v)
+		body = append(body, t...)
+	}
+	putU32(uint32(teamID))
+	putU32(uint32(teamID)) // headquartersID
+	putU32(uint32(len(fitments)))
+	for _, fitment := range fitments {
+		putU32(uint32(fitment.ID))
+		putU32(uint32(fitment.X))
+		putU32(uint32(fitment.Y))
+		putU32(uint32(fitment.Dir))
+		putU32(uint32(fitment.Status))
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 2951, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2951] 总部已摆放读取: operator=%d teamID=%d owner=%d count=%d", ctx.UserID, teamID, ownerUserID, len(fitments)))
+}
+
+// handleHeadGetAllInfo CMD 2952 总部仓库家具
+// 请求: teamID(4)（可选）
+// 响应（精简兼容）: teamID(4) + count(4) + [id(4)]*count
+func handleHeadGetAllInfo(ctx *gameserver.HandlerContext) {
+	teamID := int64(0)
+	if len(ctx.Body) >= 4 {
+		teamID = int64(binary.BigEndian.Uint32(ctx.Body[0:4]))
+	}
+	if teamID == 0 {
+		if team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID); team != nil {
+			teamID = team.ID
+		}
+	}
+	if teamID == 0 {
+		teamID = ctx.UserID
+	}
+	ownerUserID := ctx.UserID
+	if team := ctx.GameServer.UserDB.GetTeam(teamID); team != nil && team.LeaderID > 0 {
+		ownerUserID = team.LeaderID
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(ownerUserID)
+	allFitments := user.HeadAllFitments
+	if ownerUserID == ctx.UserID && len(allFitments) == 0 && len(user.AllFitments) > 0 {
+		// 兼容旧数据：首次访问总部仓库时，把旧基地仓库复制一份到总部仓库，后续独立演进。
+		allFitments = append([]userdb.Fitment{}, user.AllFitments...)
+		user.HeadAllFitments = allFitments
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(ownerUserID, user)
+		}
+	}
+	if allFitments == nil {
+		allFitments = []userdb.Fitment{}
+	}
+
+	body := make([]byte, 8+len(allFitments)*4)
+	binary.BigEndian.PutUint32(body[0:4], uint32(teamID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(allFitments)))
+	off := 8
+	for _, fitment := range allFitments {
+		binary.BigEndian.PutUint32(body[off:off+4], uint32(fitment.ID))
+		off += 4
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 2952, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2952] 总部仓库读取: operator=%d teamID=%d owner=%d count=%d", ctx.UserID, teamID, ownerUserID, len(allFitments)))
+}
+
+// handleHeadBuy CMD 2953 总部购买家具
+// 请求: itemID(4) + count(4)
+// 响应: coins(4) + itemID(4) + count(4)
+func handleHeadBuy(ctx *gameserver.HandlerContext) {
+	itemID := uint32(0)
+	count := uint32(1)
+	if len(ctx.Body) >= 8 {
+		itemID = binary.BigEndian.Uint32(ctx.Body[0:4])
+		count = binary.BigEndian.Uint32(ctx.Body[4:8])
+	}
+	if count == 0 {
+		count = 1
+	}
+	if itemID == 0 {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2953, ctx.UserID, ctx.SeqID, 10017)
+		return
+	}
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil || team.LeaderID != ctx.UserID {
+		// 对齐前端权限：仅战队队长可配置（购买/编辑）总部家具
+		logger.Info(fmt.Sprintf("[2953] 总部购买拒绝: operator=%d reason=not_leader", ctx.UserID))
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2953, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+
+	user := ctx.GameServer.GetOrCreateUser(team.LeaderID)
+	if user == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2953, ctx.UserID, ctx.SeqID, 10017)
+		return
+	}
+
+	unitPrice := GetItemPrice(int(itemID))
+	if unitPrice < 0 {
+		unitPrice = 0
+	}
+	totalCost := unitPrice * int(count)
+	if totalCost > 0 && user.Coins < totalCost {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2953, ctx.UserID, ctx.SeqID, 10017)
+		return
+	}
+	if totalCost > 0 {
+		user.Coins -= totalCost
+	}
+
+	if user.HeadAllFitments == nil {
+		user.HeadAllFitments = []userdb.Fitment{}
+	}
+	for i := uint32(0); i < count; i++ {
+		user.HeadAllFitments = append(user.HeadAllFitments, userdb.Fitment{ID: int(itemID)})
+	}
+
+	if ctx.GameServer.UserDB != nil {
+		ctx.GameServer.UserDB.SaveGameData(team.LeaderID, user)
+	}
+
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(user.Coins))
+	binary.BigEndian.PutUint32(body[4:8], itemID)
+	binary.BigEndian.PutUint32(body[8:12], count)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2953, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2953] 总部购买成功: operator=%d teamID=%d owner=%d itemID=%d count=%d coins=%d",
+		ctx.UserID, team.ID, team.LeaderID, itemID, count, user.Coins))
+}
+
+// handleHeadSetInfo CMD 2954 总部设置家具
+// 兼容两种请求：
+// 1) count(4)+[id/x/y/dir/status]*count
+// 2) 单条 id(4)+x(4)+y(4)+dir(4)+status(4)
+// 响应: 空包（成功）
+func handleHeadSetInfo(ctx *gameserver.HandlerContext) {
+	team := ctx.GameServer.UserDB.FindTeamByUserID(ctx.UserID)
+	if team == nil || team.LeaderID != ctx.UserID {
+		logger.Info(fmt.Sprintf("[2954] 总部保存拒绝: operator=%d reason=not_leader", ctx.UserID))
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2954, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+	user := ctx.GameServer.GetOrCreateUser(team.LeaderID)
+	if user == nil {
+		ctx.GameServer.SendErrorResponse(ctx.ClientData, 2954, ctx.UserID, ctx.SeqID, 1)
+		return
+	}
+
+	parseOne := func(body []byte, off int) (userdb.Fitment, int, bool) {
+		if len(body) < off+20 {
+			return userdb.Fitment{}, off, false
+		}
+		f := userdb.Fitment{
+			ID:     int(binary.BigEndian.Uint32(body[off : off+4])),
+			X:      int(binary.BigEndian.Uint32(body[off+4 : off+8])),
+			Y:      int(binary.BigEndian.Uint32(body[off+8 : off+12])),
+			Dir:    int(binary.BigEndian.Uint32(body[off+12 : off+16])),
+			Status: int(binary.BigEndian.Uint32(body[off+16 : off+20])),
+		}
+		return f, off + 20, true
+	}
+
+	newFitments := make([]userdb.Fitment, 0)
+	normalizeFitment := func(f userdb.Fitment) (userdb.Fitment, bool) {
+		if f.ID < 500000 {
+			return userdb.Fitment{}, false
+		}
+		if f.X < 0 {
+			f.X = 0
+		}
+		if f.Y < 0 {
+			f.Y = 0
+		}
+		if f.Dir < 0 {
+			f.Dir = 0
+		}
+		if f.Status < 0 {
+			f.Status = 0
+		}
+		return f, true
+	}
+	if len(ctx.Body) >= 24 {
+		count := int(binary.BigEndian.Uint32(ctx.Body[0:4]))
+		expectLen := 4 + count*20
+		if count > 0 && len(ctx.Body) >= expectLen {
+			off := 4
+			for i := 0; i < count; i++ {
+				f, next, ok := parseOne(ctx.Body, off)
+				if !ok {
+					break
+				}
+				if nf, valid := normalizeFitment(f); valid {
+					newFitments = append(newFitments, nf)
+				}
+				off = next
+			}
+		}
+	}
+	if len(newFitments) == 0 && len(ctx.Body) >= 20 {
+		tryOffsets := []int{0}
+		if len(ctx.Body) >= 24 {
+			tryOffsets = []int{4, 0}
+		}
+		for _, off := range tryOffsets {
+			f, _, ok := parseOne(ctx.Body, off)
+			nf, valid := normalizeFitment(f)
+			if !ok || !valid {
+				continue
+			}
+			// 单条更新：按 ID 替换或追加
+			replaced := false
+			for i, current := range user.HeadFitments {
+				if current.ID == nf.ID {
+					user.HeadFitments[i] = nf
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				user.HeadFitments = append(user.HeadFitments, nf)
+			}
+			// 兜底：若仓库中不存在该家具，自动补一件，避免“可摆放但仓库计数为0”导致后续界面异常。
+			existsInAll := false
+			for _, af := range user.HeadAllFitments {
+				if af.ID == nf.ID {
+					existsInAll = true
+					break
+				}
+			}
+			if !existsInAll {
+				user.HeadAllFitments = append(user.HeadAllFitments, userdb.Fitment{ID: nf.ID})
+			}
+			if ctx.GameServer.UserDB != nil {
+				ctx.GameServer.UserDB.SaveGameData(team.LeaderID, user)
+			}
+			ctx.GameServer.SendResponse(ctx.ClientData, 2954, ctx.UserID, ctx.SeqID, []byte{})
+			logger.Info(fmt.Sprintf("[2954] 总部保存成功(单条): operator=%d teamID=%d owner=%d itemID=%d usedCount=%d allCount=%d",
+				ctx.UserID, team.ID, team.LeaderID, nf.ID, len(user.HeadFitments), len(user.HeadAllFitments)))
+			return
+		}
+	}
+
+	if len(newFitments) > 0 {
+		user.HeadFitments = newFitments
+		// 批量保存时同步补齐仓库，保持总部“已摆放 <= 仓库总量”关系不被破坏。
+		countByID := map[int]int{}
+		for _, af := range user.HeadAllFitments {
+			countByID[af.ID]++
+		}
+		usedByID := map[int]int{}
+		for _, hf := range user.HeadFitments {
+			usedByID[hf.ID]++
+		}
+		for id, used := range usedByID {
+			for countByID[id] < used {
+				user.HeadAllFitments = append(user.HeadAllFitments, userdb.Fitment{ID: id})
+				countByID[id]++
+			}
+		}
+		if ctx.GameServer.UserDB != nil {
+			ctx.GameServer.UserDB.SaveGameData(team.LeaderID, user)
+		}
+		logger.Info(fmt.Sprintf("[2954] 总部保存成功(批量): operator=%d teamID=%d owner=%d usedCount=%d allCount=%d",
+			ctx.UserID, team.ID, team.LeaderID, len(user.HeadFitments), len(user.HeadAllFitments)))
+	}
+	ctx.GameServer.SendResponse(ctx.ClientData, 2954, ctx.UserID, ctx.SeqID, []byte{})
 }
 
 // handleBuyFitment CMD 10004 购买家具（基地）
@@ -22667,67 +23744,67 @@ func handleChristmasActivityAction(ctx *gameserver.HandlerContext) {
 		values = map[uint32]uint32{}
 		storyValueCache[ctx.UserID] = values
 	}
-		if len(ctx.Body) >= 8 {
-			a := binary.BigEndian.Uint32(ctx.Body[0:4])
-			b := binary.BigEndian.Uint32(ctx.Body[4:8])
-			switch ctx.CmdID {
-			case 43300:
-				values[43300000+a] = b
-				if a == 17 {
-					values[104641] = (values[104641] & ^uint32(0x0F)) | (b - 5)
+	if len(ctx.Body) >= 8 {
+		a := binary.BigEndian.Uint32(ctx.Body[0:4])
+		b := binary.BigEndian.Uint32(ctx.Body[4:8])
+		switch ctx.CmdID {
+		case 43300:
+			values[43300000+a] = b
+			if a == 17 {
+				values[104641] = (values[104641] & ^uint32(0x0F)) | (b - 5)
+			}
+			if a == 18 {
+				values[104641] = (values[104641] & ^uint32(0x0F)) | b
+			}
+		case 43305:
+			values[43305000+a] = b
+			values[43305999]++
+			switch a {
+			case 18:
+				switch {
+				case b == 1:
+					values[104641] = (values[104641] & ^uint32(0x0F)) | 1
+				case b == 2:
+					values[104641] = (values[104641] & ^uint32(0x0F)) | 2
+				case b == 3:
+					values[104641] = (values[104641] & ^uint32(0x0F)) | 3
+				case b >= 4 && b <= 8:
+					bit := uint32(14 + (b - 3))
+					values[104641] |= 1 << bit
+					values[104641] = (values[104641] & ^uint32(0x0F)) | 4
+				case b == 9:
+					values[104641] = (values[104641] & ^uint32(0x0F)) | 5
+				case b == 10:
+					values[104641] = (values[104641] & ^uint32(0x0F)) | 6
 				}
-				if a == 18 {
-					values[104641] = (values[104641] & ^uint32(0x0F)) | b
-				}
-			case 43305:
-				values[43305000+a] = b
-				values[43305999]++
-				switch a {
-				case 18:
-					switch {
-					case b == 1:
-						values[104641] = (values[104641] & ^uint32(0x0F)) | 1
-					case b == 2:
-						values[104641] = (values[104641] & ^uint32(0x0F)) | 2
-					case b == 3:
-						values[104641] = (values[104641] & ^uint32(0x0F)) | 3
-					case b >= 4 && b <= 8:
-						bit := uint32(14 + (b - 3))
-						values[104641] |= 1 << bit
-						values[104641] = (values[104641] & ^uint32(0x0F)) | 4
-					case b == 9:
-						values[104641] = (values[104641] & ^uint32(0x0F)) | 5
-					case b == 10:
-						values[104641] = (values[104641] & ^uint32(0x0F)) | 6
-					}
-				case 19:
-					switch b {
-					case 1:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 1
-					case 2:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 2
-					case 3:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 3
-					case 4:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 4
-					case 5:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 5
-					case 6:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 6
-					case 7:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 7
-					case 8:
-						values[10575] = (values[10575] & ^uint32(0x0F)) | 8
-					}
-				}
-			case 43306:
-				values[43306000+a] = b
-				values[43306999]++
-				if a == 4 && b >= 1 && b <= 6 {
-					values[10575] |= 1 << (b + 3)
+			case 19:
+				switch b {
+				case 1:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 1
+				case 2:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 2
+				case 3:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 3
+				case 4:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 4
+				case 5:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 5
+				case 6:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 6
+				case 7:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 7
+				case 8:
+					values[10575] = (values[10575] & ^uint32(0x0F)) | 8
 				}
 			}
+		case 43306:
+			values[43306000+a] = b
+			values[43306999]++
+			if a == 4 && b >= 1 && b <= 6 {
+				values[10575] |= 1 << (b + 3)
+			}
 		}
+	}
 	storyValueCacheMu.Unlock()
 
 	body := make([]byte, len(ctx.Body))
@@ -23840,7 +24917,7 @@ func handleChangeHistoryChoice(ctx *gameserver.HandlerContext) {
 	if len(ctx.Body) >= 8 {
 		storyID := binary.BigEndian.Uint32(ctx.Body[0:4])
 		choice := binary.BigEndian.Uint32(ctx.Body[4:8])
-			values[43587000+storyID] = choice
+		values[43587000+storyID] = choice
 	}
 	storyValueCacheMu.Unlock()
 
@@ -23934,69 +25011,69 @@ func handleFreshLeaveFightLevel(ctx *gameserver.HandlerContext) {
 
 // handleMLFightBoss CMD 2442 迷宫/机械类地图 Boss 交互。
 func handleMLFightBoss(ctx *gameserver.HandlerContext) {
-        body := make([]byte, 8+len(ctx.Body))
-        binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
-        binary.BigEndian.PutUint32(body[4:8], uint32(len(ctx.Body)))
-        copy(body[8:], ctx.Body)
-        ctx.GameServer.SendResponse(ctx.ClientData, 2442, ctx.UserID, ctx.SeqID, body)
-        logger.Info(fmt.Sprintf("[2442] ML 挑战 Boss: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+	body := make([]byte, 8+len(ctx.Body))
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(ctx.Body)))
+	copy(body[8:], ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2442, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2442] ML 挑战 Boss: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
 }
 
 // handleMLBossState CMD 2444 米咔Boss状态
 func handleMLBossState(ctx *gameserver.HandlerContext) {
-        body := make([]byte, 8)
-        binary.BigEndian.PutUint32(body[0:4], 0)
-        binary.BigEndian.PutUint32(body[4:8], 0)
-        ctx.GameServer.SendResponse(ctx.ClientData, 2444, ctx.UserID, ctx.SeqID, body)
-        logger.Info(fmt.Sprintf("[2444] ML Boss状态: uid=%d", ctx.UserID))
+	body := make([]byte, 8)
+	binary.BigEndian.PutUint32(body[0:4], 0)
+	binary.BigEndian.PutUint32(body[4:8], 0)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2444, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2444] ML Boss状态: uid=%d", ctx.UserID))
 }
 
 // handleMLStepPos CMD 2445 迷宫步进位置上报。
 func handleMLStepPos(ctx *gameserver.HandlerContext) {
-        body := make([]byte, 8+len(ctx.Body))
-        binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
-        binary.BigEndian.PutUint32(body[4:8], uint32(len(ctx.Body)))
-        copy(body[8:], ctx.Body)
-        ctx.GameServer.SendResponse(ctx.ClientData, 2445, ctx.UserID, ctx.SeqID, body)
-        logger.Info(fmt.Sprintf("[2445] ML 步进位置: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
+	body := make([]byte, 8+len(ctx.Body))
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], uint32(len(ctx.Body)))
+	copy(body[8:], ctx.Body)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2445, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2445] ML 步进位置: uid=%d bodyLen=%d", ctx.UserID, len(ctx.Body)))
 }
 
 // handleMLGetPrize CMD 2446 迷宫领取奖励。
 func handleMLGetPrize(ctx *gameserver.HandlerContext) {
-        body := make([]byte, 12)
-        binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
-        binary.BigEndian.PutUint32(body[4:8], 1)
-        binary.BigEndian.PutUint32(body[8:12], 1)
-        ctx.GameServer.SendResponse(ctx.ClientData, 2446, ctx.UserID, ctx.SeqID, body)
-        logger.Info(fmt.Sprintf("[2446] ML 领取奖励: uid=%d", ctx.UserID))
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body[0:4], uint32(ctx.UserID))
+	binary.BigEndian.PutUint32(body[4:8], 1)
+	binary.BigEndian.PutUint32(body[8:12], 1)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2446, ctx.UserID, ctx.SeqID, body)
+	logger.Info(fmt.Sprintf("[2446] ML 领取奖励: uid=%d", ctx.UserID))
 }
 
 // handleSkillSort CMD 2328 技能排序
 func handleSkillSort(ctx *gameserver.HandlerContext) {
-        if len(ctx.Body) >= 8 {
-                catchTime := int(binary.BigEndian.Uint32(ctx.Body[0:4]))
-                skillCount := int(binary.BigEndian.Uint32(ctx.Body[4:8]))
-                if skillCount > 0 && len(ctx.Body) >= 8+skillCount*4 {
-                        user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
-                        for index := range user.Pets {
-                                if user.Pets[index].CatchTime != catchTime {
-                                        continue
-                                }
-                                newSkills := make([]int, 0, skillCount)
-                                for i := 0; i < skillCount; i++ {
-                                        off := 8 + i*4
-                                        newSkills = append(newSkills, int(binary.BigEndian.Uint32(ctx.Body[off:off+4])))
-                                }
-                                user.Pets[index].Skills = newSkills
-                                if ctx.GameServer.UserDB != nil {
-                                        ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
-                                }
-                                break
-                        }
-                }
-        }
-        body := make([]byte, 4)
-        ctx.GameServer.SendResponse(ctx.ClientData, 2328, ctx.UserID, ctx.SeqID, body)
+	if len(ctx.Body) >= 8 {
+		catchTime := int(binary.BigEndian.Uint32(ctx.Body[0:4]))
+		skillCount := int(binary.BigEndian.Uint32(ctx.Body[4:8]))
+		if skillCount > 0 && len(ctx.Body) >= 8+skillCount*4 {
+			user := ctx.GameServer.GetOrCreateUser(ctx.UserID)
+			for index := range user.Pets {
+				if user.Pets[index].CatchTime != catchTime {
+					continue
+				}
+				newSkills := make([]int, 0, skillCount)
+				for i := 0; i < skillCount; i++ {
+					off := 8 + i*4
+					newSkills = append(newSkills, int(binary.BigEndian.Uint32(ctx.Body[off:off+4])))
+				}
+				user.Pets[index].Skills = newSkills
+				if ctx.GameServer.UserDB != nil {
+					ctx.GameServer.UserDB.SaveGameData(ctx.UserID, user)
+				}
+				break
+			}
+		}
+	}
+	body := make([]byte, 4)
+	ctx.GameServer.SendResponse(ctx.ClientData, 2328, ctx.UserID, ctx.SeqID, body)
 }
 
 // handleGetNoNoPartyReward CMD 9331 诺诺派对奖励。
@@ -24066,10 +25143,64 @@ func handleStartPetWar(ctx *gameserver.HandlerContext) {
 
 		player1 := ctx.GameServer.GetOrCreateUser(player1UID)
 		player2 := ctx.GameServer.GetOrCreateUser(player2UID)
-		player1Indexes := choosePetWarIndexes(player1)
-		player2Indexes := choosePetWarIndexes(player2)
 
-		// 构建多精灵2503包体（双方从全部背包随机抽取 3 只参战）
+		// 精灵大乱斗：优先按照“双方可用精灵合计最多 12 只，从中随机抽取 6 只再随机分配给双方各 3 只”的规则，
+		// 仅在双方都至少携带 3 只精灵时启用；否则退回到各自从自己背包随机选择 3 只的旧逻辑。
+		var player1Indexes, player2Indexes []int
+		if len(player1.Pets) >= 3 && len(player2.Pets) >= 3 {
+			type candidate struct {
+				userID int64
+				index  int
+			}
+			candidates := make([]candidate, 0, 12)
+
+			// 每位玩家最多取前 6 只作为候选，符合“双方最多 12 只”规则
+			maxTake := func(total int) int {
+				if total > 6 {
+					return 6
+				}
+				return total
+			}
+			for i := 0; i < maxTake(len(player1.Pets)); i++ {
+				candidates = append(candidates, candidate{userID: player1UID, index: i})
+			}
+			for i := 0; i < maxTake(len(player2.Pets)); i++ {
+				candidates = append(candidates, candidate{userID: player2UID, index: i})
+			}
+
+			if len(candidates) >= 6 {
+				rand.Shuffle(len(candidates), func(i, j int) {
+					candidates[i], candidates[j] = candidates[j], candidates[i]
+				})
+				// 抽取前 6 只，前 3 分配给玩家1，后 3 分配给玩家2
+				selected := candidates[:6]
+				for idx, c := range selected {
+					if idx < 3 {
+						if c.userID == player1UID {
+							player1Indexes = append(player1Indexes, c.index)
+						} else {
+							player2Indexes = append(player2Indexes, c.index)
+						}
+					} else {
+						if c.userID == player2UID {
+							player2Indexes = append(player2Indexes, c.index)
+						} else {
+							player1Indexes = append(player1Indexes, c.index)
+						}
+					}
+				}
+				sort.Ints(player1Indexes)
+				sort.Ints(player2Indexes)
+			}
+		}
+
+		// 回退：若规则无法满足（例如有人不足 3 只或候选不足 6 只），则各自从自己背包随机选择最多 3 只
+		if len(player1Indexes) == 0 || len(player2Indexes) == 0 {
+			player1Indexes = choosePetWarIndexes(player1)
+			player2Indexes = choosePetWarIndexes(player2)
+		}
+
+		// 构建多精灵2503包体
 		setPetWarBattleStates(ctx.GameServer, player1UID, player2UID, player1Indexes, player2Indexes)
 		body2503P1, body2503P2 := buildPetWarNoteReadyToFight(ctx.GameServer, player1UID, player2UID, player1Indexes, player2Indexes)
 		ctx.GameServer.SendResponse(player1Client, 2503, player1UID, 0, body2503P1)
@@ -24164,7 +25295,7 @@ func buildPetWarNoteReadyToFight(gs *gameserver.GameServer, player1UID, player2U
 		if nick == "" {
 			nick = fmt.Sprintf("用户%d", uid)
 		}
-                for _, pet := range selectedPets {
+		for _, pet := range selectedPets {
 			level := pet.Level
 			if level <= 0 {
 				level = 5
@@ -24370,9 +25501,9 @@ func buildPetWarNoteStartFight(gs *gameserver.GameServer, player1UID, player2UID
 func setPetWarBattleStates(gs *gameserver.GameServer, player1UID, player2UID int64, player1Indexes, player2Indexes []int) {
 	petMgr := gamepets.GetInstance()
 
-        getPetsInfo := func(uid int64, indexes []int) (petIDs []int, hps, maxHps []int) {
-                u := gs.GetOrCreateUser(uid)
-                for _, pet := range getPetWarPetList(u, indexes) {
+	getPetsInfo := func(uid int64, indexes []int) (petIDs []int, hps, maxHps []int) {
+		u := gs.GetOrCreateUser(uid)
+		for _, pet := range getPetWarPetList(u, indexes) {
 			lv := pet.Level
 			if lv <= 0 {
 				lv = 5
@@ -24397,8 +25528,8 @@ func setPetWarBattleStates(gs *gameserver.GameServer, player1UID, player2UID int
 		return
 	}
 
-        p1PetIDs, p1Hps, p1MaxHps := getPetsInfo(player1UID, player1Indexes)
-        p2PetIDs, p2Hps, p2MaxHps := getPetsInfo(player2UID, player2Indexes)
+	p1PetIDs, p1Hps, p1MaxHps := getPetsInfo(player1UID, player1Indexes)
+	p2PetIDs, p2Hps, p2MaxHps := getPetsInfo(player2UID, player2Indexes)
 
 	// 获取首发精灵信息
 	p1FirstPetID, p1FirstHp, p1FirstMaxHp := 7, 0, 0
@@ -24420,31 +25551,31 @@ func setPetWarBattleStates(gs *gameserver.GameServer, player1UID, player2UID int
 
 	// 玩家1的战斗状态
 	gs.BattleStates[player1UID] = &gameserver.BattleState{
-		PlayerHP:        uint32(p1FirstHp),
-		PlayerMaxHP:     uint32(p1FirstMaxHp),
-		EnemyHP:         uint32(p2FirstHp),
-		EnemyMaxHP:      uint32(p2FirstMaxHp),
-		EnemyID:         p2FirstPetID,
-		EnemyLevel:      5,
-		TotalPlayerPets: len(p1PetIDs),
-		DeadPlayerPets:  0,
-		IsActive:        true,
-                OpponentUserID:  player2UID,
-                AllowedPetIndexes: append([]int(nil), player1Indexes...),
+		PlayerHP:          uint32(p1FirstHp),
+		PlayerMaxHP:       uint32(p1FirstMaxHp),
+		EnemyHP:           uint32(p2FirstHp),
+		EnemyMaxHP:        uint32(p2FirstMaxHp),
+		EnemyID:           p2FirstPetID,
+		EnemyLevel:        5,
+		TotalPlayerPets:   len(p1PetIDs),
+		DeadPlayerPets:    0,
+		IsActive:          true,
+		OpponentUserID:    player2UID,
+		AllowedPetIndexes: append([]int(nil), player1Indexes...),
 	}
 
 	// 玩家2的战斗状态
 	gs.BattleStates[player2UID] = &gameserver.BattleState{
-		PlayerHP:        uint32(p2FirstHp),
-		PlayerMaxHP:     uint32(p2FirstMaxHp),
-		EnemyHP:         uint32(p1FirstHp),
-		EnemyMaxHP:      uint32(p1FirstMaxHp),
-		EnemyID:         p1FirstPetID,
-		EnemyLevel:      5,
-		TotalPlayerPets: len(p2PetIDs),
-		DeadPlayerPets:  0,
-		IsActive:        true,
-                OpponentUserID:  player1UID,
-                AllowedPetIndexes: append([]int(nil), player2Indexes...),
-        }
+		PlayerHP:          uint32(p2FirstHp),
+		PlayerMaxHP:       uint32(p2FirstMaxHp),
+		EnemyHP:           uint32(p1FirstHp),
+		EnemyMaxHP:        uint32(p1FirstMaxHp),
+		EnemyID:           p1FirstPetID,
+		EnemyLevel:        5,
+		TotalPlayerPets:   len(p2PetIDs),
+		DeadPlayerPets:    0,
+		IsActive:          true,
+		OpponentUserID:    player1UID,
+		AllowedPetIndexes: append([]int(nil), player2Indexes...),
+	}
 }

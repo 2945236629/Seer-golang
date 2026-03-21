@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/seer-game/golang-version/internal/core/logger"
@@ -281,6 +282,33 @@ func GetTaskConfig() []TaskConfigEntry {
 	return out
 }
 
+// GetDailyTaskIDs 返回任務配置中 type=daily 的任務 ID（賽爾精靈訓練營每日任務等），用於按正午週期重置。
+func GetDailyTaskIDs() []int {
+	out := make([]int, 0, 16)
+	for _, e := range taskConfig {
+		if strings.EqualFold(strings.TrimSpace(e.Type), "daily") {
+			out = append(out, e.TaskID)
+		}
+	}
+	return out
+}
+
+// DailyCampNoonPeriodStart 返回當前時間所屬「每日任務週期」的起始時刻：上一個本地（上海）12:00 的 Unix 秒。
+// 例如 3 月 22 日 10:00 → 3 月 21 日 12:00；3 月 22 日 15:00 → 3 月 22 日 12:00。
+func DailyCampNoonPeriodStart(t time.Time) int64 {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.Local
+	}
+	t = t.In(loc)
+	y, m, d := t.Date()
+	noon := time.Date(y, m, d, 12, 0, 0, 0, loc)
+	if t.Before(noon) {
+		noon = noon.AddDate(0, 0, -1)
+	}
+	return noon.Unix()
+}
+
 // GetTaskConfigByID 根據任務 ID 取得配置；若不存在則 ok=false
 func GetTaskConfigByID(taskID int) (TaskConfigEntry, bool) {
 	e, ok := taskConfigByID[taskID]
@@ -416,8 +444,11 @@ func ApplyTaskRewards(user *userdb.GameData, rewards TaskRewards, logPrefix stri
 				Exp:       0,
 				Name:      "",
 			}
-			user.Pets = append(user.Pets, newPet)
-			logger.Info(fmt.Sprintf("%s 任務獎勵發放精靈: PetID=%d Level=%d DV=%d Nature=%d", logPrefix, petID, p.Level, dv, nature))
+			if addGrantedPetToBagOrStorage(user, newPet) {
+				logger.Info(fmt.Sprintf("%s 任務獎勵發放精靈: PetID=%d Level=%d DV=%d Nature=%d -> 背包", logPrefix, petID, p.Level, dv, nature))
+			} else {
+				logger.Info(fmt.Sprintf("%s 任務獎勵發放精靈: PetID=%d Level=%d DV=%d Nature=%d -> 倉庫", logPrefix, petID, p.Level, dv, nature))
+			}
 		}
 	}
 

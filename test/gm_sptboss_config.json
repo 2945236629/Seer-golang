@@ -1,10 +1,101 @@
 {
   "mapBosses": [
     {
+      "mapId": 514,
+      "param2": 0,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 4,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 7,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 2,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 5,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 3,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 8,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 6,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 514,
+      "param2": 1,
+      "bossPetId": 300,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 484,
+      "param2": 0,
+      "bossPetId": 798,
+      "level": 80,
+      "hasShield": false
+    },
+    {
       "mapId": 15,
       "param2": 0,
       "bossPetId": 261,
       "level": 70,
+      "hasShield": false
+    },
+    {
+      "mapId": 60,
+      "param2": 0,
+      "bossPetId": 216,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 106,
+      "param2": 0,
+      "bossPetId": 88,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "mapId": 318,
+      "param2": 0,
+      "bossPetId": 504,
+      "level": 120,
       "hasShield": false
     },
     {
@@ -15,24 +106,17 @@
       "hasShield": false
     },
     {
-      "mapId": 510,
+      "mapId": 505,
       "param2": 0,
-      "bossPetId": 656,
-      "level": 100,
+      "bossPetId": 177,
+      "level": 80,
       "hasShield": false
     },
     {
-      "mapId": 510,
+      "mapId": 505,
       "param2": 1,
-      "bossPetId": 659,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 510,
-      "param2": 2,
-      "bossPetId": 661,
-      "level": 100,
+      "bossPetId": 183,
+      "level": 75,
       "hasShield": false
     },
     {
@@ -57,52 +141,10 @@
       "hasShield": false
     },
     {
-      "mapId": 10,
-      "param2": 0,
-      "bossPetId": 166,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 61,
-      "param2": 0,
-      "bossPetId": 421,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 110,
-      "param2": 0,
-      "bossPetId": 169,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 318,
-      "param2": 0,
-      "bossPetId": 504,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 506,
+      "mapId": 513,
       "param2": 1,
-      "bossPetId": 192,
-      "level": 85,
-      "hasShield": false
-    },
-    {
-      "mapId": 506,
-      "param2": 0,
-      "bossPetId": 195,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 59,
-      "param2": 0,
-      "bossPetId": 347,
-      "level": 70,
+      "bossPetId": 1397,
+      "level": 100,
       "hasShield": false
     },
     {
@@ -114,191 +156,9 @@
     },
     {
       "mapId": 513,
-      "param2": 1,
-      "bossPetId": 1397,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 513,
       "param2": 2,
       "bossPetId": 1400,
       "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 508,
-      "param2": 1,
-      "bossPetId": 297,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 508,
-      "param2": 2,
-      "bossPetId": 359,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 508,
-      "param2": 0,
-      "bossPetId": 356,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 12,
-      "param2": 0,
-      "bossPetId": 47,
-      "level": 10,
-      "hasShield": true
-    },
-    {
-      "mapId": 12,
-      "param2": 1,
-      "bossPetId": 83,
-      "level": 5,
-      "hasShield": false
-    },
-    {
-      "mapId": 404,
-      "param2": 0,
-      "bossPetId": 454,
-      "level": 30,
-      "hasShield": false
-    },
-    {
-      "mapId": 486,
-      "param2": 1,
-      "bossPetId": 715,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 486,
-      "param2": 0,
-      "bossPetId": 715,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 503,
-      "param2": 0,
-      "bossPetId": 171,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 403,
-      "param2": 0,
-      "bossPetId": 264,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 403,
-      "param2": 3,
-      "bossPetId": 421,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 403,
-      "param2": 2,
-      "bossPetId": 274,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 403,
-      "param2": 4,
-      "bossPetId": 502,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 403,
-      "param2": 1,
-      "bossPetId": 391,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 53,
-      "param2": 1,
-      "bossPetId": 178,
-      "level": 30,
-      "hasShield": false
-    },
-    {
-      "mapId": 53,
-      "param2": 0,
-      "bossPetId": 187,
-      "level": 50,
-      "hasShield": false
-    },
-    {
-      "mapId": 17,
-      "param2": 0,
-      "bossPetId": 42,
-      "level": 35,
-      "hasShield": false
-    },
-    {
-      "mapId": 483,
-      "param2": 0,
-      "bossPetId": 503,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 57,
-      "param2": 0,
-      "bossPetId": 216,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 512,
-      "param2": 1,
-      "bossPetId": 1185,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 512,
-      "param2": 0,
-      "bossPetId": 1182,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 325,
-      "param2": 0,
-      "bossPetId": 264,
-      "level": 60,
-      "hasShield": false
-    },
-    {
-      "mapId": 27,
-      "param2": 0,
-      "bossPetId": 69,
-      "level": 50,
-      "hasShield": false
-    },
-    {
-      "mapId": 105,
-      "param2": 0,
-      "bossPetId": 261,
-      "level": 70,
-      "hasShield": false
-    },
-    {
-      "mapId": 105,
-      "param2": 1,
-      "bossPetId": 91,
-      "level": 30,
       "hasShield": false
     },
     {
@@ -309,66 +169,17 @@
       "hasShield": false
     },
     {
-      "mapId": 484,
+      "mapId": 512,
       "param2": 0,
-      "bossPetId": 798,
-      "level": 80,
+      "bossPetId": 1182,
+      "level": 100,
       "hasShield": false
     },
     {
-      "mapId": 445,
-      "param2": 0,
-      "bossPetId": 798,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 22,
-      "param2": 0,
-      "bossPetId": 34,
-      "level": 25,
-      "hasShield": false
-    },
-    {
-      "mapId": 60,
-      "param2": 0,
-      "bossPetId": 216,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 54,
-      "param2": 0,
-      "bossPetId": 261,
-      "level": 70,
-      "hasShield": false
-    },
-    {
-      "mapId": 16,
-      "param2": 0,
-      "bossPetId": 393,
-      "level": 75,
-      "hasShield": false
-    },
-    {
-      "mapId": 507,
-      "param2": 2,
-      "bossPetId": 227,
-      "level": 95,
-      "hasShield": false
-    },
-    {
-      "mapId": 507,
+      "mapId": 512,
       "param2": 1,
-      "bossPetId": 224,
-      "level": 90,
-      "hasShield": false
-    },
-    {
-      "mapId": 507,
-      "param2": 0,
-      "bossPetId": 222,
-      "level": 90,
+      "bossPetId": 1185,
+      "level": 100,
       "hasShield": false
     },
     {
@@ -393,55 +204,6 @@
       "hasShield": false
     },
     {
-      "mapId": 401,
-      "param2": 4,
-      "bossPetId": 88,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 401,
-      "param2": 6,
-      "bossPetId": 501,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 401,
-      "param2": 0,
-      "bossPetId": 47,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 401,
-      "param2": 1,
-      "bossPetId": 34,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 401,
-      "param2": 3,
-      "bossPetId": 69,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 401,
-      "param2": 2,
-      "bossPetId": 42,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "mapId": 401,
-      "param2": 5,
-      "bossPetId": 113,
-      "level": 100,
-      "hasShield": false
-    },
-    {
       "mapId": 49,
       "param2": 0,
       "bossPetId": 113,
@@ -449,94 +211,10 @@
       "hasShield": false
     },
     {
-      "mapId": 504,
+      "mapId": 17,
       "param2": 0,
-      "bossPetId": 174,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "mapId": 106,
-      "param2": 0,
-      "bossPetId": 88,
-      "level": 70,
-      "hasShield": false
-    },
-    {
-      "mapId": 419,
-      "param2": 0,
-      "bossPetId": 261,
-      "level": 70,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 8,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 5,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 6,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 1,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 7,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 4,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 2,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 0,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 514,
-      "param2": 3,
-      "bossPetId": 300,
-      "level": 120,
-      "hasShield": false
-    },
-    {
-      "mapId": 348,
-      "param2": 1,
-      "bossPetId": 391,
-      "level": 70,
+      "bossPetId": 42,
+      "level": 35,
       "hasShield": false
     },
     {
@@ -561,36 +239,15 @@
       "hasShield": false
     },
     {
-      "mapId": 32,
-      "param2": 0,
-      "bossPetId": 70,
+      "mapId": 348,
+      "param2": 1,
+      "bossPetId": 391,
       "level": 70,
       "hasShield": false
     },
     {
       "mapId": 677,
-      "param2": 6,
-      "bossPetId": 1000,
-      "level": 105,
-      "hasShield": false
-    },
-    {
-      "mapId": 677,
       "param2": 3,
-      "bossPetId": 1000,
-      "level": 105,
-      "hasShield": false
-    },
-    {
-      "mapId": 677,
-      "param2": 0,
-      "bossPetId": 1000,
-      "level": 105,
-      "hasShield": false
-    },
-    {
-      "mapId": 677,
-      "param2": 2,
       "bossPetId": 1000,
       "level": 105,
       "hasShield": false
@@ -604,7 +261,14 @@
     },
     {
       "mapId": 677,
-      "param2": 1,
+      "param2": 2,
+      "bossPetId": 1000,
+      "level": 105,
+      "hasShield": false
+    },
+    {
+      "mapId": 677,
+      "param2": 6,
       "bossPetId": 1000,
       "level": 105,
       "hasShield": false
@@ -617,6 +281,279 @@
       "hasShield": false
     },
     {
+      "mapId": 677,
+      "param2": 1,
+      "bossPetId": 1000,
+      "level": 105,
+      "hasShield": false
+    },
+    {
+      "mapId": 677,
+      "param2": 0,
+      "bossPetId": 1000,
+      "level": 105,
+      "hasShield": false
+    },
+    {
+      "mapId": 510,
+      "param2": 1,
+      "bossPetId": 659,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 510,
+      "param2": 0,
+      "bossPetId": 656,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 510,
+      "param2": 2,
+      "bossPetId": 661,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 486,
+      "param2": 0,
+      "bossPetId": 715,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 486,
+      "param2": 1,
+      "bossPetId": 715,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 61,
+      "param2": 0,
+      "bossPetId": 421,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 445,
+      "param2": 0,
+      "bossPetId": 798,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 59,
+      "param2": 0,
+      "bossPetId": 347,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "mapId": 27,
+      "param2": 0,
+      "bossPetId": 69,
+      "level": 50,
+      "hasShield": false
+    },
+    {
+      "mapId": 507,
+      "param2": 1,
+      "bossPetId": 224,
+      "level": 90,
+      "hasShield": false
+    },
+    {
+      "mapId": 507,
+      "param2": 2,
+      "bossPetId": 227,
+      "level": 95,
+      "hasShield": false
+    },
+    {
+      "mapId": 507,
+      "param2": 0,
+      "bossPetId": 222,
+      "level": 90,
+      "hasShield": false
+    },
+    {
+      "mapId": 483,
+      "param2": 0,
+      "bossPetId": 503,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 508,
+      "param2": 2,
+      "bossPetId": 359,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 508,
+      "param2": 1,
+      "bossPetId": 297,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 508,
+      "param2": 0,
+      "bossPetId": 356,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 53,
+      "param2": 0,
+      "bossPetId": 187,
+      "level": 50,
+      "hasShield": false
+    },
+    {
+      "mapId": 53,
+      "param2": 1,
+      "bossPetId": 178,
+      "level": 30,
+      "hasShield": false
+    },
+    {
+      "mapId": 16,
+      "param2": 0,
+      "bossPetId": 393,
+      "level": 75,
+      "hasShield": false
+    },
+    {
+      "mapId": 22,
+      "param2": 0,
+      "bossPetId": 34,
+      "level": 25,
+      "hasShield": false
+    },
+    {
+      "mapId": 32,
+      "param2": 0,
+      "bossPetId": 70,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 2,
+      "bossPetId": 42,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 3,
+      "bossPetId": 69,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 0,
+      "bossPetId": 47,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 1,
+      "bossPetId": 34,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 5,
+      "bossPetId": 113,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 6,
+      "bossPetId": 501,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 401,
+      "param2": 4,
+      "bossPetId": 88,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "mapId": 325,
+      "param2": 0,
+      "bossPetId": 264,
+      "level": 60,
+      "hasShield": false
+    },
+    {
+      "mapId": 105,
+      "param2": 0,
+      "bossPetId": 261,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "mapId": 105,
+      "param2": 1,
+      "bossPetId": 91,
+      "level": 30,
+      "hasShield": false
+    },
+    {
+      "mapId": 110,
+      "param2": 0,
+      "bossPetId": 169,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 419,
+      "param2": 0,
+      "bossPetId": 261,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "mapId": 503,
+      "param2": 0,
+      "bossPetId": 171,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 506,
+      "param2": 0,
+      "bossPetId": 195,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 506,
+      "param2": 1,
+      "bossPetId": 192,
+      "level": 85,
+      "hasShield": false
+    },
+    {
+      "mapId": 54,
+      "param2": 0,
+      "bossPetId": 261,
+      "level": 70,
+      "hasShield": false
+    },
+    {
       "mapId": 21,
       "param2": 0,
       "bossPetId": 34,
@@ -624,92 +561,115 @@
       "hasShield": false
     },
     {
-      "mapId": 505,
-      "param2": 1,
-      "bossPetId": 183,
-      "level": 75,
+      "mapId": 404,
+      "param2": 0,
+      "bossPetId": 454,
+      "level": 30,
       "hasShield": false
     },
     {
-      "mapId": 505,
+      "mapId": 10,
       "param2": 0,
-      "bossPetId": 177,
+      "bossPetId": 166,
       "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 504,
+      "param2": 0,
+      "bossPetId": 174,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 403,
+      "param2": 4,
+      "bossPetId": 502,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 403,
+      "param2": 3,
+      "bossPetId": 421,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 403,
+      "param2": 0,
+      "bossPetId": 264,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 403,
+      "param2": 1,
+      "bossPetId": 391,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 403,
+      "param2": 2,
+      "bossPetId": 274,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "mapId": 57,
+      "param2": 0,
+      "bossPetId": 216,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "mapId": 12,
+      "param2": 0,
+      "bossPetId": 47,
+      "level": 10,
+      "hasShield": true
+    },
+    {
+      "mapId": 12,
+      "param2": 1,
+      "bossPetId": 83,
+      "level": 5,
       "hasShield": false
     }
   ],
   "sptBosses": [
     {
-      "sptId": 11,
-      "bossPetId": 216,
-      "rewardPetId": 0,
-      "rewardItemId": 400118,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 16,
-      "bossPetId": 391,
-      "rewardPetId": 0,
-      "rewardItemId": 400137,
-      "level": 70,
-      "hasShield": false
-    },
-    {
       "sptId": 0,
-      "bossPetId": 503,
+      "bossPetId": 502,
       "rewardPetId": 0,
-      "rewardItemId": 400190,
+      "rewardItemId": 400145,
       "level": 120,
       "hasShield": false
     },
     {
-      "sptId": 20,
-      "bossPetId": 4150,
+      "sptId": 0,
+      "bossPetId": 413,
       "rewardPetId": 0,
       "rewardItemId": 0,
+      "level": 75,
+      "hasShield": false
+    },
+    {
+      "sptId": 13,
+      "bossPetId": 421,
+      "rewardPetId": 0,
+      "rewardItemId": 400139,
       "level": 80,
       "hasShield": false
     },
     {
-      "sptId": 17,
-      "bossPetId": 347,
-      "rewardPetId": 0,
-      "rewardItemId": 400127,
-      "level": 70,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 359,
-      "rewardPetId": 0,
-      "rewardItemId": 400130,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 224,
-      "rewardPetId": 0,
-      "rewardItemId": 400121,
-      "level": 90,
-      "hasShield": false
-    },
-    {
-      "sptId": 12,
-      "bossPetId": 264,
-      "rewardPetId": 0,
-      "rewardItemId": 400125,
-      "level": 60,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 1182,
-      "rewardPetId": 0,
-      "rewardItemId": 4001182,
-      "level": 100,
-      "hasShield": false
+      "sptId": 1,
+      "bossPetId": 47,
+      "rewardPetId": 46,
+      "rewardItemId": 0,
+      "level": 10,
+      "hasShield": true
     },
     {
       "sptId": 0,
@@ -721,49 +681,49 @@
     },
     {
       "sptId": 0,
-      "bossPetId": 195,
+      "bossPetId": 672,
       "rewardPetId": 0,
-      "rewardItemId": 400115,
+      "rewardItemId": 400187,
       "level": 80,
       "hasShield": false
     },
     {
       "sptId": 0,
-      "bossPetId": 661,
+      "bossPetId": 222,
       "rewardPetId": 0,
-      "rewardItemId": 400186,
+      "rewardItemId": 400222,
+      "level": 90,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 1185,
+      "rewardPetId": 0,
+      "rewardItemId": 400305,
       "level": 100,
       "hasShield": false
     },
     {
       "sptId": 0,
-      "bossPetId": 779,
+      "bossPetId": 356,
       "rewardPetId": 0,
-      "rewardItemId": 400779,
+      "rewardItemId": 400356,
       "level": 100,
       "hasShield": false
     },
     {
-      "sptId": 4,
-      "bossPetId": 50,
-      "rewardPetId": 0,
-      "rewardItemId": 400101,
-      "level": 65,
-      "hasShield": false
-    },
-    {
-      "sptId": 19,
-      "bossPetId": 300,
-      "rewardPetId": 0,
-      "rewardItemId": 400047,
-      "level": 70,
-      "hasShield": false
-    },
-    {
       "sptId": 0,
-      "bossPetId": 177,
+      "bossPetId": 359,
       "rewardPetId": 0,
-      "rewardItemId": 400177,
+      "rewardItemId": 400130,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 16,
+      "bossPetId": 391,
+      "rewardPetId": 0,
+      "rewardItemId": 400137,
       "level": 70,
       "hasShield": false
     },
@@ -784,18 +744,66 @@
       "hasShield": false
     },
     {
-      "sptId": 0,
-      "bossPetId": 222,
+      "sptId": 6,
+      "bossPetId": 70,
       "rewardPetId": 0,
-      "rewardItemId": 400222,
-      "level": 90,
+      "rewardItemId": 400103,
+      "level": 70,
       "hasShield": false
     },
     {
       "sptId": 0,
-      "bossPetId": 297,
+      "bossPetId": 1000,
       "rewardPetId": 0,
-      "rewardItemId": 400128,
+      "rewardItemId": 0,
+      "level": 105,
+      "hasShield": false
+    },
+    {
+      "sptId": 20,
+      "bossPetId": 4150,
+      "rewardPetId": 0,
+      "rewardItemId": 0,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 1400,
+      "rewardPetId": 0,
+      "rewardItemId": 400431,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 183,
+      "rewardPetId": 0,
+      "rewardItemId": 400113,
+      "level": 75,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 587,
+      "rewardPetId": 0,
+      "rewardItemId": 400156,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 5012,
+      "rewardPetId": 0,
+      "rewardItemId": 400187,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 435,
+      "rewardPetId": 0,
+      "rewardItemId": 400144,
       "level": 100,
       "hasShield": false
     },
@@ -808,11 +816,83 @@
       "hasShield": false
     },
     {
-      "sptId": 0,
-      "bossPetId": 171,
+      "sptId": 5,
+      "bossPetId": 69,
       "rewardPetId": 0,
-      "rewardItemId": 400171,
+      "rewardItemId": 400102,
       "level": 50,
+      "hasShield": false
+    },
+    {
+      "sptId": 17,
+      "bossPetId": 347,
+      "rewardPetId": 0,
+      "rewardItemId": 400127,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 1397,
+      "rewardPetId": 0,
+      "rewardItemId": 400430,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 503,
+      "rewardPetId": 0,
+      "rewardItemId": 400190,
+      "level": 120,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 192,
+      "rewardPetId": 0,
+      "rewardItemId": 400116,
+      "level": 85,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 538,
+      "rewardPetId": 0,
+      "rewardItemId": 400153,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 12,
+      "bossPetId": 264,
+      "rewardPetId": 0,
+      "rewardItemId": 400125,
+      "level": 60,
+      "hasShield": false
+    },
+    {
+      "sptId": 4,
+      "bossPetId": 50,
+      "rewardPetId": 0,
+      "rewardItemId": 400101,
+      "level": 65,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 659,
+      "rewardPetId": 0,
+      "rewardItemId": 400185,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 177,
+      "rewardPetId": 0,
+      "rewardItemId": 400177,
+      "level": 70,
       "hasShield": false
     },
     {
@@ -821,6 +901,30 @@
       "rewardPetId": 166,
       "rewardItemId": 0,
       "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 19,
+      "bossPetId": 300,
+      "rewardPetId": 0,
+      "rewardItemId": 400047,
+      "level": 70,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 171,
+      "rewardPetId": 0,
+      "rewardItemId": 400171,
+      "level": 50,
+      "hasShield": false
+    },
+    {
+      "sptId": 10,
+      "bossPetId": 187,
+      "rewardPetId": 0,
+      "rewardItemId": 400114,
+      "level": 50,
       "hasShield": false
     },
     {
@@ -840,155 +944,11 @@
       "hasShield": false
     },
     {
-      "sptId": 0,
-      "bossPetId": 356,
-      "rewardPetId": 0,
-      "rewardItemId": 400356,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 5,
-      "bossPetId": 69,
-      "rewardPetId": 0,
-      "rewardItemId": 400102,
-      "level": 50,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 538,
-      "rewardPetId": 0,
-      "rewardItemId": 400153,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 1,
-      "bossPetId": 47,
-      "rewardPetId": 46,
-      "rewardItemId": 0,
-      "level": 10,
-      "hasShield": true
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 782,
-      "rewardPetId": 0,
-      "rewardItemId": 400198,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 5012,
-      "rewardPetId": 0,
-      "rewardItemId": 400187,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 1403,
-      "rewardPetId": 0,
-      "rewardItemId": 4001403,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 1400,
-      "rewardPetId": 0,
-      "rewardItemId": 400431,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 1185,
-      "rewardPetId": 0,
-      "rewardItemId": 400305,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 435,
-      "rewardPetId": 0,
-      "rewardItemId": 400144,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 15,
-      "bossPetId": 274,
-      "rewardPetId": 0,
-      "rewardItemId": 400136,
-      "level": 80,
-      "hasShield": false
-    },
-    {
       "sptId": 14,
       "bossPetId": 261,
       "rewardPetId": 0,
       "rewardItemId": 400126,
       "level": 70,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 672,
-      "rewardPetId": 0,
-      "rewardItemId": 400187,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 617,
-      "rewardPetId": 0,
-      "rewardItemId": 400161,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 659,
-      "rewardPetId": 0,
-      "rewardItemId": 400185,
-      "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 18,
-      "bossPetId": 393,
-      "rewardPetId": 0,
-      "rewardItemId": 0,
-      "level": 75,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 174,
-      "rewardPetId": 0,
-      "rewardItemId": 400174,
-      "level": 60,
-      "hasShield": false
-    },
-    {
-      "sptId": 6,
-      "bossPetId": 70,
-      "rewardPetId": 0,
-      "rewardItemId": 400103,
-      "level": 70,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 1397,
-      "rewardPetId": 0,
-      "rewardItemId": 400430,
-      "level": 100,
       "hasShield": false
     },
     {
@@ -1001,10 +961,34 @@
     },
     {
       "sptId": 0,
-      "bossPetId": 502,
+      "bossPetId": 589,
+      "rewardPetId": 588,
+      "rewardItemId": 0,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 617,
       "rewardPetId": 0,
-      "rewardItemId": 400145,
-      "level": 120,
+      "rewardItemId": 400161,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 779,
+      "rewardPetId": 0,
+      "rewardItemId": 400779,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 174,
+      "rewardPetId": 0,
+      "rewardItemId": 400174,
+      "level": 60,
       "hasShield": false
     },
     {
@@ -1017,34 +1001,106 @@
     },
     {
       "sptId": 0,
-      "bossPetId": 183,
+      "bossPetId": 661,
       "rewardPetId": 0,
-      "rewardItemId": 400113,
-      "level": 75,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 589,
-      "rewardPetId": 588,
-      "rewardItemId": 0,
+      "rewardItemId": 400186,
       "level": 100,
       "hasShield": false
     },
     {
       "sptId": 0,
-      "bossPetId": 784,
+      "bossPetId": 297,
       "rewardPetId": 0,
-      "rewardItemId": 400199,
+      "rewardItemId": 400128,
       "level": 100,
       "hasShield": false
     },
     {
       "sptId": 0,
-      "bossPetId": 413,
+      "bossPetId": 798,
+      "rewardPetId": 0,
+      "rewardItemId": 400202,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 224,
+      "rewardPetId": 0,
+      "rewardItemId": 400121,
+      "level": 90,
+      "hasShield": false
+    },
+    {
+      "sptId": 18,
+      "bossPetId": 393,
       "rewardPetId": 0,
       "rewardItemId": 0,
       "level": 75,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 782,
+      "rewardPetId": 0,
+      "rewardItemId": 400198,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 438,
+      "rewardPetId": 0,
+      "rewardItemId": 400438,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 15,
+      "bossPetId": 274,
+      "rewardPetId": 0,
+      "rewardItemId": 400136,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 490,
+      "rewardPetId": 0,
+      "rewardItemId": 400151,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 656,
+      "rewardPetId": 0,
+      "rewardItemId": 400656,
+      "level": 100,
+      "hasShield": false
+    },
+    {
+      "sptId": 11,
+      "bossPetId": 216,
+      "rewardPetId": 0,
+      "rewardItemId": 400118,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 195,
+      "rewardPetId": 0,
+      "rewardItemId": 400115,
+      "level": 80,
+      "hasShield": false
+    },
+    {
+      "sptId": 0,
+      "bossPetId": 1403,
+      "rewardPetId": 0,
+      "rewardItemId": 4001403,
+      "level": 100,
       "hasShield": false
     },
     {
@@ -1065,132 +1121,76 @@
     },
     {
       "sptId": 0,
-      "bossPetId": 490,
+      "bossPetId": 1182,
       "rewardPetId": 0,
-      "rewardItemId": 400151,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 13,
-      "bossPetId": 421,
-      "rewardPetId": 0,
-      "rewardItemId": 400139,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 656,
-      "rewardPetId": 0,
-      "rewardItemId": 400656,
+      "rewardItemId": 4001182,
       "level": 100,
       "hasShield": false
     },
     {
       "sptId": 0,
-      "bossPetId": 798,
+      "bossPetId": 784,
       "rewardPetId": 0,
-      "rewardItemId": 400202,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 587,
-      "rewardPetId": 0,
-      "rewardItemId": 400156,
-      "level": 80,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 1000,
-      "rewardPetId": 0,
-      "rewardItemId": 0,
-      "level": 105,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 192,
-      "rewardPetId": 0,
-      "rewardItemId": 400116,
-      "level": 85,
-      "hasShield": false
-    },
-    {
-      "sptId": 0,
-      "bossPetId": 438,
-      "rewardPetId": 0,
-      "rewardItemId": 400438,
+      "rewardItemId": 400199,
       "level": 100,
-      "hasShield": false
-    },
-    {
-      "sptId": 10,
-      "bossPetId": 187,
-      "rewardPetId": 0,
-      "rewardItemId": 400114,
-      "level": 50,
       "hasShield": false
     }
   ],
   "traits": {
     "statusImmune": [
+      70,
+      798,
+      261,
       504,
-      501,
+      715,
+      1000,
+      216,
       502,
       264,
-      261,
-      216,
-      503,
-      715,
-      70,
-      798,
-      1000
+      501,
+      503
     ],
     "statDropImmune": [
-      391,
+      261,
       300,
       502,
+      132,
       216,
-      1000,
-      589,
-      132,
-      261,
-      501,
-      274,
-      113,
-      715,
-      88
-    ],
-    "sameLifeDeathImmune": [
-      798,
-      70,
-      503,
-      261,
-      132,
+      88,
       274,
       391,
-      504,
+      1000,
+      113,
+      501,
       715,
-      216
+      589
+    ],
+    "sameLifeDeathImmune": [
+      503,
+      715,
+      70,
+      216,
+      132,
+      504,
+      798,
+      261,
+      274,
+      391
     ],
     "infinitePP": [
-      132,
       70,
       187,
       264,
-      261
+      261,
+      132
     ],
     "firstStrike": [
       261,
       70
     ],
     "priorityBonus": [
-      70,
-      261
+      261,
+      70
     ],
     "halfHPOneShot": [
       187

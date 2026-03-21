@@ -8,8 +8,8 @@
       "color": 3381759,
       "registerTime": 1769569200,
       "roleCreated": true,
-      "session": "��F5G����ϙ�=\u003e��",
-      "sessionHex": "85cd463547b2bd94b8cf99e83d3e9af6"
+      "session": "K��\u001b�\u0026\u001b;Z1���\u0018�4",
+      "sessionHex": "4bf3e41bef261b3b5a318d9e9618cb34"
     },
     "100000002": {
       "userId": 100000002,
@@ -19,8 +19,8 @@
       "color": 0,
       "registerTime": 1769656737,
       "roleCreated": true,
-      "session": ";D9Z\u00144��#���A\u0026��",
-      "sessionHex": "3b44395a1434b7cb23b0a4a941268e83"
+      "session": "�x�(z*q�\u0010�EP�\r�@",
+      "sessionHex": "b9788b287a2a71ff10e34550810dbe40"
     },
     "100000003": {
       "userId": 100000003,
@@ -98,7 +98,7 @@
     "100000001": {
       "nick": "测试赛尔",
       "color": 3381759,
-      "coins": 51800,
+      "coins": 46400,
       "gold": 0,
       "energy": 100,
       "pets": [
@@ -143,14 +143,14 @@
           "dv": 19,
           "nature": 13,
           "exp": 0,
-          "name": "",
+          "name": "皮皮",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 0
         }
       ],
@@ -310,11 +310,41 @@
         "isFollowing": false,
         "func": "AAACAAAAAAAAAAAAAAAAAAAAAAA="
       },
-      "mapId": 1,
-      "posX": 686,
-      "posY": 485,
-      "fitments": [],
-      "allFitments": [],
+      "mapId": 100000001,
+      "posX": 495,
+      "posY": 436,
+      "fitments": [
+        {
+          "id": 500015,
+          "x": 0,
+          "y": 0,
+          "dir": 0,
+          "status": 0
+        },
+        {
+          "id": 500620,
+          "x": 332,
+          "y": 324,
+          "dir": 0,
+          "status": 1
+        }
+      ],
+      "allFitments": [
+        {
+          "id": 500015,
+          "x": 0,
+          "y": 0,
+          "dir": 0,
+          "status": 0
+        },
+        {
+          "id": 500620,
+          "x": 0,
+          "y": 0,
+          "dir": 0,
+          "status": 0
+        }
+      ],
       "texture": 1,
       "dsFlag": 0,
       "badge": 0,
@@ -362,7 +392,7 @@
       "expPool": 0,
       "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1772975526,
+      "lastOnline": 1774113643,
       "miningCount": {
         "1": 1,
         "2": 3,
@@ -405,36 +435,14 @@
     "100000002": {
       "nick": "1111",
       "color": 16737536,
-      "coins": 109862450,
+      "coins": 109850300,
       "gold": 830,
       "energy": 100,
       "pets": [
         {
-          "id": 85,
-          "catchTime": 1769703456,
-          "level": 100,
-          "dv": 28,
-          "nature": 14,
-          "exp": 0,
-          "name": "依依",
-          "ev_hp": 0,
-          "ev_attack": 0,
-          "ev_defence": 0,
-          "ev_sa": 0,
-          "ev_sd": 0,
-          "ev_sp": 0,
-          "skills": [
-            20110,
-            10238,
-            10241,
-            10239
-          ],
-          "trait": 0,
-          "cur_hp": 314
-        },
-        {
           "id": 70,
           "catchTime": 1770714121,
+          "shiny": true,
           "level": 100,
           "dv": 31,
           "nature": 8,
@@ -447,8 +455,30 @@
           "ev_sd": 0,
           "ev_sp": 255,
           "skills": [],
-          "trait": 0,
+          "trait": 1027,
           "cur_hp": 283
+        },
+        {
+          "id": 85,
+          "catchTime": 1769703456,
+          "level": 100,
+          "dv": 28,
+          "nature": 14,
+          "exp": 0,
+          "name": "依卡莱恩",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [
+            20110,
+            10238,
+            10241,
+            10239
+          ],
+          "trait": 0
         },
         {
           "id": 300,
@@ -510,7 +540,7 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "熔火灵猴",
+          "name": "魔焰猩猩",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
@@ -644,7 +674,7 @@
           "level": 1
         },
         "300001": {
-          "count": 91,
+          "count": 90,
           "expireTime": 360000
         },
         "300002": {
@@ -652,11 +682,11 @@
           "expireTime": 360000
         },
         "300003": {
-          "count": 96,
+          "count": 93,
           "expireTime": 360000
         },
         "300004": {
-          "count": 74,
+          "count": 69,
           "expireTime": 360000
         },
         "300011": {
@@ -699,9 +729,6 @@
         "400051": {
           "count": 1,
           "expireTime": 360000
-        },
-        "400107": {
-          "count": 1
         },
         "400501": {
           "count": 2,
@@ -768,18 +795,6 @@
         },
         "4": {
           "status": "completed"
-        },
-        "402": {
-          "status": "3"
-        },
-        "405": {
-          "status": "3"
-        },
-        "407": {
-          "status": "3"
-        },
-        "462": {
-          "status": "1"
         },
         "5": {
           "status": "completed"
@@ -878,6 +893,7 @@
           "status": "1"
         }
       },
+      "dailyCampTaskNoon": 1774065600,
       "petBook": {
         "166": {
           "encountered": 1,
@@ -901,9 +917,9 @@
         "vipStage": 0,
         "vipValue": 0,
         "autoCharge": 0,
-        "vipEndTime": 1772255725,
+        "vipEndTime": 1776707410,
         "freshManBonus": 0,
-        "superEnergy": 0,
+        "superEnergy": 30,
         "superLevel": 11,
         "superStage": 1,
         "power": 10010,
@@ -921,20 +937,21 @@
         "isFollowing": false,
         "func": "+A0DAAAAAAAAAAAAAAAAAAAAAAA="
       },
-      "mapId": 5,
-      "posX": 667,
-      "posY": 497,
-      "fitments": [],
-      "allFitments": [
+      "mapId": 1,
+      "posX": 452,
+      "posY": 432,
+      "fitments": [
         {
-          "id": 500824,
+          "id": 500015,
           "x": 0,
           "y": 0,
           "dir": 0,
           "status": 0
-        },
+        }
+      ],
+      "allFitments": [
         {
-          "id": 500824,
+          "id": 500015,
           "x": 0,
           "y": 0,
           "dir": 0,
@@ -944,7 +961,7 @@
       "texture": 1,
       "dsFlag": 0,
       "badge": 0,
-      "curTitle": 0,
+      "curTitle": 169,
       "fightBadge": 0,
       "timeToday": 0,
       "timeLimit": 86400,
@@ -973,9 +990,12 @@
       "energyTimes": 0,
       "learnTimes": 0,
       "achievements": {
-        "total": 0,
+        "total": 2,
         "rank": 0,
-        "list": []
+        "list": [
+          169,
+          1001
+        ]
       },
       "storagePets": [
         {
@@ -1529,14 +1549,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "胡里亚",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1030
         },
         {
@@ -1546,14 +1566,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "黑火贝",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1034
         },
         {
@@ -1563,14 +1583,14 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "鱼龙王",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1041
         },
         {
@@ -1580,28 +1600,62 @@
           "dv": 0,
           "nature": 0,
           "exp": 0,
-          "name": "",
+          "name": "鱼龙王",
           "ev_hp": 0,
           "ev_attack": 0,
           "ev_defence": 0,
           "ev_sa": 0,
           "ev_sd": 0,
           "ev_sp": 0,
-          "skills": null,
+          "skills": [],
           "trait": 1041
+        },
+        {
+          "id": 32,
+          "catchTime": 1773064586,
+          "level": 1,
+          "dv": 26,
+          "nature": 24,
+          "exp": 0,
+          "name": "巴拉龟",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
+        },
+        {
+          "id": 10,
+          "catchTime": 1774115000,
+          "shiny": true,
+          "level": 1,
+          "dv": 16,
+          "nature": 14,
+          "exp": 0,
+          "name": "皮皮",
+          "ev_hp": 0,
+          "ev_attack": 0,
+          "ev_defence": 0,
+          "ev_sa": 0,
+          "ev_sd": 0,
+          "ev_sp": 0,
+          "skills": [],
+          "trait": 0
         }
       ],
-      "friends": [
+      "friends": [],
+      "expPool": 885544557,
+      "blacklist": [
         {
           "userID": 100000001,
-          "timePoke": 0,
-          "addTime": 1769756367
+          "addTime": 1773065915
         }
       ],
-      "expPool": 885544557,
-      "blacklist": [],
       "currentServer": 0,
-      "lastOnline": 1772980393,
+      "lastOnline": 1774122518,
       "defeatedSptBossIds": [
         113,
         166,
@@ -1618,9 +1672,8 @@
         "6": 1
       },
       "miningDate": 20519,
-      "followPetCatchTime": 1770714121,
       "flyMode": 4,
-      "leiyiLastDay": 20517,
+      "leiyiLastDay": 20533,
       "leiyiToday": [
         0,
         0,
@@ -1682,7 +1735,12 @@
           "obtainTime": 1770636659,
           "buf": "AQAAAAAAAAAAAAAAAAAAAAAAAAA="
         }
-      ]
+      ],
+      "petHatch": {
+        "obtainTime": 1774119201,
+        "petId": 41,
+        "expireTime": 1774119227
+      }
     },
     "100000005": {
       "nick": "开源号",
@@ -3073,7 +3131,7 @@
           "id": 429,
           "catchTime": 1770524982,
           "level": 100,
-          "dv": 31,
+          "dv": 28,
           "nature": 12,
           "exp": 0,
           "name": "艾克里桑",

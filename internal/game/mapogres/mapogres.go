@@ -52,6 +52,8 @@ type GMMapConfig struct {
 	Common                []monsterEntry `json:"common,omitempty"`
 	Rare                  []monsterEntry `json:"rare,omitempty"`
 	RarePercent           *int           `json:"rarePercent,omitempty"`
+	ShinyEnabled          *bool          `json:"shinyEnabled,omitempty"`
+	ShinyPercent          *int           `json:"shinyPercent,omitempty"`
 }
 
 // 稀有精灵刷新概率（与需求一致，旧常量，实际逻辑已使用“10 个蛋里抽 3 个”的规则）
@@ -632,6 +634,60 @@ func getEffectiveRarePercent(mapID int) int {
 	return rareChancePercent
 }
 
+// getEffectiveShinyConfig 返回指定地图的异色刷新开关与概率（0-100）
+func getEffectiveShinyConfig(mapID int) (bool, int) {
+	gmMapConfigsMu.RLock()
+	cfg, ok := gmMapConfigs[mapID]
+	gmMapConfigsMu.RUnlock()
+	enabled := false
+	percent := 0
+	if ok && cfg.ShinyEnabled != nil {
+		enabled = *cfg.ShinyEnabled
+	}
+	if ok && cfg.ShinyPercent != nil {
+		percent = *cfg.ShinyPercent
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return enabled, percent
+}
+
+// applyShinyConfig 应用异色刷新策略：每次最多一只异色。
+// 规则：
+// - 开关关闭：本次刷新全部非异色
+// - 开关开启：按概率触发，触发后在非空槽位里随机 1 只设为异色
+func applyShinyConfig(mapID int, slots []Slot) []Slot {
+	if len(slots) == 0 {
+		return slots
+	}
+	enabled, percent := getEffectiveShinyConfig(mapID)
+	for i := range slots {
+		slots[i].Shiny = false
+	}
+	if !enabled || percent <= 0 {
+		return slots
+	}
+	if rand.Intn(100) >= percent {
+		return slots
+	}
+	nonEmpty := make([]int, 0, len(slots))
+	for i := range slots {
+		if slots[i].PetID > 0 {
+			nonEmpty = append(nonEmpty, i)
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return slots
+	}
+	pick := nonEmpty[rand.Intn(len(nonEmpty))]
+	slots[pick].Shiny = true
+	return slots
+}
+
 // GetAllMapsForGM 返回当前所有已知地图的配置（内置 + GM 覆盖），供 GM 页面展示。
 // 仅包含 Common/Rare/Slots 以及刷新间隔等信息。
 func GetAllMapsForGM() []GMMapConfig {
@@ -650,6 +706,9 @@ func GetAllMapsForGM() []GMMapConfig {
 			Common:                effective.Common,
 			Rare:                  effective.Rare,
 		}
+		shinyEnabled, shinyPercent := getEffectiveShinyConfig(id)
+		entry.ShinyEnabled = &shinyEnabled
+		entry.ShinyPercent = &shinyPercent
 		result = append(result, entry)
 	}
 	return result
@@ -915,6 +974,7 @@ func generateSlotsInternal(mapID int, writeCache bool) []Slot {
 			slotIdx := indices[i]
 			result[slotIdx] = s
 		}
+		result = applyShinyConfig(requestedMapID, result)
 	} else {
 		// 兼容旧配置：仅 Monsters，等级默认 5，仍然使用最多 9 槽位的旧逻辑
 		slotsCount := conf.Slots
@@ -939,6 +999,7 @@ func generateSlotsInternal(mapID int, writeCache bool) []Slot {
 		for i := 0; i < slotsCount; i++ {
 			result = append(result, pool[rand.Intn(len(pool))])
 		}
+		result = applyShinyConfig(requestedMapID, result)
 	}
 
 	if writeCache {
@@ -1005,12 +1066,15 @@ func GenerateOneSlot(mapID int) Slot {
 		roll := rand.Intn(10)
 		switch roll {
 		case 0, 1, 2, 3, 4, 5, 6, 7:
-			return commonPool[rand.Intn(len(commonPool))]
+			s := commonPool[rand.Intn(len(commonPool))]
+			return applyShinyConfig(mapID, []Slot{s})[0]
 		case 8:
 			if len(rarePool) > 0 {
-				return rarePool[rand.Intn(len(rarePool))]
+				s := rarePool[rand.Intn(len(rarePool))]
+				return applyShinyConfig(mapID, []Slot{s})[0]
 			}
-			return commonPool[rand.Intn(len(commonPool))]
+			s := commonPool[rand.Intn(len(commonPool))]
+			return applyShinyConfig(mapID, []Slot{s})[0]
 		default:
 			return Slot{}
 		}
@@ -1029,7 +1093,8 @@ func GenerateOneSlot(mapID int) Slot {
 	if len(pool) == 0 {
 		return Slot{}
 	}
-	return pool[rand.Intn(len(pool))]
+	s := pool[rand.Intn(len(pool))]
+	return applyShinyConfig(mapID, []Slot{s})[0]
 }
 
 // GetCachedSlots 获取缓存的精灵槽位，如果没有缓存则生成新的

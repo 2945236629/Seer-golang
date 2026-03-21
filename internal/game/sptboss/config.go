@@ -1,7 +1,10 @@
 // Package sptboss GM 可配置结构（地图-BOSS、奖励、特性）
 package sptboss
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // MapBossItem 地图 BOSS 配置项（GM 用）
 type MapBossItem struct {
@@ -20,6 +23,9 @@ type SPTBossItem struct {
 	RewardItemID int  `json:"rewardItemId"`
 	Level        int  `json:"level"`
 	HasShield    bool `json:"hasShield"`
+	// RewardTitleIds 非空时首次击败只发列表中的称号；空则走内置默认。RewardTitleId 为旧版单字段兼容。
+	RewardTitleIDs []int `json:"rewardTitleIds,omitempty"`
+	RewardTitleID  int   `json:"rewardTitleId,omitempty"`
 }
 
 // DamageMultItem 受到伤害倍数配置（如魔狮迪露×10）
@@ -92,6 +98,40 @@ var (
 	gmPuniSeals        map[int]PuniSealConfig // doorIndex -> config
 )
 
+// DedupePositiveSorted 去重、过滤非正整数并升序排列
+func DedupePositiveSorted(ids []int) []int {
+	if len(ids) == 0 {
+		return nil
+	}
+	m := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			m[id] = struct{}{}
+		}
+	}
+	out := make([]int, 0, len(m))
+	for id := range m {
+		out = append(out, id)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// NormalizeSPTBossItemTitles 将旧版 rewardTitleId 合并进 rewardTitleIds 并规范化
+func NormalizeSPTBossItemTitles(it *SPTBossItem) {
+	if it == nil {
+		return
+	}
+	if len(it.RewardTitleIDs) == 0 && it.RewardTitleID > 0 {
+		it.RewardTitleIDs = []int{it.RewardTitleID}
+	}
+	it.RewardTitleID = 0 // 已合并到 rewardTitleIds，持久化时不再写旧字段
+	it.RewardTitleIDs = DedupePositiveSorted(it.RewardTitleIDs)
+	if len(it.RewardTitleIDs) == 0 {
+		it.RewardTitleIDs = nil
+	}
+}
+
 func sliceToSet(ids []int) map[int]bool {
 	m := make(map[int]bool)
 	for _, id := range ids {
@@ -142,13 +182,16 @@ func SetConfig(cfg *FullConfig) {
 		if it.BossPetID <= 0 {
 			continue
 		}
+		it2 := it
+		NormalizeSPTBossItemTitles(&it2)
 		gmSPTBossByPetID[it.BossPetID] = SPTBossEntry{
-			SPTID:        it.SPTID,
-			BossPetID:    it.BossPetID,
-			RewardPetID:  it.RewardPetID,
-			RewardItemID: it.RewardItemID,
-			Level:        it.Level,
-			HasShield:    it.HasShield,
+			SPTID:        it2.SPTID,
+			BossPetID:    it2.BossPetID,
+			RewardPetID:  it2.RewardPetID,
+			RewardItemID: it2.RewardItemID,
+			Level:        it2.Level,
+			HasShield:    it2.HasShield,
+			RewardTitleIDs: append([]int(nil), it2.RewardTitleIDs...),
 		}
 	}
 	// 控制免疫 = 所有出现在地图或 SPT 中的 BOSS
@@ -227,6 +270,7 @@ func exportBuiltInConfig() FullConfig {
 			SPTID: e.SPTID, BossPetID: e.BossPetID,
 			RewardPetID: e.RewardPetID, RewardItemID: e.RewardItemID,
 			Level: e.Level, HasShield: e.HasShield,
+			RewardTitleIDs: append([]int(nil), e.RewardTitleIDs...),
 		})
 	}
 	traits := TraitConfig{
@@ -264,6 +308,7 @@ func exportGMConfig() FullConfig {
 			SPTID: e.SPTID, BossPetID: e.BossPetID,
 			RewardPetID: e.RewardPetID, RewardItemID: e.RewardItemID,
 			Level: e.Level, HasShield: e.HasShield,
+			RewardTitleIDs: append([]int(nil), e.RewardTitleIDs...),
 		})
 	}
 	traits := TraitConfig{

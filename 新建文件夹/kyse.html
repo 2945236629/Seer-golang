@@ -6,75 +6,57 @@
     <title>KYSE 赛尔号 GM 管理系统</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        :root {
-            --kyse-primary: #0f172a;
-            --kyse-primary-light: #1e293b;
-            --kyse-primary-dark: #020617;
-            --kyse-success: #10b981;
-            --kyse-danger: #ef4444;
-            --kyse-warning: #f59e0b;
-            --kyse-border: #e2e8f0;
-            --kyse-bg: #f8fafc;
-            --kyse-card-bg: #ffffff;
-            --kyse-text-primary: #0f172a;
-            --kyse-text-secondary: #64748b;
-            --kyse-sidebar-width: 244px;
-            --kyse-accent: #2563eb;
-            --kyse-radius-sm: 6px;
-            --kyse-radius-md: 10px;
-            --kyse-radius-lg: 14px;
-            --kyse-shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.06);
-            --kyse-shadow-md: 0 8px 20px rgba(15, 23, 42, 0.08);
-        }
+        /* KOSE 风格：深色侧栏、扁平化、简洁边框 */
+        :root { --kyse-primary: #2B2E33; --kyse-primary-light: #393D42; --kyse-primary-dark: #1f2226; --kyse-success: #059669; --kyse-danger: #dc2626; --kyse-border: #e5e7eb; --kyse-bg: #F8F9FA; --kyse-sidebar-width: 240px; --kyse-accent: #2563eb; }
         * { box-sizing: border-box; }
         html, body { height: 100%; margin: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Roboto, sans-serif; background: var(--kyse-bg); -webkit-font-smoothing: antialiased; color: var(--kyse-text-primary); }
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #eef2f7; border-radius: 999px; }
-        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 999px; }
-        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Roboto, sans-serif; background: var(--kyse-bg); -webkit-font-smoothing: antialiased; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #e5e7eb; }
+        ::-webkit-scrollbar-thumb { background: #9ca3af; }
         .kyse-layout { display: flex; height: 100vh; min-height: 0; overflow: hidden; }
-        .kyse-sidebar { width: var(--kyse-sidebar-width); background: linear-gradient(180deg, var(--kyse-primary) 0%, var(--kyse-primary-light) 100%); border-right: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; flex-shrink: 0; box-shadow: var(--kyse-shadow-md); }
-        .kyse-sidebar .logo { padding: 18px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        /* 深色侧栏 */
+        .kyse-sidebar { width: var(--kyse-sidebar-width); background: var(--kyse-primary); border-right: none; display: flex; flex-direction: column; flex-shrink: 0; }
+        .kyse-sidebar .logo { padding: 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
         .kyse-sidebar .logo-inner { display: flex; align-items: center; gap: 12px; }
-        .kyse-sidebar .logo-icon { width: 38px; height: 38px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.2); border-radius: var(--kyse-radius-md); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; }
-        .kyse-sidebar .logo-icon svg { width: 20px; height: 20px; opacity: 0.92; }
-        .kyse-sidebar .logo h2 { margin: 0; font-size: 1.2rem; font-weight: 700; color: #fff; letter-spacing: 0.2px; }
-        .kyse-sidebar .logo p { margin: 2px 0 0; font-size: 12px; color: rgba(255,255,255,0.7); }
-        .kyse-nav { padding: 14px 8px; flex: 1; overflow-y: auto; }
-        .kyse-nav-group { margin-bottom: 12px; }
-        .kyse-nav-group-title { padding: 8px 10px; font-size: 12px; color: rgba(255,255,255,0.62); text-transform: uppercase; letter-spacing: 0.45px; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; border-radius: var(--kyse-radius-sm); }
-        .kyse-nav-group-title:hover { color: rgba(255,255,255,0.9); background: rgba(255,255,255,0.05); }
+        .kyse-sidebar .logo-icon { width: 36px; height: 36px; background: rgba(255,255,255,0.15); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; }
+        .kyse-sidebar .logo-icon svg { width: 20px; height: 20px; opacity: 0.9; }
+        .kyse-sidebar .logo h2 { margin: 0; font-size: 1.25rem; font-weight: 700; color: #fff; }
+        .kyse-sidebar .logo p { margin: 2px 0 0; font-size: 12px; color: rgba(255,255,255,0.65); }
+        .kyse-nav { padding: 12px 0; flex: 1; overflow-y: auto; }
+        .kyse-nav-group { margin-bottom: 8px; }
+        .kyse-nav-group-title { padding: 8px 16px 6px; font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+        .kyse-nav-group-title:hover { color: rgba(255,255,255,0.8); }
         .kyse-nav-group-title .caret { font-size: 10px; transition: transform 0.2s; }
         .kyse-nav-group.collapsed .kyse-nav-group-title .caret { transform: rotate(-90deg); }
         .kyse-nav-group.collapsed .kyse-nav-items { display: none; }
-        .kyse-nav-items { padding: 0 2px; }
-        .kyse-nav-item { padding: 10px 12px; margin: 3px 0; cursor: pointer; transition: all 0.2s ease; border-radius: var(--kyse-radius-md); color: rgba(255,255,255,0.86); font-weight: 500; border: none; background: transparent; width: 100%; text-align: left; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-        .kyse-nav-item:hover { background: rgba(255,255,255,0.1); color: #fff; transform: translateX(2px); }
-        .kyse-nav-item.active { background: rgba(37,99,235,0.22); color: #fff; border-left: 3px solid #60a5fa; padding-left: 9px; box-shadow: inset 0 0 0 1px rgba(96,165,250,0.25); }
+        .kyse-nav-items { padding: 0 8px; }
+        .kyse-nav-item { padding: 10px 12px; margin: 2px 0; cursor: pointer; transition: background 0.15s; border-radius: 6px; color: rgba(255,255,255,0.85); font-weight: 500; border: none; background: transparent; width: 100%; text-align: left; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+        .kyse-nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .kyse-nav-item.active { background: var(--kyse-primary-light); color: #fff; border-left: 3px solid var(--kyse-accent); padding-left: 9px; }
         .kyse-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-        .kyse-header { background: var(--kyse-card-bg); border-bottom: 1px solid var(--kyse-border); padding: 12px 22px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; box-shadow: var(--kyse-shadow-sm); }
-        .kyse-header h3 { margin: 0; font-size: 1.08rem; font-weight: 650; color: var(--kyse-text-primary); }
-        .kyse-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        .kyse-btn-ghost { background: #fff; color: var(--kyse-text-secondary); border: 1px solid #d1d9e5; padding: 6px 12px; font-size: 13px; }
-        .kyse-btn-ghost:hover { background: #f1f5f9; color: #334155; border-color: #94a3b8; }
+        .kyse-header { background: #fff; border-bottom: 1px solid var(--kyse-border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .kyse-header h3 { margin: 0; font-size: 1.125rem; font-weight: 600; color: #111827; }
+        .kyse-header-actions { display: flex; align-items: center; gap: 10px; }
+        .kyse-btn-ghost { background: #fff; color: #6b7280; border: 1px solid #d1d5db; padding: 6px 12px; font-size: 13px; }
+        .kyse-btn-ghost:hover { background: #f9fafb; color: #374151; border-color: #9ca3af; }
         .kyse-btn-ghost.text-success { color: var(--kyse-success); border-color: transparent; }
-        .kyse-btn-ghost.text-success:hover { color: #059669; }
-        .kyse-status-pill { padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--kyse-accent); color: #fff; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
-        .kyse-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: var(--kyse-radius-md); font-weight: 550; border: 1px solid transparent; cursor: pointer; transition: all 0.2s ease; font-size: 14px; white-space: nowrap; }
-        .kyse-btn-primary { background: var(--kyse-accent); color: #fff; box-shadow: 0 2px 8px rgba(37,99,235,0.28); }
-        .kyse-btn-primary:hover { background: #1d4ed8; color: #fff; transform: translateY(-1px); }
-        .kyse-btn-success { background: var(--kyse-success); color: #fff; box-shadow: 0 2px 8px rgba(16,185,129,0.28); }
-        .kyse-btn-success:hover { background: #059669; color: #fff; transform: translateY(-1px); }
-        .kyse-btn-danger { background: var(--kyse-danger); color: #fff; box-shadow: 0 2px 8px rgba(239,68,68,0.28); }
-        .kyse-btn-danger:hover { background: #dc2626; color: #fff; transform: translateY(-1px); }
-        .kyse-btn-secondary { background: #fff; color: #334155; border-color: var(--kyse-border); }
-        .kyse-btn-secondary:hover { background: #f8fafc; border-color: #94a3b8; transform: translateY(-1px); }
+        .kyse-btn-ghost.text-success:hover { color: #047857; }
+        .kyse-status-pill { padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; background: var(--kyse-accent); color: #fff; display: inline-flex; align-items: center; gap: 6px; }
+        .kyse-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 6px; font-weight: 500; border: 1px solid transparent; cursor: pointer; transition: background 0.15s, border-color 0.15s; font-size: 14px; }
+        .kyse-btn-primary { background: var(--kyse-accent); color: #fff; }
+        .kyse-btn-primary:hover { background: #1d4ed8; color: #fff; }
+        .kyse-btn-success { background: var(--kyse-success); color: #fff; }
+        .kyse-btn-success:hover { background: #047857; color: #fff; }
+        .kyse-btn-danger { background: var(--kyse-danger); color: #fff; }
+        .kyse-btn-danger:hover { background: #b91c1c; color: #fff; }
+        .kyse-btn-secondary { background: #fff; color: #374151; border-color: var(--kyse-border); }
+        .kyse-btn-secondary:hover { background: #f9fafb; border-color: #9ca3af; }
         .kyse-content { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px; background: var(--kyse-bg); -webkit-overflow-scrolling: touch; }
         .content-section { display: none; }
         .content-section.active { display: block; }
-        .page-block { background: #fff; border-radius: var(--kyse-radius-lg); border: 1px solid var(--kyse-border); overflow: visible; margin-bottom: 20px; max-width: 100%; box-shadow: var(--kyse-shadow-sm); }
-        .page-block-header { background: var(--kyse-primary); color: #fff; padding: 12px 20px; font-size: 1rem; font-weight: 600; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-top-left-radius: var(--kyse-radius-lg); border-top-right-radius: var(--kyse-radius-lg); }
+        .page-block { background: #fff; border-radius: 4px; border: 1px solid var(--kyse-border); overflow: visible; margin-bottom: 20px; max-width: 100%; }
+        .page-block-header { background: var(--kyse-primary); color: #fff; padding: 12px 20px; font-size: 1rem; font-weight: 600; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
         .page-block-header.collapsible { cursor: pointer; user-select: none; }
         .page-block-header.collapsible:hover { background: var(--kyse-primary-light); }
         .page-block-header .collapse-icon { transition: transform 0.3s ease; display: inline-block; margin-right: 8px; font-size: 14px; }
@@ -85,7 +67,7 @@
         .stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; max-width: 100%; }
         @media (max-width: 992px) { .stat-cards { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 576px) { .stat-cards { grid-template-columns: 1fr; } }
-        .stat-card { background: #fff; border-radius: var(--kyse-radius-md); border: 1px solid var(--kyse-border); overflow: hidden; box-shadow: var(--kyse-shadow-sm); }
+        .stat-card { background: #fff; border-radius: 4px; border: 1px solid var(--kyse-border); overflow: hidden; }
         .stat-card .stat-header { padding: 12px 16px; border-bottom: 1px solid var(--kyse-border); display: flex; align-items: center; justify-content: space-between; font-weight: 600; color: #374151; font-size: 14px; }
         .stat-card .stat-body { padding: 16px; text-align: center; }
         .stat-card .stat-value { font-size: 1.75rem; font-weight: 700; color: #1f2937; }
@@ -94,20 +76,20 @@
         .stat-card .stat-value.purple { color: #7c3aed; }
         .stat-card .stat-value.orange { color: #ea580c; }
         .stat-card .stat-label { font-size: 13px; color: #6b7280; margin-top: 6px; }
-        .detail-card { background: #fff; border-radius: var(--kyse-radius-md); border: 1px solid var(--kyse-border); padding: 16px; margin-bottom: 16px; box-shadow: var(--kyse-shadow-sm); }
+        .detail-card { background: #fff; border-radius: 4px; border: 1px solid var(--kyse-border); padding: 16px; margin-bottom: 16px; }
         .detail-card h5 { color: #1f2937; font-weight: 600; padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--kyse-border); font-size: 1rem; }
-        .user-item { padding: 12px 14px; border: 1px solid var(--kyse-border); cursor: pointer; background: #fff; margin-bottom: 8px; border-radius: var(--kyse-radius-sm); transition: all 0.15s ease; }
+        .user-item { padding: 12px 14px; border: 1px solid var(--kyse-border); cursor: pointer; background: #fff; margin-bottom: 8px; border-radius: 4px; transition: background 0.15s, border-color 0.15s; }
         .user-item:hover { background: #f9fafb; border-color: #d1d5db; }
         .item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
-        .item-box { border: 1px solid var(--kyse-border); border-radius: var(--kyse-radius-sm); padding: 10px; text-align: center; background: #fff; }
-        .pet-card { border: 1px solid var(--kyse-border); border-radius: var(--kyse-radius-sm); padding: 12px; margin-bottom: 8px; background: #fff; }
+        .item-box { border: 1px solid var(--kyse-border); border-radius: 4px; padding: 10px; text-align: center; background: #fff; }
+        .pet-card { border: 1px solid var(--kyse-border); border-radius: 4px; padding: 12px; margin-bottom: 8px; background: #fff; }
         .scroll-panel { max-height: min(65vh, 600px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
-        .kyse-input { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: var(--kyse-radius-sm); font-size: 14px; background: #fff; }
-        .kyse-input:focus { outline: none; border-color: var(--kyse-accent); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+        .kyse-input { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; background: #fff; }
+        .kyse-input:focus { outline: none; border-color: var(--kyse-primary); }
         #dashboardDatabaseInfo { color: #6b7280; font-size: 13px; }
         .weights-subtitle { font-weight: 600; color: #1f2937; margin-bottom: 6px; font-size: 14px; }
         .weights-desc { font-size: 13px; color: #6b7280; margin-bottom: 12px; line-height: 1.5; }
-        .weights-table { width: 100%; border-collapse: collapse; border: 1px solid var(--kyse-border); border-radius: var(--kyse-radius-sm); overflow: hidden; }
+        .weights-table { width: 100%; border-collapse: collapse; border: 1px solid var(--kyse-border); }
         .weights-table th, .weights-table td { padding: 10px 12px; border-bottom: 1px solid var(--kyse-border); text-align: left; }
         .weights-table th { background: #f9fafb; font-weight: 600; color: #374151; font-size: 13px; }
         .weights-table tbody tr:hover { background: #f9fafb; }
@@ -129,17 +111,13 @@
         .fusion-b-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: #e5e7eb; border-radius: 4px; font-size: 13px; border: 1px solid #d1d5db; }
         .fusion-b-tag .fusion-b-remove { cursor: pointer; color: #6b7280; }
         .fusion-b-tag .fusion-b-remove:hover { color: #ef4444; }
-        .modal-content { border-radius: var(--kyse-radius-lg); border: 1px solid var(--kyse-border); box-shadow: var(--kyse-shadow-md); }
+        .modal-content { border-radius: 4px; border: 1px solid var(--kyse-border); box-shadow: none; }
         .modal-header { border-bottom: 1px solid var(--kyse-border); padding: 12px 16px; }
         .modal-body { padding: 16px; }
         .modal-footer { border-top: 1px solid var(--kyse-border); padding: 12px 16px; }
-        .form-control, .form-select { border-radius: var(--kyse-radius-sm); border: 1px solid #d1d5db; }
-        .form-control:focus, .form-select:focus {
-            border-color: var(--kyse-accent);
-            box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
-        }
+        .form-control, .form-select { border-radius: 4px; border: 1px solid #d1d5db; }
         /* 地图配置卡片式列表 */
-        .maps-config-block { background: var(--kyse-primary); border-radius: var(--kyse-radius-lg); overflow: hidden; margin-bottom: 20px; max-width: 100%; box-shadow: var(--kyse-shadow-md); }
+        .maps-config-block { background: var(--kyse-primary); border-radius: 8px; overflow: hidden; margin-bottom: 20px; max-width: 100%; }
         .maps-config-header { padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
         .maps-config-header .title { color: #fff; font-size: 1rem; font-weight: 600; }
         .maps-config-header .sub { color: rgba(255,255,255,0.7); font-size: 13px; margin-left: 8px; }
@@ -149,8 +127,8 @@
         .maps-search-wrap input { padding-left: 36px; }
         .maps-search-wrap::before { content: '🔍'; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.6; }
         .maps-list { display: flex; flex-direction: column; gap: 10px; }
-        .maps-list-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #fff; border: 1px solid var(--kyse-border); border-radius: var(--kyse-radius-md); cursor: pointer; transition: all 0.2s ease; box-shadow: var(--kyse-shadow-sm); }
-        .maps-list-item:hover { background: #f9fafb; border-color: #d1d5db; transform: translateY(-1px); }
+        .maps-list-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #fff; border: 1px solid var(--kyse-border); border-radius: 8px; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+        .maps-list-item:hover { background: #f9fafb; border-color: #d1d5db; }
         .maps-list-item .left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
         .maps-list-item .map-tag { background: var(--kyse-primary); color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; flex-shrink: 0; }
         .maps-list-item .map-name { font-weight: 600; color: #111827; font-size: 14px; }
@@ -162,7 +140,7 @@
         .maps-pagination { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--kyse-border); flex-wrap: wrap; gap: 12px; }
         .maps-pagination .info { color: #6b7280; font-size: 13px; }
         .maps-pagination .controls { display: flex; align-items: center; gap: 8px; }
-        .maps-pagination .page-btn { padding: 6px 12px; border: 1px solid var(--kyse-border); background: #fff; border-radius: var(--kyse-radius-sm); cursor: pointer; font-size: 13px; color: #374151; }
+        .maps-pagination .page-btn { padding: 6px 12px; border: 1px solid var(--kyse-border); background: #fff; border-radius: 4px; cursor: pointer; font-size: 13px; color: #374151; }
         .maps-pagination .page-btn:hover { background: #f3f4f6; }
         .maps-pagination .page-btn.active { background: var(--kyse-primary); color: #fff; border-color: var(--kyse-primary); }
         .maps-pagination .page-input { width: 48px; padding: 4px 8px; text-align: center; font-size: 13px; }
@@ -171,293 +149,28 @@
         .content-section.active .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .content-section.active .page-block-body { max-width: 100%; }
         .kyse-content { box-sizing: border-box; }
-        .map-form-section {
-            border: 1px solid var(--kyse-border);
-            border-radius: var(--kyse-radius-md);
-            padding: 14px;
-            margin-bottom: 12px;
-            background: #fff;
-        }
-        .map-form-section-title {
-            font-size: 14px;
-            font-weight: 650;
-            color: #0f172a;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .modal-summary-strip {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-        .modal-summary-item {
-            border: 1px solid #dbe7f7;
-            border-radius: var(--kyse-radius-sm);
-            background: #f6faff;
-            padding: 8px 10px;
-            min-height: 58px;
-        }
-        .modal-summary-item .k {
-            font-size: 12px;
-            color: #64748b;
-            margin-bottom: 4px;
-        }
-        .modal-summary-item .v {
-            font-size: 14px;
-            font-weight: 700;
-            color: #0f172a;
-            line-height: 1.2;
-            word-break: break-all;
-        }
-        .map-modal-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-        .map-stepper {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .map-stepper .stepper-btn {
-            width: 30px;
-            height: 30px;
-            border-radius: 8px;
-            border: 1px solid #cbd5e1;
-            background: #fff;
-            color: #334155;
-            font-weight: 700;
-            line-height: 1;
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .map-stepper .stepper-btn:hover {
-            background: #f1f5f9;
-            border-color: #94a3b8;
-        }
-        .map-stepper .form-control {
-            text-align: center;
-            font-weight: 600;
-        }
-        .switch-card {
-            border: 1px dashed #cfe0f6;
-            border-radius: var(--kyse-radius-sm);
-            background: #f8fbff;
-            padding: 10px 12px;
-        }
-        .switch-card.disabled {
-            opacity: 0.6;
-        }
-        .map-modal-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            margin-top: 8px;
-            flex-wrap: wrap;
-        }
-        .task-reward-summary {
-            background: #f7fbff;
-            border: 1px solid #dbe7f7;
-            border-radius: var(--kyse-radius-md);
-            padding: 10px;
-            margin-bottom: 12px;
-        }
-        .task-modal-section {
-            border: 1px solid var(--kyse-border);
-            border-radius: var(--kyse-radius-md);
-            background: #fff;
-            padding: 12px;
-            margin-bottom: 12px;
-            box-shadow: var(--kyse-shadow-sm);
-        }
-        .task-modal-section:last-child {
-            margin-bottom: 0;
-        }
-        .task-modal-section .weights-subtitle {
-            margin-bottom: 8px;
-        }
-        .task-modal-toolbar {
-            border: 1px dashed #d4e4f8;
-            border-radius: var(--kyse-radius-sm);
-            background: #f8fbff;
-            padding: 8px;
-            margin-bottom: 8px;
-        }
-        .spt-trait-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-        }
-        .spt-trait-card {
-            margin-bottom: 0 !important;
-            border-color: #d5e2f3;
-            background: #fdfefe;
-        }
-        .spt-trait-card .weights-sub-header {
-            background: #f3f8ff;
-            color: #1e293b;
-            font-weight: 650;
-        }
-        .user-manage-grid {
-            display: grid;
-            grid-template-columns: 340px minmax(0, 1fr);
-            gap: 14px;
-        }
-        .user-panel-title {
-            font-size: 14px;
-            font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 10px;
-        }
-        .user-tools-strip {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            align-items: center;
-            padding: 10px;
-            border: 1px dashed #d6e4f7;
-            border-radius: var(--kyse-radius-sm);
-            background: #f8fbff;
-            margin-bottom: 10px;
-        }
-        .user-tools-strip .form-control,
-        .user-tools-strip .kyse-input {
-            min-width: 180px;
-            flex: 1 1 180px;
-        }
-        /* 子功能布局统一：分区卡片 + 工具条 + 表格区 */
-        .page-block-body > .weights-section,
-        .page-block-body > .fusion-add,
-        .page-block-body > .sub-feature-card {
-            background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-            border: 1px solid var(--kyse-border);
-            border-radius: var(--kyse-radius-md);
-            padding: 14px 14px 12px;
-            margin-bottom: 14px;
-            box-shadow: var(--kyse-shadow-sm);
-        }
-        .page-block-body > .weights-section:last-child,
-        .page-block-body > .fusion-add:last-child,
-        .page-block-body > .sub-feature-card:last-child {
-            margin-bottom: 0;
-        }
-        .weights-section > .weights-subtitle,
-        .fusion-add > .weights-subtitle,
-        .sub-feature-card > .weights-subtitle {
-            font-size: 14px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            color: #0f172a;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .weights-section > .weights-subtitle::before,
-        .fusion-add > .weights-subtitle::before,
-        .sub-feature-card > .weights-subtitle::before {
-            content: '';
-            width: 6px;
-            height: 6px;
-            border-radius: 999px;
-            background: var(--kyse-accent);
-            box-shadow: 0 0 0 4px rgba(37,99,235,0.12);
-            flex-shrink: 0;
-        }
-        .sub-feature-toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: flex-end;
-            margin-bottom: 10px;
-            padding: 10px 12px;
-            border: 1px dashed #d7e3f3;
-            border-radius: var(--kyse-radius-sm);
-            background: #f8fbff;
-        }
-        .sub-feature-toolbar > .form-control,
-        .sub-feature-toolbar > .kyse-input {
-            min-width: 220px;
-            flex: 1 1 220px;
-        }
-        .table-responsive {
-            border: 1px solid #dfe8f5;
-            border-radius: var(--kyse-radius-sm);
-            background: #fff;
-            padding: 2px;
-        }
-        .table-responsive .weights-table {
-            border: none;
-            border-radius: 0;
-        }
-        .table-responsive .weights-table th {
-            background: #f1f6ff;
-            color: #1e293b;
-            font-weight: 700;
-        }
-        .table-responsive .weights-table tbody tr:nth-child(even) {
-            background: #fcfdff;
-        }
-        .weights-sub-block {
-            border-radius: var(--kyse-radius-md);
-            border-color: #dbe4f3;
-            box-shadow: var(--kyse-shadow-sm);
-        }
-        .weights-sub-block .weights-sub-header {
-            font-weight: 650;
-        }
-        .weights-sub-block .page-block-body {
-            background: #fcfdff;
-        }
-        .page-block-header .ms-auto,
-        .page-block-header > div:last-child {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
-        }
         @media (max-width: 768px) {
             .kyse-content { padding: 12px; }
             .kyse-header { padding: 10px 16px; flex-wrap: wrap; gap: 8px; }
             .maps-config-header, .maps-config-body { padding: 12px 16px; }
-            .sub-feature-toolbar { padding: 8px; gap: 8px; }
-            .sub-feature-toolbar > .form-control,
-            .sub-feature-toolbar > .kyse-input {
-                min-width: 160px;
-                flex: 1 1 160px;
-            }
-            .modal-summary-strip {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-            .map-modal-grid {
-                grid-template-columns: 1fr;
-            }
-            .spt-trait-grid {
-                grid-template-columns: 1fr;
-            }
-            .user-manage-grid {
-                grid-template-columns: 1fr;
-            }
         }
     </style>
 </head>
 <body>
     <div id="gmLoginOverlay" style="position:fixed;inset:0;background:rgba(15,23,42,0.8);display:none;align-items:center;justify-content:center;z-index:9999;">
         <div style="background:#ffffff;border-radius:8px;padding:24px 28px;max-width:360px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,0.35);">
-            <h5 style="margin-bottom:16px;font-weight:600;color:#111827;">GM 后台登录</h5>
+            <h5 style="margin-bottom:16px;font-weight:600;color:#111827;">GM 後台登入</h5>
             <div class="mb-3">
-                <label class="form-label form-label-sm">账号</label>
+                <label class="form-label form-label-sm">帳號</label>
                 <input type="text" id="gmLoginUser" class="form-control form-control-sm" placeholder="預設：admin">
             </div>
             <div class="mb-3">
-                <label class="form-label form-label-sm">密码</label>
+                <label class="form-label form-label-sm">密碼</label>
                 <input type="password" id="gmLoginPass" class="form-control form-control-sm" placeholder="預設：admin">
             </div>
             <div class="d-flex justify-content-between align-items-center">
-                <small class="text-muted">未登录 GM 账号将无法操作本页。</small>
-                <button type="button" class="kyse-btn kyse-btn-primary" onclick="gmDoLogin()">登录</button>
+                <small class="text-muted">未登入 GM 帳號將無法操作本頁。</small>
+                <button type="button" class="kyse-btn kyse-btn-primary" onclick="gmDoLogin()">登入</button>
             </div>
         </div>
     </div>
@@ -568,18 +281,18 @@
         
         <!-- 用户管理 -->
         <div id="users" class="content-section">
-            <div class="user-manage-grid">
-                <div>
+            <div class="row">
+                <div class="col-md-4">
                     <div class="page-block">
                         <div class="page-block-header collapsible" onclick="toggleCollapse(this)">
                             <span><span class="collapse-icon">▼</span>查找账号</span>
                         </div>
                         <div class="page-block-body">
-                            <div class="user-tools-strip">
+                            <div class="d-flex gap-2 mb-3">
                                 <input type="text" class="form-control kyse-input" id="searchKeyword" placeholder="用户ID / 昵称 / 邮箱" onkeyup="if(event.key==='Enter')loadUsers()">
                                 <button type="button" class="kyse-btn kyse-btn-primary" onclick="loadUsers()">搜索</button>
                             </div>
-                            <div class="user-panel-title">用户列表</div>
+                            <h6 class="text-secondary mb-2">用户列表</h6>
                             <div id="userList"></div>
                         </div>
                     </div>
@@ -594,34 +307,8 @@
                             <button type="button" class="kyse-btn kyse-btn-success w-100" onclick="createAccount()">创建账号</button>
                         </div>
                     </div>
-                    <div class="page-block">
-                        <div class="page-block-header collapsible" onclick="toggleCollapse(this)">
-                            <span><span class="collapse-icon">▼</span>全服 / 在线发放</span>
-                        </div>
-                        <div class="page-block-body">
-                            <p class="small text-muted mb-2">对<strong>全服已注册玩家</strong>或<strong>当前在线玩家</strong>批量发放；操作不可撤销，请谨慎使用。</p>
-                            <div class="mb-3">
-                                <span class="small fw-semibold me-2">发放范围：</span>
-                                <div class="form-check form-check-inline">
-                                    <input class="form-check-input" type="radio" name="broadcastScope" id="broadcastScopeAll" value="all" checked>
-                                    <label class="form-check-label small" for="broadcastScopeAll">全服玩家</label>
-                                </div>
-                                <div class="form-check form-check-inline">
-                                    <input class="form-check-input" type="radio" name="broadcastScope" id="broadcastScopeOnline" value="online">
-                                    <label class="form-check-label small" for="broadcastScopeOnline">仅在线玩家</label>
-                                </div>
-                            </div>
-                            <div class="d-flex flex-wrap gap-2">
-                                <button type="button" class="kyse-btn kyse-btn-primary kyse-btn-sm" onclick="openBroadcastItemsModal()">发放道具</button>
-                                <button type="button" class="kyse-btn kyse-btn-primary kyse-btn-sm" onclick="openBroadcastPetsModal()">发放精灵</button>
-                                <button type="button" class="kyse-btn kyse-btn-primary kyse-btn-sm" onclick="openBroadcastExpModal()">发放经验池</button>
-                                <button type="button" class="kyse-btn kyse-btn-primary kyse-btn-sm" onclick="openBroadcastTitlesModal()">发放称号</button>
-                            </div>
-                            <p class="small text-muted mb-0 mt-2">接口：<code>POST /gm/broadcast/items|pets|exp-pool|titles</code>，需玩家管理权限。</p>
-                        </div>
-                    </div>
                 </div>
-                <div>
+                <div class="col-md-8">
                     <div id="userDetail" style="display:none;">
                         <div class="page-block">
                             <div class="page-block-header collapsible collapsed" onclick="toggleCollapse(this)">
@@ -635,32 +322,6 @@
                                 <div class="col-md-6"><strong>金币:</strong> <input type="number" class="form-control form-control-sm" id="detailCoins"></div>
                                 <div class="col-md-6"><strong>金豆:</strong> <input type="number" class="form-control form-control-sm" id="detailGold"></div>
                                 <div class="col-md-6"><strong>体力:</strong> <input type="number" class="form-control form-control-sm" id="detailEnergy"></div>
-                                <div class="col-12 mt-2 p-3 rounded border" style="background:#f8fafc;">
-                                    <div class="fw-semibold mb-2">称号（读写存档）</div>
-                                    <div class="row g-2 align-items-center mb-2">
-                                        <div class="col-md-8">
-                                            <span class="small text-muted">当前佩戴：</span>
-                                            <strong id="detailCurTitleName" class="text-primary">—</strong>
-                                            <span class="small text-muted ms-1">（ID: <span id="detailCurTitleIdDisp">0</span>）</span>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label small mb-0">切换佩戴</label>
-                                            <select id="detailCurTitleSelect" class="form-select form-select-sm" onchange="onDetailCurTitleSelectChange()"></select>
-                                            <div class="small text-muted mt-1">切换后将自动保存；也可用下方按钮手动保存全部称号</div>
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <span class="small fw-semibold">已拥有称号：</span>
-                                        <span id="detailOwnedTitlesOtherAch" class="small text-muted"></span>
-                                    </div>
-                                    <div id="detailOwnedTitlesChips" class="d-flex flex-wrap gap-1 mb-2"></div>
-                                    <div class="d-flex flex-wrap gap-2 align-items-center">
-                                        <button type="button" class="kyse-btn kyse-btn-success kyse-btn-sm" onclick="openAddTitlesModal()">添加称号</button>
-                                        <button type="button" class="kyse-btn kyse-btn-primary kyse-btn-sm" onclick="gmSavePlayerTitlesData()">保存称号数据</button>
-                                        <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="loadGmTitleList(true)">重新加载称号表</button>
-                                    </div>
-                                    <p class="small text-muted mb-0 mt-2">称号表来自 <code>GET /gm/achieve-titles</code>（<code>data/achieve.xml</code>）。保存时写入 <code>POST /gm/user/save-titles</code>，并与非称号类成就 ID 合并存档。</p>
-                                </div>
                             </div>
                             <hr class="my-3">
                             <h6 class="mb-3"><strong>NONO信息</strong></h6>
@@ -799,24 +460,6 @@
                 <div class="page-block-body">
                     <div class="weights-sub-block">
                         <div class="page-block-header collapsible weights-sub-header" onclick="toggleCollapse(this)">
-                            <span><span class="collapse-icon">▼</span>非捕捉异色几率(%)</span>
-                        </div>
-                        <div class="page-block-body">
-                            <p class="weights-desc">除战斗捕捉外，任务奖励、活动赠宠、元神赋形、精元孵化等途径获得精灵时，按此处概率额外判定异色。<strong>填写百分比</strong>：例如 <code>0.003</code> 表示 0.003%；<code>0</code> 表示关闭。战斗捕捉仍只依据地图/敌方异色配置，不受此项影响。</p>
-                            <div class="table-responsive">
-                                <table class="weights-table">
-                                    <tbody>
-                                        <tr>
-                                            <td style="min-width:200px;">非捕捉异色几率(%)</td>
-                                            <td class="num-cell"><input type="number" class="form-control form-control-sm" id="weightsNonCaptureShinyPercent" min="0" max="100" step="0.000001" style="max-width:12rem;" placeholder="0.003" /></td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="weights-sub-block">
-                        <div class="page-block-header collapsible weights-sub-header" onclick="toggleCollapse(this)">
                             <span><span class="collapse-icon">▼</span>胶囊捕捉几率(%)</span>
                         </div>
                         <div class="page-block-body">
@@ -873,7 +516,7 @@
                         </div>
                         <div class="page-block-body collapsed">
                             <p class="weights-desc">GM 可修改<strong>精元孵化时间</strong>（SPT/暗黑武斗场/扭蛋精元等，元神珠孵化时间在「元神赋形」中配置）。默认普通 1800 秒、VIP 900 秒。精元(400xxx)来自 items.xml。</p>
-                            <div class="d-flex flex-wrap gap-3 align-items-end mb-3 sub-feature-toolbar">
+                            <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
                                 <div>
                                     <label class="form-label small mb-0">搜索</label>
                                     <input type="text" id="breedSearchInput" class="form-control kyse-input" placeholder="按名称或ID搜索" style="width:180px" oninput="renderWeightsBreedRows()" title="支持精元名称或物品ID">
@@ -1009,7 +652,7 @@
                     </div>
                     <div class="weights-section">
                         <h6 class="weights-subtitle">罗威训练奖励（预留）</h6>
-                        <div class="row g-2 align-items-center sub-feature-toolbar">
+                        <div class="row g-2 align-items-center">
                             <div class="col-md-3">
                                 <label class="form-label small mb-1">基础经验</label>
                                 <input type="number" class="form-control form-control-sm" id="roweiBaseExp" value="0" min="0">
@@ -1059,7 +702,7 @@
                 </div>
                 <div class="page-block-body">
                     <p class="weights-desc">通过任务 ID 配置任务完成后的奖励（精灵 / 道具 / 家具 / 赛尔豆 / 金豆 / 经验等）。建议先从 test/gm_task_config.json 初始化，再在此进行可视化调整。</p>
-                    <div class="mb-2 d-flex gap-2 sub-feature-toolbar">
+                    <div class="mb-2 d-flex gap-2">
                         <input type="text" class="form-control kyse-input" id="taskSearchInput" placeholder="按任务ID或名称搜索..." oninput="renderTaskConfigTable()">
                         <button type="button" class="kyse-btn kyse-btn-secondary" onclick="loadTaskConfigs()">重新加载</button>
                     </div>
@@ -1168,7 +811,7 @@
             <div class="page-block">
                 <div class="page-block-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span>勇者之塔配置（1~80 层，每层 Boss 精灵 ID 列表）</span>
-                    <div class="sub-feature-toolbar" style="margin-bottom:0; padding:6px 8px; background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);">
+                    <div>
                         <button type="button" class="kyse-btn kyse-btn-secondary btn-sm me-2" onclick="fillFightLevelByOrder()">按精灵代码顺序每层3只</button>
                         <button type="button" class="kyse-btn kyse-btn-secondary btn-sm me-2" onclick="fillFightLevelRandom()">每层随机三只精灵</button>
                         <button type="button" class="kyse-btn kyse-btn-primary" onclick="saveFightLevel()">保存配置</button>
@@ -1176,28 +819,25 @@
                 </div>
                 <div class="page-block-body">
                     <p class="weights-desc">每层至少填一个精灵 ID，多个用英文逗号分隔。等级填 0 表示自动(10+层数)。属性倍率 100 为原始。经验加入经验池、赛尔豆、道具/装备 ID、精灵 ID 填 0 表示无。数据保存到数据库表 gm_fight_level_config。</p>
-                    <div class="sub-feature-card">
-                        <div class="weights-subtitle">层级配置表</div>
-                        <div class="table-responsive" style="max-height: min(75vh, 900px); min-height: 360px; overflow-y: auto; overflow-x: auto; -webkit-overflow-scrolling: touch;">
-                            <table class="weights-table" id="fightLevelTable" style="margin-bottom: 0;">
-                                <thead><tr>
-                                    <th>层</th>
-                                    <th>Boss 精灵 ID</th>
-                                    <th>等级</th>
-                                    <th>HP%</th>
-                                    <th>攻%</th>
-                                    <th>防%</th>
-                                    <th>特攻%</th>
-                                    <th>特防%</th>
-                                    <th>速%</th>
-                                    <th>经验</th>
-                                    <th>赛尔豆</th>
-                                    <th>奖励道具/装备</th>
-                                    <th>奖励精灵</th>
-                                </tr></thead>
-                                <tbody id="fightLevelList"></tbody>
-                            </table>
-                        </div>
+                    <div class="table-responsive" style="max-height: min(75vh, 900px); min-height: 360px; overflow-y: auto; overflow-x: auto; -webkit-overflow-scrolling: touch;">
+                        <table class="weights-table" id="fightLevelTable" style="margin-bottom: 0;">
+                            <thead><tr>
+                                <th>层</th>
+                                <th>Boss 精灵 ID</th>
+                                <th>等级</th>
+                                <th>HP%</th>
+                                <th>攻%</th>
+                                <th>防%</th>
+                                <th>特攻%</th>
+                                <th>特防%</th>
+                                <th>速%</th>
+                                <th>经验</th>
+                                <th>赛尔豆</th>
+                                <th>奖励道具/装备</th>
+                                <th>奖励精灵</th>
+                            </tr></thead>
+                            <tbody id="fightLevelList"></tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -1212,31 +852,27 @@
                 </div>
                 <div class="page-block-body">
                     <p class="weights-desc mb-3">配置暗黑武斗场各门的BOSS和奖励。每个门可以有多个子关卡（如3-1、3-2、3-3）。数据保存到数据库表 gm_dark_portal_config。</p>
-                    <div class="sub-feature-card">
-                        <div class="weights-subtitle">关卡与奖励配置</div>
-                        <div class="table-responsive">
-                            <table class="weights-table">
-                                <thead>
-                                    <tr>
-                                        <th>门索引</th>
-                                        <th>子关卡</th>
-                                        <th>Boss ID</th>
-                                        <th>Boss名称</th>
-                                        <th>等级</th>
-                                        <th>奖励物品ID</th>
-                                        <th>奖励物品</th>
-                                        <th>奖励精灵ID</th>
-                                        <th>奖励精灵</th>
-                                        <th>首次称号ID</th>
-                                        <th>备注</th>
-                                        <th width="80">操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="darkPortalList"></tbody>
-                            </table>
-                        </div>
-                        <button type="button" class="kyse-btn kyse-btn-success mt-3" onclick="addDarkPortalRow()">添加一行</button>
+                    <div class="table-responsive">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th>门索引</th>
+                                    <th>子关卡</th>
+                                    <th>Boss ID</th>
+                                    <th>Boss名称</th>
+                                    <th>等级</th>
+                                    <th>奖励物品ID</th>
+                                    <th>奖励物品</th>
+                                    <th>奖励精灵ID</th>
+                                    <th>奖励精灵</th>
+                                    <th>备注</th>
+                                    <th width="80">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="darkPortalList"></tbody>
+                        </table>
                     </div>
+                    <button type="button" class="kyse-btn kyse-btn-success mt-3" onclick="addDarkPortalRow()">添加一行</button>
                 </div>
             </div>
         </div>
@@ -1257,27 +893,24 @@
                             <span><span class="collapse-icon">▼</span>地图-BOSS（刷新位置）</span>
                         </div>
                         <div class="page-block-body">
-                            <div class="sub-feature-card">
-                                <div class="weights-subtitle">地图刷新点配置</div>
-                                <div class="table-responsive">
-                                    <table class="weights-table">
-                                        <thead>
-                                            <tr>
-                                                <th>地图ID</th>
-                                                <th>地图名称</th>
-                                                <th>Param2</th>
-                                                <th>Boss精灵ID</th>
-                                                <th>Boss名称</th>
-                                                <th>等级</th>
-                                                <th>防护罩</th>
-                                                <th width="80">操作</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="sptBossMapList"></tbody>
-                                    </table>
-                                </div>
-                                <button type="button" class="kyse-btn kyse-btn-success btn-sm mt-2" onclick="addSPTBossMapRow()">添加一行</button>
+                            <div class="table-responsive">
+                                <table class="weights-table">
+                                    <thead>
+                                        <tr>
+                                            <th>地图ID</th>
+                                            <th>地图名称</th>
+                                            <th>Param2</th>
+                                            <th>Boss精灵ID</th>
+                                            <th>Boss名称</th>
+                                            <th>等级</th>
+                                            <th>防护罩</th>
+                                            <th width="80">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="sptBossMapList"></tbody>
+                                </table>
                             </div>
+                            <button type="button" class="kyse-btn kyse-btn-success btn-sm mt-2" onclick="addSPTBossMapRow()">添加一行</button>
                         </div>
                     </div>
 
@@ -1287,29 +920,25 @@
                             <span><span class="collapse-icon">▼</span>SPT 奖励（首次击败）</span>
                         </div>
                         <div class="page-block-body">
-                            <div class="sub-feature-card">
-                                <div class="weights-subtitle">首次击败奖励配置：点击「选择称号」可多选自定义首次称号；不选则使用服务端<strong>默认内置</strong>对照（与客户端 SpeNameBonus 一致）</div>
-                                <div class="table-responsive">
-                                    <table class="weights-table">
-                                        <thead>
-                                            <tr>
-                                                <th>SPT ID</th>
-                                                <th>Boss精灵ID</th>
-                                                <th>Boss名称</th>
-                                                <th>奖励精灵ID</th>
-                                                <th>奖励精灵名称</th>
-                                                <th>奖励精元物品ID</th>
-                                                <th style="min-width:200px">首次称号</th>
-                                                <th>等级</th>
-                                                <th>防护罩</th>
-                                                <th width="80">操作</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="sptBossRewardList"></tbody>
-                                    </table>
-                                </div>
-                                <button type="button" class="kyse-btn kyse-btn-success btn-sm mt-2" onclick="addSPTBossRewardRow()">添加一行</button>
+                            <div class="table-responsive">
+                                <table class="weights-table">
+                                    <thead>
+                                        <tr>
+                                            <th>SPT ID</th>
+                                            <th>Boss精灵ID</th>
+                                            <th>Boss名称</th>
+                                            <th>奖励精灵ID</th>
+                                            <th>奖励精灵名称</th>
+                                            <th>奖励精元物品ID</th>
+                                            <th>等级</th>
+                                            <th>防护罩</th>
+                                            <th width="80">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="sptBossRewardList"></tbody>
+                                </table>
                             </div>
+                            <button type="button" class="kyse-btn kyse-btn-success btn-sm mt-2" onclick="addSPTBossRewardRow()">添加一行</button>
                         </div>
                     </div>
 
@@ -1319,35 +948,33 @@
                             <span><span class="collapse-icon">▼</span>BOSS 特性（精灵ID 逗号分隔）</span>
                         </div>
                         <div class="page-block-body">
-                            <div class="spt-trait-grid">
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">免疫异常状态（如雷伊、盖亚）</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitStatusImmune" placeholder="70, 216, 264, 261"></div>
-                                </div>
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">免疫能力下降</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitStatDropImmune" placeholder="88, 113, 132, 216, 261, 274, 391"></div>
-                                </div>
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">免疫同生共死</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitSameLifeDeathImmune" placeholder="132, 216, 261, 274, 391, 70"></div>
-                                </div>
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">PP 无限</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitInfinitePP" placeholder="70, 187, 264, 261, 132"></div>
-                                </div>
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">先制+6 / 回合优先（雷伊、盖亚）</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitPriorityBonus" placeholder="70, 261"></div>
-                                </div>
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">半血后先制+6且秒杀（魔狮迪露）</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitHalfHPOneShot" placeholder="187"></div>
-                                </div>
-                                <div class="weights-sub-block spt-trait-card">
-                                    <div class="weights-sub-header px-3 py-2">受到伤害倍数（格式：精灵ID:倍数，如 187:10）多个用逗号分隔</div>
-                                    <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitDamageMult" placeholder="187:10"></div>
-                                </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">免疫异常状态（如雷伊、盖亚）</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitStatusImmune" placeholder="70, 216, 264, 261"></div>
+                            </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">免疫能力下降</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitStatDropImmune" placeholder="88, 113, 132, 216, 261, 274, 391"></div>
+                            </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">免疫同生共死</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitSameLifeDeathImmune" placeholder="132, 216, 261, 274, 391, 70"></div>
+                            </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">PP 无限</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitInfinitePP" placeholder="70, 187, 264, 261, 132"></div>
+                            </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">先制+6 / 回合优先（雷伊、盖亚）</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitPriorityBonus" placeholder="70, 261"></div>
+                            </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">半血后先制+6且秒杀（魔狮迪露）</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitHalfHPOneShot" placeholder="187"></div>
+                            </div>
+                            <div class="weights-sub-block mb-3">
+                                <div class="weights-sub-header px-3 py-2">受到伤害倍数（格式：精灵ID:倍数，如 187:10）多个用逗号分隔</div>
+                                <div class="px-3 py-2"><input type="text" class="kyse-input" id="sptTraitDamageMult" placeholder="187:10"></div>
                             </div>
                         </div>
                     </div>
@@ -1414,23 +1041,20 @@
                 </div>
                 <div class="page-block-body">
                     <p class="weights-desc mb-3">配置 BOSS 技能多效果 ID 的数值（固定伤害、威力百分比、回合数、第二参数、先制加值）。保存到数据库表 gm_boss_effect_config，战斗中会读取此处配置应用（如 976 简/极 的固定伤害）。</p>
-                    <div class="sub-feature-card">
-                        <div class="weights-subtitle">效果参数配置</div>
-                        <div class="table-responsive">
-                            <table class="weights-table">
-                                <thead>
-                                    <tr>
-                                        <th style="width:90px;">效果ID</th>
-                                        <th style="width:100px;">固定伤害</th>
-                                        <th style="width:100px;">威力%</th>
-                                        <th style="width:80px;">回合</th>
-                                        <th style="width:100px;">第二参数</th>
-                                        <th style="width:100px;">先制加值</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="bossEffectList"></tbody>
-                            </table>
-                        </div>
+                    <div class="table-responsive">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:90px;">效果ID</th>
+                                    <th style="width:100px;">固定伤害</th>
+                                    <th style="width:100px;">威力%</th>
+                                    <th style="width:80px;">回合</th>
+                                    <th style="width:100px;">第二参数</th>
+                                    <th style="width:100px;">先制加值</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bossEffectList"></tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -1486,100 +1110,52 @@
                 </div>
                 <div class="modal-body">
                     <input type="hidden" id="mapConfigModalMapId">
-                    <div class="modal-summary-strip">
-                        <div class="modal-summary-item">
-                            <div class="k">地图ID</div>
-                            <div class="v" id="mapConfigSummaryId">-</div>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">地图ID</label>
+                            <input type="text" class="form-control" id="mapConfigModalMapIdDisplay" readonly>
                         </div>
-                        <div class="modal-summary-item">
-                            <div class="k">地图名称</div>
-                            <div class="v" id="mapConfigSummaryName">-</div>
+                        <div class="col-md-4">
+                            <label class="form-label">地图名称</label>
+                            <input type="text" class="form-control" id="mapConfigModalMapName" readonly>
                         </div>
-                        <div class="modal-summary-item">
-                            <div class="k">普通怪数量</div>
-                            <div class="v" id="mapConfigCommonCount">0</div>
-                        </div>
-                        <div class="modal-summary-item">
-                            <div class="k">稀有怪数量</div>
-                            <div class="v" id="mapConfigRareCount">0</div>
+                        <div class="col-md-4">
+                            <label class="form-label">槽位数</label>
+                            <input type="number" class="form-control" id="mapConfigModalSlots" min="1" max="9" value="4" data-field="slots">
                         </div>
                     </div>
-                    <div class="map-form-section">
-                        <div class="map-form-section-title">基本信息</div>
-                        <div class="row g-3">
-                            <div class="col-md-4">
-                                <label class="form-label">地图ID</label>
-                                <input type="text" class="form-control" id="mapConfigModalMapIdDisplay" readonly>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">地图名称</label>
-                                <input type="text" class="form-control" id="mapConfigModalMapName" readonly>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">刷新槽位</label>
-                                <div class="map-stepper">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalSlots" data-step="-1">-</button>
-                                    <input type="number" class="form-control" id="mapConfigModalSlots" min="1" max="9" value="4" data-field="slots">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalSlots" data-step="1">+</button>
-                                </div>
-                            </div>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">稀有刷新几率(%)</label>
+                            <input type="number" class="form-control" id="mapConfigModalRarePercent" min="0" max="100" value="5" data-field="rarePercent">
                         </div>
-                    </div>
-
-                    <div class="map-form-section">
-                        <div class="map-form-section-title">刷新配置</div>
-                        <div class="row g-3 mb-2">
-                            <div class="col-md-4">
-                                <label class="form-label">稀有刷新几率(%)</label>
-                                <div class="map-stepper">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalRarePercent" data-step="-1">-</button>
-                                    <input type="number" class="form-control" id="mapConfigModalRarePercent" min="0" max="100" value="5" data-field="rarePercent">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalRarePercent" data-step="1">+</button>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">刷新间隔(秒)</label>
-                                <div class="map-stepper">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalInterval" data-step="-1">-</button>
-                                    <input type="number" class="form-control" id="mapConfigModalInterval" min="1" max="600" value="10" data-field="interval">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalInterval" data-step="1">+</button>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">异色刷新几率(%)</label>
-                                <div class="map-stepper">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalShinyPercent" data-step="-1">-</button>
-                                    <input type="number" class="form-control" id="mapConfigModalShinyPercent" min="0" max="100" value="5" data-field="shinyPercent">
-                                    <button type="button" class="stepper-btn" data-target="mapConfigModalShinyPercent" data-step="1">+</button>
-                                </div>
-                            </div>
+                        <div class="col-md-4">
+                            <label class="form-label">刷新间隔(秒)</label>
+                            <input type="number" class="form-control" id="mapConfigModalInterval" min="1" max="600" value="10" data-field="interval">
                         </div>
-                        <div class="switch-card" id="mapConfigShinySwitchCard">
-                            <div class="form-check form-switch mt-1">
+                        <div class="col-md-4">
+                            <label class="form-label">异色刷新开关</label>
+                            <div class="form-check form-switch mt-2">
                                 <input class="form-check-input" type="checkbox" id="mapConfigModalShinyEnabled" data-field="shinyEnabled">
-                                <label class="form-check-label" for="mapConfigModalShinyEnabled">启用异色刷新（每次最多 1 只）</label>
+                                <label class="form-check-label" for="mapConfigModalShinyEnabled">启用异色刷新（每次最多1只）</label>
                             </div>
                         </div>
                     </div>
-
-                    <div class="map-form-section">
-                        <div class="map-form-section-title">怪物配置</div>
-                        <div class="map-modal-grid">
-                            <div>
-                                <label class="form-label">普通精灵（精灵代码+名称 LvMin-LvMax，一行一个）</label>
-                                <textarea class="form-control" id="mapConfigModalCommon" rows="6" data-field="common" placeholder="例如：166 闪光波克尔 1-2&#10;47 蘑菇怪 10-12"></textarea>
-                                <div class="map-modal-actions">
-                                    <button type="button" class="kyse-btn kyse-btn-secondary btn-sm mt-1" id="mapConfigModalCommonBtn">从列表选择</button>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="form-label">稀有精灵（精灵代码+名称 LvMin-LvMax，一行一个）</label>
-                                <textarea class="form-control" id="mapConfigModalRare" rows="6" data-field="rare" placeholder="例如：166 闪光波克尔 5-5"></textarea>
-                                <div class="map-modal-actions">
-                                    <button type="button" class="kyse-btn kyse-btn-secondary btn-sm mt-1" id="mapConfigModalRareBtn">从列表选择</button>
-                                </div>
-                            </div>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">异色刷新几率(%)</label>
+                            <input type="number" class="form-control" id="mapConfigModalShinyPercent" min="0" max="100" value="5" data-field="shinyPercent">
                         </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">普通精灵（精灵代码+名称 LvMin-LvMax，一行一个）</label>
+                        <textarea class="form-control" id="mapConfigModalCommon" rows="4" data-field="common" placeholder="例如：166 闪光波克尔 1-2&#10;47 蘑菇怪 10-12"></textarea>
+                        <button type="button" class="kyse-btn kyse-btn-secondary btn-sm mt-1" id="mapConfigModalCommonBtn">从列表选择</button>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">稀有精灵（精灵代码+名称 LvMin-LvMax，一行一个）</label>
+                        <textarea class="form-control" id="mapConfigModalRare" rows="4" data-field="rare" placeholder="例如：166 闪光波克尔 5-5"></textarea>
+                        <button type="button" class="kyse-btn kyse-btn-secondary btn-sm mt-1" id="mapConfigModalRareBtn">从列表选择</button>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -1979,143 +1555,6 @@
             </div>
         </div>
     </div>
-
-    <div class="modal fade" id="addTitlesModal" tabindex="-1">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">添加称号（多选）</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <input type="text" class="form-control form-control-sm mb-2" id="addTitlesModalSearch" placeholder="搜索称号名称或 ID…" oninput="renderAddTitlesModalList()">
-                    <div class="small text-muted mb-2" id="addTitlesModalHint">仅列出尚未拥有的称号；勾选后点「添加并保存」写入存档。</div>
-                    <div id="addTitlesModalList" class="border rounded p-2" style="max-height:420px;overflow-y:auto;background:#fafafa;"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="addTitlesModalSelectAllFiltered(true)">全选可见</button>
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="addTitlesModalSelectAllFiltered(false)">取消全选</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmAddTitlesModal()">添加选中并保存</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- SPT BOSS 首次击败：称号多选（搜索 + 不选=默认内置） -->
-    <div class="modal fade" id="sptBossRewardTitleModal" tabindex="-1">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">SPT 首次击败 — 选择称号（多选）</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p class="small text-muted mb-2">称号表来自 <code>GET /gm/achieve-titles</code>（<code>data/achieve.xml</code>）。<strong>不勾选任何项</strong>并确定后，该 BOSS 将使用服务端<strong>默认内置</strong>称号。</p>
-                    <input type="text" class="form-control form-control-sm mb-2" id="sptBossRewardTitleSearch" placeholder="搜索称号名称或 ID…" oninput="renderSptBossRewardTitlePickerList()">
-                    <div id="sptBossRewardTitleList" class="border rounded p-2" style="max-height:420px;overflow-y:auto;background:#fafafa;"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="sptBossRewardTitlePickerSelectVisible(true)">全选可见</button>
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="sptBossRewardTitlePickerSelectVisible(false)">取消全选</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmSptBossRewardTitlePicker()">确定</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 全服/在线：道具多选 -->
-    <div class="modal fade" id="broadcastItemsModal" tabindex="-1">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">批量发放 — 道具（多选）</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <input type="text" class="form-control form-control-sm mb-2" id="broadcastItemsModalSearch" placeholder="搜索道具名称或 ID…" oninput="renderBroadcastItemsModalList()">
-                    <div id="broadcastItemsModalList" class="border rounded p-2" style="max-height:420px;overflow-y:auto;background:#fafafa;"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="broadcastItemsModalSelectVisible(true)">全选可见</button>
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="broadcastItemsModalSelectVisible(false)">取消全选</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmBroadcastItemsModal()">确认发放</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 全服/在线：精灵多选 -->
-    <div class="modal fade" id="broadcastPetsModal" tabindex="-1">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">批量发放 — 精灵（多选）</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <input type="text" class="form-control form-control-sm mb-2" id="broadcastPetsModalSearch" placeholder="搜索精灵名称或 ID…" oninput="renderBroadcastPetsModalList()">
-                    <div id="broadcastPetsModalList" class="border rounded p-2" style="max-height:420px;overflow-y:auto;background:#fafafa;"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="broadcastPetsModalSelectVisible(true)">全选可见</button>
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="broadcastPetsModalSelectVisible(false)">取消全选</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmBroadcastPetsModal()">确认发放</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 全服/在线：经验池 -->
-    <div class="modal fade" id="broadcastExpModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">批量发放 — 经验池</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <label class="form-label small">为每名目标玩家的<strong>经验分配器经验池</strong>增加数值：</label>
-                    <input type="number" class="form-control" id="broadcastExpAmount" min="1" value="1000" placeholder="正整数">
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmBroadcastExpModal()">确认发放</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 全服/在线：称号多选 -->
-    <div class="modal fade" id="broadcastTitlesModal" tabindex="-1">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">批量发放 — 称号（多选）</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p class="small text-muted mb-2">称号表来自 <code>GET /gm/achieve-titles</code>。将写入各玩家成就称号列表（与单玩家「添加称号」逻辑一致）。</p>
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="checkbox" id="broadcastTitlesWearNow">
-                        <label class="form-check-label small" for="broadcastTitlesWearNow">发放后让所有目标玩家佩戴本次选中称号中 <strong>ID 最大</strong> 的一个（慎用）</label>
-                    </div>
-                    <input type="text" class="form-control form-control-sm mb-2" id="broadcastTitlesModalSearch" placeholder="搜索称号名称或 ID…" oninput="renderBroadcastTitlesModalList()">
-                    <div id="broadcastTitlesModalList" class="border rounded p-2" style="max-height:420px;overflow-y:auto;background:#fafafa;"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="broadcastTitlesModalSelectVisible(true)">全选可见</button>
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="broadcastTitlesModalSelectVisible(false)">取消全选</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    <button type="button" class="btn btn-primary" onclick="confirmBroadcastTitlesModal()">确认发放</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <div class="modal fade" id="taskRewardModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
@@ -2124,7 +1563,7 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="row g-3 task-reward-summary">
+                    <div class="row g-3 mb-3">
                         <div class="col-md-4">
                             <label class="form-label small mb-1">赛尔豆（coins）</label>
                             <input type="number" class="form-control form-control-sm" id="taskRewardCoins" min="0" value="0">
@@ -2138,99 +1577,95 @@
                             <input type="number" class="form-control form-control-sm" id="taskRewardExp" min="0" value="0">
                         </div>
                     </div>
-                    <div class="task-modal-section">
-                        <h6 class="weights-subtitle">精灵奖励</h6>
-                        <div class="row g-2 align-items-end task-modal-toolbar">
-                            <div class="col-md-6">
-                                <label class="form-label small mb-1">搜索精灵（ID 或名称）</label>
-                                <input type="text" class="form-control form-control-sm" id="taskPetSearchInput" list="petOptions" placeholder="例如: 1 布布种子" oninput="updateTaskPetSearchPreview()">
-                            </div>
-                            <div class="col-md-2">
-                                <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskPetReward()">添加精灵奖励</button>
-                            </div>
-                            <div class="col-md-12 mt-1">
-                                <small id="taskPetSearchPreview" class="text-muted"></small>
-                            </div>
+                    <hr>
+                    <h6 class="weights-subtitle">精灵奖励</h6>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-6">
+                            <label class="form-label small mb-1">搜索精灵（ID 或名称）</label>
+                            <input type="text" class="form-control form-control-sm" id="taskPetSearchInput" list="petOptions" placeholder="例如: 1 布布种子" oninput="updateTaskPetSearchPreview()">
                         </div>
-                        <div class="table-responsive mb-3" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
-                            <table class="weights-table">
-                                <thead>
-                                    <tr>
-                                        <th style="width:160px;">精灵ID</th>
-                                        <th>名称</th>
-                                        <th style="width:80px;">等级</th>
-                                        <th style="width:80px;">DV</th>
-                                        <th style="width:80px;">性格</th>
-                                        <th style="width:80px;">操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="taskRewardPetsBody"></tbody>
-                            </table>
+                        <div class="col-md-2">
+                            <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskPetReward()">添加精灵奖励</button>
+                        </div>
+                        <div class="col-md-12 mt-1">
+                            <small id="taskPetSearchPreview" class="text-muted"></small>
                         </div>
                     </div>
-                    <div class="task-modal-section">
-                        <h6 class="weights-subtitle">道具奖励</h6>
-                        <div class="row g-2 align-items-end task-modal-toolbar">
-                            <div class="col-md-5">
-                                <label class="form-label small mb-1">搜索道具（ID 或名称）</label>
-                                <input type="text" class="form-control form-control-sm" id="taskItemSearchInput" list="itemOptions" placeholder="例如: 300001 精灵胶囊" oninput="updateTaskItemSearchPreview()">
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label small mb-1">数量（批量默认值）</label>
-                                <input type="number" class="form-control form-control-sm" id="taskItemSearchCount" placeholder="1" min="1" value="1">
-                            </div>
-                            <div class="col-md-2">
-                                <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskItemReward()">添加道具奖励</button>
-                            </div>
-                            <div class="col-md-12 mt-1">
-                                <small id="taskItemSearchPreview" class="text-muted"></small>
-                            </div>
+                    <div class="table-responsive mb-3" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:160px;">精灵ID</th>
+                                    <th>名称</th>
+                                    <th style="width:80px;">等级</th>
+                                    <th style="width:80px;">DV</th>
+                                    <th style="width:80px;">性格</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskRewardPetsBody"></tbody>
+                        </table>
+                    </div>
+                    <h6 class="weights-subtitle">道具奖励</h6>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1">搜索道具（ID 或名称）</label>
+                            <input type="text" class="form-control form-control-sm" id="taskItemSearchInput" list="itemOptions" placeholder="例如: 300001 精灵胶囊" oninput="updateTaskItemSearchPreview()">
                         </div>
-                        <div class="table-responsive" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
-                            <table class="weights-table">
-                                <thead>
-                                    <tr>
-                                        <th style="width:260px;">道具ID</th>
-                                        <th>名称</th>
-                                        <th style="width:80px;">数量</th>
-                                        <th style="width:80px;">操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="taskRewardItemsBody"></tbody>
-                            </table>
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1">数量（批量默认值）</label>
+                            <input type="number" class="form-control form-control-sm" id="taskItemSearchCount" placeholder="1" min="1" value="1">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskItemReward()">添加道具奖励</button>
+                        </div>
+                        <div class="col-md-12 mt-1">
+                            <small id="taskItemSearchPreview" class="text-muted"></small>
                         </div>
                     </div>
-                    <div class="task-modal-section">
-                        <h6 class="weights-subtitle">家具奖励</h6>
-                        <div class="row g-2 align-items-end task-modal-toolbar">
-                            <div class="col-md-6">
-                                <label class="form-label small mb-1">搜索家具（ID 或名称）</label>
-                                <input type="text" class="form-control form-control-sm" id="taskFitmentIdInput" list="itemOptions" placeholder="例如: 500510 家具名称" oninput="updateTaskFitmentSearchPreview()">
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label small mb-1">数量</label>
-                                <input type="number" class="form-control form-control-sm" id="taskFitmentCountInput" placeholder="1" min="1" value="1">
-                            </div>
-                            <div class="col-md-2">
-                                <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskFitmentReward()">添加家具奖励</button>
-                            </div>
-                            <div class="col-md-12 mt-1">
-                                <small id="taskFitmentSearchPreview" class="text-muted"></small>
-                            </div>
+                    <div class="table-responsive" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:260px;">道具ID</th>
+                                    <th>名称</th>
+                                    <th style="width:80px;">数量</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskRewardItemsBody"></tbody>
+                        </table>
+                    </div>
+                    <hr>
+                    <h6 class="weights-subtitle">家具奖励</h6>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-6">
+                            <label class="form-label small mb-1">搜索家具（ID 或名称）</label>
+                            <input type="text" class="form-control form-control-sm" id="taskFitmentIdInput" list="itemOptions" placeholder="例如: 500510 家具名称" oninput="updateTaskFitmentSearchPreview()">
                         </div>
-                        <div class="table-responsive" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
-                            <table class="weights-table">
-                                <thead>
-                                    <tr>
-                                        <th style="width:160px;">家具ID</th>
-                                        <th>名称</th>
-                                        <th style="width:80px;">数量</th>
-                                        <th style="width:80px;">操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="taskRewardFitmentsBody"></tbody>
-                            </table>
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1">数量</label>
+                            <input type="number" class="form-control form-control-sm" id="taskFitmentCountInput" placeholder="1" min="1" value="1">
                         </div>
+                        <div class="col-md-2">
+                            <button type="button" class="kyse-btn kyse-btn-secondary kyse-btn-sm" onclick="addTaskFitmentReward()">添加家具奖励</button>
+                        </div>
+                        <div class="col-md-12 mt-1">
+                            <small id="taskFitmentSearchPreview" class="text-muted"></small>
+                        </div>
+                    </div>
+                    <div class="table-responsive" style="max-height:min(45vh, 360px); overflow-y:auto; -webkit-overflow-scrolling:touch;">
+                        <table class="weights-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:160px;">家具ID</th>
+                                    <th>名称</th>
+                                    <th style="width:80px;">数量</th>
+                                    <th style="width:80px;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskRewardFitmentsBody"></tbody>
+                        </table>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -2262,13 +1697,14 @@
             </div>
         </div>
     </div>
+
     <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
     <script>
         // 与当前页面保持同源，避免 127.0.0.1 与 localhost 不一致导致的 CORS 问题
         const API = window.location.origin || 'http://127.0.0.1:8080';
         let gmCurrentUser = { username: '', role: '', permissions: [] };
 
-        // 封装 fetch：若 /gm/** 返回 401，直接跳转到独立 GM 登录页
+        // 封裝 fetch：若 /gm/** 回傳 401，直接跳轉到獨立 GM 登入頁
         const __rawFetch = window.fetch.bind(window);
         window.fetch = async function(input, init) {
             const res = await __rawFetch(input, init);
@@ -2445,7 +1881,7 @@
             }
         }
 
-        // 启动时检查 GM 登录状态；未登录则跳转到独立 GM 登录页
+        // 啟動時檢查 GM 登入狀態；未登入則導向獨立 GM 登入頁
         async function checkGMAuthOnLoad() {
             try {
                 const res = await __rawFetch(API + '/gm/auth/current', { method: 'GET' });
@@ -2541,7 +1977,6 @@
             if (!authed) {
                 return;
             }
-            bindMapConfigModalUI();
             addPetModalInstance = new bootstrap.Modal(document.getElementById('addPetModal'));
             addItemModalInstance = new bootstrap.Modal(document.getElementById('addItemModal'));
             editPetSkillsModalInstance = new bootstrap.Modal(document.getElementById('editPetSkillsModal'));
@@ -2576,7 +2011,7 @@
             if(navItem) navItem.classList.add('active');
             const titleEl = document.getElementById('kysePageTitle');
             if(titleEl) titleEl.textContent = sectionTitles[section] || section;
-            if(section === 'users') { loadGmTitleList(false); loadUsers(); }
+            if(section === 'users') loadUsers();
             if(section === 'pets') { loadPetDatabase(); loadItemDatabase(); }
             if(section === 'gacha') gachaLoadList();
             if(section === 'weights') { loadItemDatabase(); loadWeights(); }
@@ -2600,71 +2035,6 @@
                 '<input type="number" id="'+id+'" value="'+v+'" min="'+min+'" max="'+max+'" onchange="var v=this.value; this.value=Math.max('+min+',Math.min('+max+',parseInt(v,10)||'+min+'));">' +
                 '<button type="button" onclick="var i=document.getElementById(\''+id+'\'); var n=parseInt(i.value,10)||0; i.value=Math.min('+max+',n+1);">+</button>' +
                 '</div>';
-        }
-        function clampInputValue(inputEl) {
-            if (!inputEl) return;
-            const min = parseInt(inputEl.min, 10);
-            const max = parseInt(inputEl.max, 10);
-            let v = parseInt(inputEl.value, 10);
-            if (isNaN(v)) v = !isNaN(min) ? min : 0;
-            if (!isNaN(min) && v < min) v = min;
-            if (!isNaN(max) && v > max) v = max;
-            inputEl.value = v;
-        }
-        function updateMapConfigMonsterCounts() {
-            const commonEl = document.getElementById('mapConfigModalCommon');
-            const rareEl = document.getElementById('mapConfigModalRare');
-            const commonCountEl = document.getElementById('mapConfigCommonCount');
-            const rareCountEl = document.getElementById('mapConfigRareCount');
-            if (!commonCountEl || !rareCountEl) return;
-            const commonCount = ((commonEl && commonEl.value) || '').split('\n').map(s => s.trim()).filter(Boolean).length;
-            const rareCount = ((rareEl && rareEl.value) || '').split('\n').map(s => s.trim()).filter(Boolean).length;
-            commonCountEl.textContent = String(commonCount);
-            rareCountEl.textContent = String(rareCount);
-        }
-        function updateMapConfigShinyState() {
-            const enabledEl = document.getElementById('mapConfigModalShinyEnabled');
-            const percentEl = document.getElementById('mapConfigModalShinyPercent');
-            const cardEl = document.getElementById('mapConfigShinySwitchCard');
-            const enabled = !!(enabledEl && enabledEl.checked);
-            if (percentEl) {
-                percentEl.disabled = !enabled;
-            }
-            if (cardEl) {
-                cardEl.classList.toggle('disabled', !enabled);
-            }
-        }
-        function bindMapConfigModalUI() {
-            const modal = document.getElementById('mapConfigModal');
-            if (!modal || modal.dataset.boundUi === '1') return;
-            modal.dataset.boundUi = '1';
-
-            modal.querySelectorAll('.stepper-btn[data-target]').forEach(btn => {
-                btn.addEventListener('click', function() {
-                    const targetId = btn.getAttribute('data-target');
-                    const step = parseInt(btn.getAttribute('data-step'), 10) || 0;
-                    const inputEl = document.getElementById(targetId);
-                    if (!inputEl) return;
-                    const curr = parseInt(inputEl.value, 10) || 0;
-                    inputEl.value = curr + step;
-                    clampInputValue(inputEl);
-                    inputEl.dispatchEvent(new Event('change'));
-                });
-            });
-
-            ['mapConfigModalSlots', 'mapConfigModalRarePercent', 'mapConfigModalInterval', 'mapConfigModalShinyPercent'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.addEventListener('change', function() { clampInputValue(el); });
-                    el.addEventListener('blur', function() { clampInputValue(el); });
-                }
-            });
-            const commonEl = document.getElementById('mapConfigModalCommon');
-            const rareEl = document.getElementById('mapConfigModalRare');
-            if (commonEl) commonEl.addEventListener('input', updateMapConfigMonsterCounts);
-            if (rareEl) rareEl.addEventListener('input', updateMapConfigMonsterCounts);
-            const shinyEl = document.getElementById('mapConfigModalShinyEnabled');
-            if (shinyEl) shinyEl.addEventListener('change', updateMapConfigShinyState);
         }
         
         let currentRewardRowIndex = -1;
@@ -2695,11 +2065,6 @@
                 }).join('') || '<tr><td colspan="2">暂无数据</td></tr>';
                 capsules.forEach(function(c) { c._inputId = 'cap_' + String(c.itemID); });
                 window._weightsCapsules = capsules;
-                const shinyInp = document.getElementById('weightsNonCaptureShinyPercent');
-                if (shinyInp) {
-                    const v = data.nonCaptureShinyPercent;
-                    shinyInp.value = (v !== undefined && v !== null && !isNaN(Number(v))) ? String(v) : '0.003';
-                }
                 fusion.forEach(function(f) {
                     const sid = String(f.itemID);
                     f._idR = 'soul_r_' + sid; f._idT = 'breed_t_' + sid; f._idV = 'breed_v_' + sid;
@@ -3585,12 +2950,6 @@
                 });
             });
 
-            const shinyEl = document.getElementById('weightsNonCaptureShinyPercent');
-            let nonCaptureShinyPercent = 0.003;
-            if (shinyEl && shinyEl.value !== '') {
-                const parsed = parseFloat(shinyEl.value);
-                if (!isNaN(parsed)) nonCaptureShinyPercent = Math.max(0, Math.min(100, parsed));
-            }
             try {
                 const res = await fetch(API + '/gm/weights', {
                     method: 'POST',
@@ -3601,8 +2960,7 @@
                         soulPearlTransmuteTm: soulPearlTransmuteTm,
                         soulPearlVipTransmuteTm: soulPearlVipTransmuteTm,
                         soulPearlRewardPets: soulPearlRewardPets,
-                        chipMixtureRules: chipMixtureRules,
-                        nonCaptureShinyPercent: nonCaptureShinyPercent
+                        chipMixtureRules: chipMixtureRules
                     })
                 });
                 const data = await res.json();
@@ -4030,9 +3388,6 @@
                     document.getElementById('detailCoins').value = data.gameData.coins;
                     document.getElementById('detailGold').value = data.gameData.gold;
                     document.getElementById('detailEnergy').value = data.gameData.energy;
-                    await loadGmTitleList(false);
-                    initPlayerTitlesFromServer(data);
-                    renderPlayerTitlesPanel();
                     document.getElementById('detailExpPool').textContent = data.gameData.expPool != null ? data.gameData.expPool : 0;
                     document.getElementById('expSetValue').value = data.gameData.expPool != null ? data.gameData.expPool : '';
                     
@@ -4366,540 +3721,12 @@
             }
         }
 
-        window.__gmTitleList = window.__gmTitleList || [];
-        window.__gmOwnedTitleIds = window.__gmOwnedTitleIds || [];
-        window.__gmPlayerCurTitle = 0;
-        window.__gmRawAchievements = [];
-
-        function gmTitleNameById(id) {
-            const list = window.__gmTitleList || [];
-            for (let i = 0; i < list.length; i++) {
-                if (list[i].id === id) return list[i].name || ('称号#' + id);
-            }
-            return '称号#' + id;
-        }
-
-        function gmTitleCatalogIdSet() {
-            const s = new Set();
-            (window.__gmTitleList || []).forEach(function (t) {
-                if (t && t.id != null) s.add(t.id);
-            });
-            return s;
-        }
-
-        function initPlayerTitlesFromServer(data) {
-            const all = (data.gameData && Array.isArray(data.gameData.achievements)) ? data.gameData.achievements.slice() : [];
-            window.__gmRawAchievements = all;
-            const catalog = gmTitleCatalogIdSet();
-            let owned;
-            if (catalog.size) {
-                owned = all.filter(function (id) { return catalog.has(id); });
-            } else {
-                owned = all.slice();
-            }
-            window.__gmOwnedTitleIds = owned.filter(function (id) { return id > 0; })
-                .filter(function (id, idx, a) { return a.indexOf(id) === idx; })
-                .sort(function (a, b) { return a - b; });
-            const ct = data.gameData.curTitle;
-            window.__gmPlayerCurTitle = (ct != null && ct !== '') ? (parseInt(ct, 10) || 0) : 0;
-        }
-
-        function renderPlayerTitlesPanel() {
-            const cur = window.__gmPlayerCurTitle || 0;
-            const nameEl = document.getElementById('detailCurTitleName');
-            const idDisp = document.getElementById('detailCurTitleIdDisp');
-            const sel = document.getElementById('detailCurTitleSelect');
-            const chips = document.getElementById('detailOwnedTitlesChips');
-            const otherEl = document.getElementById('detailOwnedTitlesOtherAch');
-            if (nameEl) nameEl.textContent = cur ? gmTitleNameById(cur) : '无';
-            if (idDisp) idDisp.textContent = String(cur || 0);
-            if (sel) {
-                const owned = (window.__gmOwnedTitleIds || []).slice();
-                const opts = ['<option value="0">无（不佩戴）</option>'];
-                owned.forEach(function (id) {
-                    const lab = '[' + id + '] ' + gmTitleNameById(id);
-                    opts.push('<option value="' + id + '">' + lab.replace(/</g, '&lt;').replace(/"/g, '&quot;') + '</option>');
-                });
-                if (cur > 0 && owned.indexOf(cur) < 0) {
-                    const lab = '[' + cur + '] ' + gmTitleNameById(cur) + '（未在已拥有列表）';
-                    opts.push('<option value="' + cur + '">' + lab.replace(/</g, '&lt;') + '</option>');
-                }
-                sel.innerHTML = opts.join('');
-                sel.value = String(cur);
-            }
-            if (chips) {
-                const ids = window.__gmOwnedTitleIds || [];
-                if (!ids.length) {
-                    chips.innerHTML = '<span class="text-muted small">暂无（请点击「添加称号」）</span>';
-                } else {
-                    chips.innerHTML = ids.map(function (id) {
-                        const lab = '[' + id + '] ' + gmTitleNameById(id);
-                        return '<span class="badge bg-dark d-inline-flex align-items-center gap-1 py-1 px-2">' +
-                            lab.replace(/</g, '&lt;') +
-                            ' <button type="button" class="btn-close btn-close-white" style="font-size:0.55rem;" onclick="removeOwnedTitleChip(' + id + ')" title="移除"></button></span>';
-                    }).join('');
-                }
-            }
-            if (otherEl) {
-                const catalog = gmTitleCatalogIdSet();
-                const raw = window.__gmRawAchievements || [];
-                const other = catalog.size
-                    ? raw.filter(function (id) { return !catalog.has(id); })
-                    : [];
-                otherEl.textContent = other.length
-                    ? '另有非称号类成就 ID：' + other.join('、')
-                    : '';
-            }
-        }
-
-        async function onDetailCurTitleSelectChange() {
-            const sel = document.getElementById('detailCurTitleSelect');
-            if (!sel) return;
-            window.__gmPlayerCurTitle = parseInt(sel.value, 10) || 0;
-            renderPlayerTitlesPanel();
-            await gmSavePlayerTitlesData(true);
-        }
-
-        async function gmSavePlayerTitlesData(silent) {
-            if (!currentUserId) return alert('请先选择用户');
-            const sel = document.getElementById('detailCurTitleSelect');
-            let cur = window.__gmPlayerCurTitle;
-            if (sel) cur = parseInt(sel.value, 10) || 0;
-            try {
-                const res = await fetch(API + '/gm/user/save-titles', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        userId: currentUserId,
-                        ownedTitleIds: (window.__gmOwnedTitleIds || []).slice(),
-                        curTitle: cur
-                    })
-                });
-                const data = await res.json();
-                if (!data.success) {
-                    alert(data.message || '保存失败');
-                    return;
-                }
-                if (!silent) alert('称号数据已保存');
-                await showUserDetail(currentUserId);
-            } catch (e) {
-                alert('保存失败: ' + e.message);
-            }
-        }
-
-        function openAddTitlesModal() {
-            if (!currentUserId) return alert('请先选择用户');
-            const el = document.getElementById('addTitlesModal');
-            renderAddTitlesModalList();
-            if (window.bootstrap && bootstrap.Modal) {
-                bootstrap.Modal.getOrCreateInstance(el).show();
-            } else {
-                el.classList.add('show');
-                el.style.display = 'block';
-            }
-        }
-
-        function renderAddTitlesModalList() {
-            const box = document.getElementById('addTitlesModalList');
-            const searchEl = document.getElementById('addTitlesModalSearch');
-            if (!box) return;
-            const kw = (searchEl && searchEl.value) ? searchEl.value.trim().toLowerCase() : '';
-            const owned = new Set(window.__gmOwnedTitleIds || []);
-            const list = (window.__gmTitleList || []).filter(function (t) { return !owned.has(t.id); });
-            const filtered = list.filter(function (t) {
-                if (!kw) return true;
-                const idStr = String(t.id);
-                const nm = (t.name || '').toLowerCase();
-                return idStr.indexOf(kw) >= 0 || nm.indexOf(kw) >= 0;
-            });
-            if (!filtered.length) {
-                box.innerHTML = '<div class="text-muted small p-2">' + (list.length ? '没有匹配项，换个关键词试试' : '称号表未加载或已全部拥有') + '</div>';
-                return;
-            }
-            box.innerHTML = filtered.map(function (t) {
-                const lab = '[' + t.id + '] ' + (t.name || '');
-                const safe = lab.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-                return '<div class="form-check py-1 border-bottom"><input class="form-check-input add-title-cb" type="checkbox" value="' + t.id + '" id="atcb_' + t.id + '"><label class="form-check-label small" for="atcb_' + t.id + '">' + safe + '</label></div>';
-            }).join('');
-        }
-
-        function addTitlesModalSelectAllFiltered(on) {
-            document.querySelectorAll('#addTitlesModalList .add-title-cb').forEach(function (c) { c.checked = on; });
-        }
-
-        async function confirmAddTitlesModal() {
-            if (!currentUserId) return;
-            const box = document.getElementById('addTitlesModalList');
-            if (!box) return;
-            const add = [];
-            box.querySelectorAll('.add-title-cb:checked').forEach(function (c) {
-                const id = parseInt(c.value, 10);
-                if (id > 0) add.push(id);
-            });
-            if (!add.length) {
-                alert('请至少勾选一个称号');
-                return;
-            }
-            const set = new Set(window.__gmOwnedTitleIds || []);
-            add.forEach(function (id) { set.add(id); });
-            window.__gmOwnedTitleIds = Array.from(set).sort(function (a, b) { return a - b; });
-            const el = document.getElementById('addTitlesModal');
-            if (window.bootstrap && bootstrap.Modal) {
-                const m = bootstrap.Modal.getInstance(el);
-                if (m) m.hide();
-            } else if (el) {
-                el.classList.remove('show');
-                el.style.display = 'none';
-            }
-            await gmSavePlayerTitlesData(true);
-        }
-
-        async function removeOwnedTitleChip(id) {
-            if (!currentUserId) return;
-            window.__gmOwnedTitleIds = (window.__gmOwnedTitleIds || []).filter(function (x) { return x !== id; });
-            if ((window.__gmPlayerCurTitle || 0) === id) window.__gmPlayerCurTitle = 0;
-            renderPlayerTitlesPanel();
-            await gmSavePlayerTitlesData(true);
-        }
-
-        async function loadGmTitleList(force) {
-            if (!force && window.__gmTitleList && window.__gmTitleList.length) {
-                renderPlayerTitlesPanel();
-                return;
-            }
-            async function loadFromAchieveApi() {
-                const url = API + '/gm/achieve-titles' + (force ? ('?t=' + Date.now()) : '');
-                const res = await fetch(url, { cache: force ? 'no-store' : 'default' });
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const data = await res.json();
-                if (!data.success) throw new Error(data.message || '接口返回失败');
-                var list = Array.isArray(data.data) ? data.data : [];
-                return list.filter(function (x) { return x && x.id != null; });
-            }
-            async function loadFromLocalJsonFallback() {
-                var u;
-                try { u = new URL('gm_title_list.json', window.location.href).toString(); }
-                catch (e2) { u = 'gm_title_list.json'; }
-                const res = await fetch(u, { cache: force ? 'reload' : 'default' });
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const data = await res.json();
-                var list = Array.isArray(data) ? data : (data.titles || []);
-                return list.filter(function (x) { return x && x.id != null; });
-            }
-            try {
-                window.__gmTitleList = await loadFromAchieveApi();
-            } catch (e1) {
-                try {
-                    window.__gmTitleList = await loadFromLocalJsonFallback();
-                    console.info('称号表已从 gm_title_list.json 回退加载', e1 && e1.message);
-                } catch (e2) {
-                    window.__gmTitleList = [];
-                    console.warn('称号表加载失败', e1, e2);
-                }
-            }
-            if (document.getElementById('userDetail') && document.getElementById('userDetail').style.display !== 'none' && currentUserId) {
-                try {
-                    const res = await fetch(API + '/gm/user/?userId=' + currentUserId);
-                    const d = await res.json();
-                    if (d.success) initPlayerTitlesFromServer(d);
-                } catch (e) { /* ignore */ }
-                renderPlayerTitlesPanel();
-            }
-        }
-
-        /* —— 全服 / 在线批量发放 —— */
-        function getBroadcastScope() {
-            const el = document.querySelector('input[name="broadcastScope"]:checked');
-            return (el && el.value) === 'online' ? 'online' : 'all';
-        }
-        function showKyseModalById(modalId) {
-            const el = document.getElementById(modalId);
-            if (!el) return;
-            if (window.bootstrap && bootstrap.Modal) {
-                bootstrap.Modal.getOrCreateInstance(el).show();
-            } else {
-                el.classList.add('show');
-                el.style.display = 'block';
-            }
-        }
-        function hideKyseModalById(modalId) {
-            const el = document.getElementById(modalId);
-            if (!el) return;
-            if (window.bootstrap && bootstrap.Modal) {
-                const m = bootstrap.Modal.getInstance(el);
-                if (m) m.hide();
-            } else {
-                el.classList.remove('show');
-                el.style.display = 'none';
-            }
-        }
-        async function ensureBroadcastItemsCatalog() {
-            if (window.__broadcastItemsCatalog && window.__broadcastItemsCatalog.length) return;
-            const res = await fetch(API + '/gm/items');
-            const data = await res.json();
-            if (!data.success || !Array.isArray(data.data)) throw new Error(data.message || '道具列表获取失败');
-            window.__broadcastItemsCatalog = data.data.filter(function (x) { return x && x.id != null; });
-        }
-        async function ensureBroadcastPetsCatalog() {
-            if (window.__broadcastPetsCatalog && window.__broadcastPetsCatalog.length) return;
-            const res = await fetch(API + '/gm/pets');
-            const data = await res.json();
-            if (!data.success || !Array.isArray(data.data)) throw new Error(data.message || '精灵列表获取失败');
-            window.__broadcastPetsCatalog = data.data.filter(function (x) { return x && x.id != null; });
-        }
-        async function openBroadcastItemsModal() {
-            try {
-                await ensureBroadcastItemsCatalog();
-            } catch (e) {
-                alert('加载道具列表失败: ' + e.message);
-                return;
-            }
-            const se = document.getElementById('broadcastItemsModalSearch');
-            if (se) se.value = '';
-            renderBroadcastItemsModalList();
-            showKyseModalById('broadcastItemsModal');
-        }
-        function renderBroadcastItemsModalList() {
-            const box = document.getElementById('broadcastItemsModalList');
-            const searchEl = document.getElementById('broadcastItemsModalSearch');
-            if (!box) return;
-            const kw = (searchEl && searchEl.value) ? searchEl.value.trim().toLowerCase() : '';
-            const list = window.__broadcastItemsCatalog || [];
-            const filtered = list.filter(function (it) {
-                if (!kw) return true;
-                const idStr = String(it.id);
-                const nm = (it.name || '').toLowerCase();
-                return idStr.indexOf(kw) >= 0 || nm.indexOf(kw) >= 0;
-            });
-            if (!filtered.length) {
-                box.innerHTML = '<div class="text-muted small p-2">' + (list.length ? '没有匹配项' : '道具列表为空') + '</div>';
-                return;
-            }
-            box.innerHTML = filtered.map(function (it) {
-                const lab = '[' + it.id + '] ' + (it.name || '');
-                const safe = lab.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-                const bid = 'br_it_' + it.id;
-                return '<div class="d-flex align-items-center gap-2 py-1 border-bottom br-item-row" data-item-id="' + it.id + '">' +
-                    '<input class="form-check-input br-item-cb flex-shrink-0" type="checkbox" id="' + bid + '">' +
-                    '<label class="form-check-label small flex-grow-1 mb-0" for="' + bid + '">' + safe + '</label>' +
-                    '<span class="small text-nowrap text-muted">数量</span>' +
-                    '<input type="number" class="form-control form-control-sm br-item-qty" min="1" value="1" style="width:80px">' +
-                    '</div>';
-            }).join('');
-        }
-        function broadcastItemsModalSelectVisible(on) {
-            document.querySelectorAll('#broadcastItemsModalList .br-item-cb').forEach(function (c) { c.checked = on; });
-        }
-        async function confirmBroadcastItemsModal() {
-            const box = document.getElementById('broadcastItemsModalList');
-            if (!box) return;
-            const items = [];
-            box.querySelectorAll('.br-item-row').forEach(function (row) {
-                const cb = row.querySelector('.br-item-cb');
-                if (!cb || !cb.checked) return;
-                const id = parseInt(row.getAttribute('data-item-id'), 10);
-                if (!(id > 0)) return;
-                let cnt = parseInt(row.querySelector('.br-item-qty') && row.querySelector('.br-item-qty').value, 10) || 1;
-                if (cnt < 1) cnt = 1;
-                items.push({ itemId: id, count: cnt });
-            });
-            if (!items.length) {
-                alert('请至少勾选一种道具');
-                return;
-            }
-            const scope = getBroadcastScope();
-            const scopeLabel = scope === 'online' ? '当前在线玩家' : '全服玩家';
-            if (!confirm('确定向「' + scopeLabel + '」发放所选道具？共 ' + items.length + ' 种。')) return;
-            try {
-                const res = await fetch(API + '/gm/broadcast/items', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scope: scope, items: items })
-                });
-                const data = await res.json();
-                alert(data.success ? (data.message || '完成') : (data.message || '失败'));
-                if (data.success) hideKyseModalById('broadcastItemsModal');
-            } catch (e) {
-                alert('请求失败: ' + e.message);
-            }
-        }
-        async function openBroadcastPetsModal() {
-            try {
-                await ensureBroadcastPetsCatalog();
-            } catch (e) {
-                alert('加载精灵列表失败: ' + e.message);
-                return;
-            }
-            const se = document.getElementById('broadcastPetsModalSearch');
-            if (se) se.value = '';
-            renderBroadcastPetsModalList();
-            showKyseModalById('broadcastPetsModal');
-        }
-        function renderBroadcastPetsModalList() {
-            const box = document.getElementById('broadcastPetsModalList');
-            const searchEl = document.getElementById('broadcastPetsModalSearch');
-            if (!box) return;
-            const kw = (searchEl && searchEl.value) ? searchEl.value.trim().toLowerCase() : '';
-            const list = window.__broadcastPetsCatalog || [];
-            const filtered = list.filter(function (p) {
-                if (!kw) return true;
-                const idStr = String(p.id);
-                const nm = (p.name || '').toLowerCase();
-                return idStr.indexOf(kw) >= 0 || nm.indexOf(kw) >= 0;
-            });
-            if (!filtered.length) {
-                box.innerHTML = '<div class="text-muted small p-2">' + (list.length ? '没有匹配项' : '精灵列表为空') + '</div>';
-                return;
-            }
-            box.innerHTML = filtered.map(function (p) {
-                const lab = '[' + p.id + '] ' + (p.name || '');
-                const safe = lab.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-                const bid = 'br_pt_' + p.id;
-                return '<div class="d-flex align-items-center gap-2 py-1 border-bottom br-pet-row" data-pet-id="' + p.id + '">' +
-                    '<input class="form-check-input br-pet-cb flex-shrink-0" type="checkbox" id="' + bid + '">' +
-                    '<label class="form-check-label small flex-grow-1 mb-0" for="' + bid + '">' + safe + '</label>' +
-                    '<span class="small text-nowrap text-muted">等级</span>' +
-                    '<input type="number" class="form-control form-control-sm br-pet-lv" min="1" max="100" value="1" style="width:72px">' +
-                    '</div>';
-            }).join('');
-        }
-        function broadcastPetsModalSelectVisible(on) {
-            document.querySelectorAll('#broadcastPetsModalList .br-pet-cb').forEach(function (c) { c.checked = on; });
-        }
-        async function confirmBroadcastPetsModal() {
-            const box = document.getElementById('broadcastPetsModalList');
-            if (!box) return;
-            const pets = [];
-            box.querySelectorAll('.br-pet-row').forEach(function (row) {
-                const cb = row.querySelector('.br-pet-cb');
-                if (!cb || !cb.checked) return;
-                const id = parseInt(row.getAttribute('data-pet-id'), 10);
-                if (!(id > 0)) return;
-                let lv = parseInt(row.querySelector('.br-pet-lv') && row.querySelector('.br-pet-lv').value, 10) || 1;
-                if (lv < 1) lv = 1;
-                if (lv > 100) lv = 100;
-                pets.push({ petId: id, level: lv, trait: 0 });
-            });
-            if (!pets.length) {
-                alert('请至少勾选一只精灵');
-                return;
-            }
-            const scope = getBroadcastScope();
-            const scopeLabel = scope === 'online' ? '当前在线玩家' : '全服玩家';
-            if (!confirm('确定向「' + scopeLabel + '」发放所选精灵？共 ' + pets.length + ' 只（每只各发一次）。')) return;
-            try {
-                const res = await fetch(API + '/gm/broadcast/pets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scope: scope, pets: pets })
-                });
-                const data = await res.json();
-                alert(data.success ? (data.message || '完成') : (data.message || '失败'));
-                if (data.success) hideKyseModalById('broadcastPetsModal');
-            } catch (e) {
-                alert('请求失败: ' + e.message);
-            }
-        }
-        function openBroadcastExpModal() {
-            const inp = document.getElementById('broadcastExpAmount');
-            if (inp && (!inp.value || parseInt(inp.value, 10) <= 0)) inp.value = '1000';
-            showKyseModalById('broadcastExpModal');
-        }
-        async function confirmBroadcastExpModal() {
-            const inp = document.getElementById('broadcastExpAmount');
-            const amount = parseInt(inp && inp.value, 10) || 0;
-            if (amount <= 0) {
-                alert('请输入正整数经验值');
-                return;
-            }
-            const scope = getBroadcastScope();
-            const scopeLabel = scope === 'online' ? '当前在线玩家' : '全服玩家';
-            if (!confirm('确定向「' + scopeLabel + '」每人经验池 +' + amount + '？')) return;
-            try {
-                const res = await fetch(API + '/gm/broadcast/exp-pool', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scope: scope, amount: amount })
-                });
-                const data = await res.json();
-                alert(data.success ? (data.message || '完成') : (data.message || '失败'));
-                if (data.success) hideKyseModalById('broadcastExpModal');
-            } catch (e) {
-                alert('请求失败: ' + e.message);
-            }
-        }
-        async function openBroadcastTitlesModal() {
-            try {
-                await loadGmTitleList(false);
-            } catch (e) { /* loadGmTitleList 内部已容错 */ }
-            const se = document.getElementById('broadcastTitlesModalSearch');
-            if (se) se.value = '';
-            const wn = document.getElementById('broadcastTitlesWearNow');
-            if (wn) wn.checked = false;
-            renderBroadcastTitlesModalList();
-            showKyseModalById('broadcastTitlesModal');
-        }
-        function renderBroadcastTitlesModalList() {
-            const box = document.getElementById('broadcastTitlesModalList');
-            const searchEl = document.getElementById('broadcastTitlesModalSearch');
-            if (!box) return;
-            const kw = (searchEl && searchEl.value) ? searchEl.value.trim().toLowerCase() : '';
-            const list = window.__gmTitleList || [];
-            const filtered = list.filter(function (t) {
-                if (!kw) return true;
-                const idStr = String(t.id);
-                const nm = (t.name || '').toLowerCase();
-                return idStr.indexOf(kw) >= 0 || nm.indexOf(kw) >= 0;
-            });
-            if (!filtered.length) {
-                box.innerHTML = '<div class="text-muted small p-2">' + (list.length ? '没有匹配项' : '称号表未加载，请稍后重试或检查 achieve.xml') + '</div>';
-                return;
-            }
-            box.innerHTML = filtered.map(function (t) {
-                const lab = '[' + t.id + '] ' + (t.name || '');
-                const safeText = lab.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-                const bid = 'br_ttl_' + t.id;
-                return '<div class="form-check py-1 border-bottom"><input class="form-check-input br-broadcast-title-cb" type="checkbox" value="' + t.id + '" id="' + bid + '"><label class="form-check-label small" for="' + bid + '">' + safeText + '</label></div>';
-            }).join('');
-        }
-        function broadcastTitlesModalSelectVisible(on) {
-            document.querySelectorAll('#broadcastTitlesModalList .br-broadcast-title-cb').forEach(function (c) { c.checked = on; });
-        }
-        async function confirmBroadcastTitlesModal() {
-            const box = document.getElementById('broadcastTitlesModalList');
-            if (!box) return;
-            const titleIds = [];
-            box.querySelectorAll('.br-broadcast-title-cb:checked').forEach(function (c) {
-                const id = parseInt(c.value, 10);
-                if (id > 0) titleIds.push(id);
-            });
-            if (!titleIds.length) {
-                alert('请至少勾选一个称号');
-                return;
-            }
-            const wearNow = !!(document.getElementById('broadcastTitlesWearNow') && document.getElementById('broadcastTitlesWearNow').checked);
-            const scope = getBroadcastScope();
-            const scopeLabel = scope === 'online' ? '当前在线玩家' : '全服玩家';
-            let msg = '确定向「' + scopeLabel + '」发放所选 ' + titleIds.length + ' 个称号？';
-            if (wearNow) msg += '\n（将统一佩戴本次选中称号中 ID 最大的一个）';
-            if (!confirm(msg)) return;
-            try {
-                const res = await fetch(API + '/gm/broadcast/titles', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scope: scope, titleIds: titleIds, wearNow: wearNow })
-                });
-                const data = await res.json();
-                alert(data.success ? (data.message || '完成') : (data.message || '失败'));
-                if (data.success) hideKyseModalById('broadcastTitlesModal');
-            } catch (e) {
-                alert('请求失败: ' + e.message);
-            }
-        }
-
         async function saveUserInfo() {
             try {
-                const payload = {
+                const res = await fetch(`${API}/gm/user/update`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
                         userId: currentUserId,
                         nickname: document.getElementById('detailNick').value,
                         coins: parseInt(document.getElementById('detailCoins').value) || 0,
@@ -4913,11 +3740,7 @@
                             status: parseInt(document.getElementById('detailNonoStatus').value) || 0,
                             skillPoints: parseInt(document.getElementById('detailNonoSkillPoints').value) || 0
                         }
-                };
-                const res = await fetch(`${API}/gm/user/update`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
+                    })
                 });
                 const data = await res.json();
                 alert(data.success ? '保存成功' : data.message);
@@ -5255,7 +4078,7 @@
             if(!currentUserId) return alert('请先选择用户');
             addItemModalInstance.show();
         }
-
+        
         async function addItem() {
             try {
                 const res = await fetch(`${API}/gm/item/add`, {
@@ -5584,13 +4407,9 @@
             const rareTa = document.getElementById('mapConfigModalRare');
             const commonBtn = document.getElementById('mapConfigModalCommonBtn');
             const rareBtn = document.getElementById('mapConfigModalRareBtn');
-            const summaryIdEl = document.getElementById('mapConfigSummaryId');
-            const summaryNameEl = document.getElementById('mapConfigSummaryName');
             if (titleEl) titleEl.textContent = '地图配置 - ' + getMapName(mapId) + ' (ID:' + mapId + ')';
             if (idDisplay) idDisplay.value = mapId;
             if (nameEl) nameEl.value = getMapName(mapId) || '';
-            if (summaryIdEl) summaryIdEl.textContent = String(mapId);
-            if (summaryNameEl) summaryNameEl.textContent = getMapName(mapId) || '-';
             if (slotsEl) { slotsEl.value = slots; slotsEl.setAttribute('data-map-id', String(mapId)); }
             if (rareEl) { rareEl.value = rarePercent; rareEl.setAttribute('data-map-id', String(mapId)); }
             if (intervalEl) { intervalEl.value = interval; intervalEl.setAttribute('data-map-id', String(mapId)); }
@@ -5600,8 +4419,6 @@
             if (rareTa) { rareTa.value = rareText; rareTa.setAttribute('data-map-id', String(mapId)); }
             if (commonBtn) commonBtn.onclick = function() { openMapPetsModal(mapId, 'common'); };
             if (rareBtn) rareBtn.onclick = function() { openMapPetsModal(mapId, 'rare'); };
-            updateMapConfigShinyState();
-            updateMapConfigMonsterCounts();
             if (!mapConfigModalInstance) {
                 const el = document.getElementById('mapConfigModal');
                 if (el && typeof bootstrap !== 'undefined') mapConfigModalInstance = new bootstrap.Modal(el);
@@ -6126,7 +4943,7 @@
                 tbody.innerHTML = '';
                 list.forEach(row => appendDarkPortalRow(tbody, row));
                 if (list.length === 0) {
-                    appendDarkPortalRow(tbody, { doorIndex: 0, subIndex: 0, bossId: 171, enemyLv: 50, rewardItemId: 0, rewardPetId: 0, rewardTitleId: 0, remark: '' });
+                    appendDarkPortalRow(tbody, { doorIndex: 0, subIndex: 0, bossId: 171, enemyLv: 50, rewardItemId: 0, rewardPetId: 0, remark: '' });
                 }
             } catch (e) {
                 alert('加载暗黑武斗场配置失败: ' + e.message);
@@ -6145,7 +4962,6 @@
                 <td class="text-muted dark-item-name" style="min-width:80px">${getItemNameById(row.rewardItemId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardPetId || 0}" data-field="rewardPetId" placeholder="奖励精灵ID"></td>
                 <td class="text-muted dark-pet-name" style="min-width:80px">${getPetNameById(row.rewardPetId || 0)}</td>
-                <td><input type="number" class="form-control form-control-sm" value="${row.rewardTitleId != null ? row.rewardTitleId : 0}" data-field="rewardTitleId" min="0" title="0=不发放"></td>
                 <td><input type="text" class="form-control form-control-sm" value="${row.remark || ''}" data-field="remark" placeholder="备注"></td>
                 <td><button type="button" class="kyse-btn kyse-btn-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>
             `;
@@ -6170,7 +4986,7 @@
         function addDarkPortalRow() {
             const tbody = document.getElementById('darkPortalList');
             if (!tbody) return;
-            appendDarkPortalRow(tbody, { doorIndex: 0, subIndex: 0, bossId: 171, enemyLv: 50, rewardItemId: 0, rewardPetId: 0, rewardTitleId: 0, remark: '' });
+            appendDarkPortalRow(tbody, { doorIndex: 0, subIndex: 0, bossId: 171, enemyLv: 50, rewardItemId: 0, rewardPetId: 0, remark: '' });
         }
 
         async function saveDarkPortal() {
@@ -6194,7 +5010,6 @@
                     enemyLv: get('enemyLv') || 50,
                     rewardItemId: get('rewardItemId') || 0,
                     rewardPetId: get('rewardPetId') || 0,
-                    rewardTitleId: get('rewardTitleId') || 0,
                     remark: get('remark') || ''
                 });
             });
@@ -6354,29 +5169,6 @@
             if (!str || !String(str).trim()) return [];
             return String(str).split(/[\s,，]+/).map(s => parseInt(s, 10)).filter(n => !isNaN(n) && n > 0);
         }
-        function sortSPTMapBossesByMapId(list) {
-            return (Array.isArray(list) ? list : []).slice().sort((a, b) => {
-                const mapA = parseInt((a && a.mapId) != null ? a.mapId : 0, 10) || 0;
-                const mapB = parseInt((b && b.mapId) != null ? b.mapId : 0, 10) || 0;
-                if (mapA !== mapB) return mapA - mapB;
-                const p2A = parseInt((a && a.param2) != null ? a.param2 : 0, 10) || 0;
-                const p2B = parseInt((b && b.param2) != null ? b.param2 : 0, 10) || 0;
-                if (p2A !== p2B) return p2A - p2B;
-                const bossA = parseInt((a && a.bossPetId) != null ? a.bossPetId : 0, 10) || 0;
-                const bossB = parseInt((b && b.bossPetId) != null ? b.bossPetId : 0, 10) || 0;
-                return bossA - bossB;
-            });
-        }
-        function sortSPTRewardsBySptId(list) {
-            return (Array.isArray(list) ? list : []).slice().sort((a, b) => {
-                const sptA = parseInt((a && a.sptId) != null ? a.sptId : 0, 10) || 0;
-                const sptB = parseInt((b && b.sptId) != null ? b.sptId : 0, 10) || 0;
-                if (sptA !== sptB) return sptA - sptB;
-                const bossA = parseInt((a && a.bossPetId) != null ? a.bossPetId : 0, 10) || 0;
-                const bossB = parseInt((b && b.bossPetId) != null ? b.bossPetId : 0, 10) || 0;
-                return bossA - bossB;
-            });
-        }
 
         async function loadSPTBoss() {
             try {
@@ -6388,8 +5180,8 @@
                     return;
                 }
                 const cfg = data.data || {};
-                const mapBosses = sortSPTMapBossesByMapId(cfg.mapBosses || []);
-                const sptBosses = sortSPTRewardsBySptId(cfg.sptBosses || []);
+                const mapBosses = cfg.mapBosses || [];
+                const sptBosses = cfg.sptBosses || [];
                 const traits = cfg.traits || {};
                 const puniSeals = cfg.puniSeals || [];
 
@@ -6407,7 +5199,7 @@
                 if (mapBosses.length === 0) appendSPTBossMapRow(mapTbody, { mapId: 12, param2: 0, bossPetId: 47, level: 10, hasShield: true });
 
                 sptBosses.forEach(row => appendSPTBossRewardRow(rewardTbody, row));
-                if (sptBosses.length === 0) appendSPTBossRewardRow(rewardTbody, { sptId: 1, bossPetId: 47, rewardPetId: 46, rewardItemId: 0, rewardTitleIds: [], level: 10, hasShield: true });
+                if (sptBosses.length === 0) appendSPTBossRewardRow(rewardTbody, { sptId: 1, bossPetId: 47, rewardPetId: 46, rewardItemId: 0, level: 10, hasShield: true });
 
                 puniSeals.forEach(row => appendPuniSealRow(sealTbody, row));
                 if (puniSeals.length === 0) {
@@ -6455,139 +5247,8 @@
                 document.getElementById('sptTraitHalfHPOneShot').value = (traits.halfHPOneShot || []).join(', ');
                 const dm = (traits.damageTakenMultiplier || []).map(x => x.petId + ':' + x.mult).join(', ');
                 document.getElementById('sptTraitDamageMult').value = dm;
-
-                ensureSptBossRewardTitleCatalog().then(function () {
-                    const rt = document.getElementById('sptBossRewardList');
-                    if (rt) rt.querySelectorAll('tr').forEach(function (tr) { refreshSptBossRowTitleSummary(tr); });
-                }).catch(function () {});
             } catch (e) {
                 alert('加载 SPT BOSS 配置失败: ' + e.message);
-            }
-        }
-
-        function sptBossRewardRowTitleIds(row) {
-            let ids = [];
-            if (row && Array.isArray(row.rewardTitleIds)) ids = row.rewardTitleIds.slice();
-            else if (row && row.rewardTitleId > 0) ids = [row.rewardTitleId];
-            return ids.filter(function (id) { return id > 0; }).sort(function (a, b) { return a - b; });
-        }
-
-        function htmlAttrEscapeJson(arr) {
-            return JSON.stringify(arr || []).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-        }
-
-        async function ensureSptBossRewardTitleCatalog() {
-            if (window.__sptBossRewardTitleCatalog && window.__sptBossRewardTitleCatalog.length) return;
-            const res = await fetch(API + '/gm/achieve-titles');
-            const data = await res.json();
-            window.__sptBossRewardTitleCatalog = (data.success && Array.isArray(data.data)) ? data.data.filter(function (x) { return x && x.id != null && x.id > 0; }) : [];
-        }
-
-        function refreshSptBossRowTitleSummary(tr) {
-            if (!tr) return;
-            const hid = tr.querySelector('input[data-field="rewardTitleIds"]');
-            const sum = tr.querySelector('[data-role="spt-title-summary"]');
-            if (!hid || !sum) return;
-            let ids = [];
-            try { ids = JSON.parse(hid.value || '[]') || []; } catch (e) { ids = []; }
-            if (!Array.isArray(ids)) ids = [];
-            ids = ids.filter(function (x) { return x > 0; }).sort(function (a, b) { return a - b; });
-            if (!ids.length) {
-                sum.innerHTML = '<span class="text-muted">默认内置</span>';
-                return;
-            }
-            const cat = window.__sptBossRewardTitleCatalog || [];
-            const nameById = {};
-            cat.forEach(function (t) { nameById[t.id] = t.name || ''; });
-            sum.innerHTML = ids.map(function (id) {
-                const nm = nameById[id] || '';
-                const lab = nm ? ('[' + id + '] ' + nm) : ('[' + id + ']');
-                const safe = String(lab).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-                return '<span class="badge bg-secondary me-1 mb-1">' + safe + '</span>';
-            }).join(' ');
-        }
-
-        window.__sptBossRewardTitlePickerTr = null;
-
-        async function openSptBossRewardTitlePicker(btn) {
-            const tr = btn && btn.closest ? btn.closest('tr') : null;
-            if (!tr) return;
-            window.__sptBossRewardTitlePickerTr = tr;
-            try {
-                await ensureSptBossRewardTitleCatalog();
-            } catch (e) {
-                alert('加载称号表失败: ' + e.message);
-                return;
-            }
-            const se = document.getElementById('sptBossRewardTitleSearch');
-            if (se) se.value = '';
-            renderSptBossRewardTitlePickerList();
-            const el = document.getElementById('sptBossRewardTitleModal');
-            if (window.bootstrap && bootstrap.Modal) {
-                bootstrap.Modal.getOrCreateInstance(el).show();
-            } else if (el) {
-                el.classList.add('show');
-                el.style.display = 'block';
-            }
-        }
-
-        function renderSptBossRewardTitlePickerList() {
-            const box = document.getElementById('sptBossRewardTitleList');
-            const searchEl = document.getElementById('sptBossRewardTitleSearch');
-            if (!box) return;
-            const tr = window.__sptBossRewardTitlePickerTr;
-            let pre = [];
-            if (tr) {
-                const hid = tr.querySelector('input[data-field="rewardTitleIds"]');
-                if (hid) {
-                    try { pre = JSON.parse(hid.value || '[]') || []; } catch (e) { pre = []; }
-                }
-            }
-            const preSet = new Set(pre.filter(function (x) { return x > 0; }));
-            const kw = (searchEl && searchEl.value) ? searchEl.value.trim().toLowerCase() : '';
-            const list = window.__sptBossRewardTitleCatalog || [];
-            const filtered = list.filter(function (t) {
-                if (!kw) return true;
-                const idStr = String(t.id);
-                const nm = (t.name || '').toLowerCase();
-                return idStr.indexOf(kw) >= 0 || nm.indexOf(kw) >= 0;
-            });
-            if (!filtered.length) {
-                box.innerHTML = '<div class="text-muted small p-2">' + (list.length ? '没有匹配项' : '称号表为空，请检查 data/achieve.xml') + '</div>';
-                return;
-            }
-            box.innerHTML = filtered.map(function (t) {
-                const lab = '[' + t.id + '] ' + (t.name || '');
-                const safeText = lab.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-                const chk = preSet.has(t.id) ? ' checked' : '';
-                return '<div class="form-check py-1 border-bottom"><input class="form-check-input spt-boss-rt-cb" type="checkbox" value="' + t.id + '" id="sbrt_' + t.id + '"' + chk + '><label class="form-check-label small" for="sbrt_' + t.id + '">' + safeText + '</label></div>';
-            }).join('');
-        }
-
-        function sptBossRewardTitlePickerSelectVisible(on) {
-            document.querySelectorAll('#sptBossRewardTitleList .spt-boss-rt-cb').forEach(function (c) { c.checked = on; });
-        }
-
-        function confirmSptBossRewardTitlePicker() {
-            const box = document.getElementById('sptBossRewardTitleList');
-            const tr = window.__sptBossRewardTitlePickerTr;
-            if (!box || !tr) return;
-            const ids = [];
-            box.querySelectorAll('.spt-boss-rt-cb:checked').forEach(function (c) {
-                const id = parseInt(c.value, 10);
-                if (id > 0) ids.push(id);
-            });
-            ids.sort(function (a, b) { return a - b; });
-            const hid = tr.querySelector('input[data-field="rewardTitleIds"]');
-            if (hid) hid.value = JSON.stringify(ids);
-            refreshSptBossRowTitleSummary(tr);
-            const el = document.getElementById('sptBossRewardTitleModal');
-            if (window.bootstrap && bootstrap.Modal) {
-                const m = bootstrap.Modal.getInstance(el);
-                if (m) m.hide();
-            } else if (el) {
-                el.classList.remove('show');
-                el.style.display = 'none';
             }
         }
 
@@ -6624,8 +5285,6 @@
 
         function appendSPTBossRewardRow(tbody, row) {
             const tr = document.createElement('tr');
-            const titleIds = sptBossRewardRowTitleIds(row);
-            const titleIdsJson = htmlAttrEscapeJson(titleIds);
             tr.innerHTML = `
                 <td><input type="number" class="form-control form-control-sm" value="${row.sptId != null ? row.sptId : 0}" data-field="sptId"></td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.bossPetId || 0}" data-field="bossPetId"></td>
@@ -6633,11 +5292,6 @@
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardPetId || 0}" data-field="rewardPetId"></td>
                 <td class="text-muted spt-reward-pet-name">${getPetNameById(row.rewardPetId || 0)}</td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.rewardItemId || 0}" data-field="rewardItemId"></td>
-                <td>
-                    <input type="hidden" data-field="rewardTitleIds" value="${titleIdsJson}">
-                    <div class="spt-boss-titles-summary small mb-1" data-role="spt-title-summary"></div>
-                    <button type="button" class="kyse-btn kyse-btn-secondary btn-sm" onclick="openSptBossRewardTitlePicker(this)">选择称号</button>
-                </td>
                 <td><input type="number" class="form-control form-control-sm" value="${row.level != null ? row.level : 1}" data-field="level" min="1"></td>
                 <td><input type="checkbox" ${(row.hasShield ? 'checked' : '')} data-field="hasShield"></td>
                 <td><button type="button" class="kyse-btn kyse-btn-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>
@@ -6659,7 +5313,6 @@
                 });
             }
             tbody.appendChild(tr);
-            refreshSptBossRowTitleSummary(tr);
         }
 
         function addSPTBossMapRow() {
@@ -6671,7 +5324,7 @@
         function addSPTBossRewardRow() {
             const tbody = document.getElementById('sptBossRewardList');
             if (!tbody) return;
-            appendSPTBossRewardRow(tbody, { sptId: 1, bossPetId: 47, rewardPetId: 46, rewardItemId: 0, rewardTitleIds: [], level: 10, hasShield: false });
+            appendSPTBossRewardRow(tbody, { sptId: 1, bossPetId: 47, rewardPetId: 46, rewardItemId: 0, level: 10, hasShield: false });
         }
 
         function appendPuniSealRow(tbody, row) {
@@ -6751,7 +5404,6 @@
                     hasShield: get('hasShield', false)
                 };
             });
-            const sortedMapBosses = sortSPTMapBossesByMapId(mapBosses);
 
             const sptBosses = collectTableMap(rewardTbody, tr => {
                 const get = (name, def) => {
@@ -6763,15 +5415,7 @@
                 };
                 const bossPetId = get('bossPetId', 0);
                 if (!bossPetId) return null;
-                const hid = tr.querySelector('input[data-field="rewardTitleIds"]');
-                let rewardTitleIds = [];
-                if (hid && hid.value) {
-                    try { rewardTitleIds = JSON.parse(hid.value) || []; } catch (e) { rewardTitleIds = []; }
-                }
-                if (!Array.isArray(rewardTitleIds)) rewardTitleIds = [];
-                rewardTitleIds = rewardTitleIds.filter(function (x) { return parseInt(x, 10) > 0; }).map(function (x) { return parseInt(x, 10); });
-                rewardTitleIds.sort(function (a, b) { return a - b; });
-                const rowObj = {
+                return {
                     sptId: get('sptId', 0),
                     bossPetId: bossPetId,
                     rewardPetId: get('rewardPetId', 0),
@@ -6779,10 +5423,7 @@
                     level: get('level', 1),
                     hasShield: get('hasShield', false)
                 };
-                if (rewardTitleIds.length) rowObj.rewardTitleIds = rewardTitleIds;
-                return rowObj;
             });
-            const sortedSptBosses = sortSPTRewardsBySptId(sptBosses);
 
             const damageMultStr = (document.getElementById('sptTraitDamageMult') || {}).value || '';
             const damageTakenMultiplier = [];
@@ -6852,8 +5493,8 @@
 
             const payload = {
                 data: {
-                    mapBosses: sortedMapBosses,
-                    sptBosses: sortedSptBosses,
+                    mapBosses: mapBosses,
+                    sptBosses: sptBosses,
                     traits: {
                         statusImmune: parseIdList(document.getElementById('sptTraitStatusImmune').value),
                         statDropImmune: parseIdList(document.getElementById('sptTraitStatDropImmune').value),

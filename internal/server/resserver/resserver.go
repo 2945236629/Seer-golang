@@ -32,6 +32,50 @@ type Config struct {
 	OfficialLoginPort    int    `json:"official_login_port"`
 	// PublicIP 对外暴露给客户端使用的服务器 IP（生成 ServerR.xml、ip.txt 等），默认 127.0.0.1
 	PublicIP string `json:"public_ip"`
+	// 以下为可选覆盖：为空则使用 PublicIP（由 main 从 res_path.json 注入）
+	LoginHTTPIP   string `json:"login_http_ip,omitempty"`    // ipConfig 中登录 HTTP（如 32401）相关
+	ResHTTPHostIP string `json:"res_http_host_ip,omitempty"` // 资源 HTTP（Client.swf 等 URL）
+	GameServerIP  string `json:"game_server_ip,omitempty"`   // 服务器列表中的游戏服 IP
+	LoginTCPIP    string `json:"login_tcp_ip,omitempty"`     // 本地 ip.txt 返回的 TCP 登录服 IP
+	// TCPLoginPort 本地 ip.txt 中 TCP 登录端口，0 表示使用 1863
+	TCPLoginPort int `json:"tcp_login_port,omitempty"`
+	// GameServerPort 写入 ServerR.xml 服务器列表的游戏端口，0 表示 5000
+	GameServerPort int `json:"game_server_port,omitempty"`
+}
+
+func (c Config) resolvePublicIP() string {
+	if s := strings.TrimSpace(c.PublicIP); s != "" {
+		return s
+	}
+	return "127.0.0.1"
+}
+
+func (c Config) resolveLoginHTTPIP() string {
+	if s := strings.TrimSpace(c.LoginHTTPIP); s != "" {
+		return s
+	}
+	return c.resolvePublicIP()
+}
+
+func (c Config) resolveResHTTPHostIP() string {
+	if s := strings.TrimSpace(c.ResHTTPHostIP); s != "" {
+		return s
+	}
+	return c.resolvePublicIP()
+}
+
+func (c Config) resolveGameServerIP() string {
+	if s := strings.TrimSpace(c.GameServerIP); s != "" {
+		return s
+	}
+	return c.resolvePublicIP()
+}
+
+func (c Config) resolveLoginTCPIP() string {
+	if s := strings.TrimSpace(c.LoginTCPIP); s != "" {
+		return s
+	}
+	return c.resolvePublicIP()
 }
 
 // ResourceServer 资源服务器
@@ -371,10 +415,10 @@ func (rs *ResourceServer) handleRequest(w http.ResponseWriter, r *http.Request) 
         
         <div class="server-info">
             <h3>服务器信息</h3>
-            <p>游戏服务器: <span class="port">%s:5000</span></p>
+            <p>游戏服务器: <span class="port">%s:%d</span></p>
             <p>资源服务器: <span class="port">%s:%d</span></p>
-            <p>登录IP服务器: <span class="port">%s:32401</span></p>
-            <p>登录服务器: <span class="port">%s:1863</span></p>
+            <p>登录IP服务器: <span class="port">%s:%d</span></p>
+            <p>登录服务器: <span class="port">%s:%d</span></p>
         </div>
         
         <p><strong>提示：</strong>请确保您的客户端已正确配置，指向上述服务器地址。</p>
@@ -384,12 +428,24 @@ func (rs *ResourceServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 </body>
 </html>
 		`
-		ip := rs.config.PublicIP
-		if ip == "" {
-			ip = "127.0.0.1"
+		gip := rs.config.resolveGameServerIP()
+		gport := rs.config.GameServerPort
+		if gport <= 0 {
+			gport = 5000
 		}
+		rip := rs.config.resolveResHTTPHostIP()
 		resPort := rs.config.ResPort
-		html := fmt.Sprintf(defaultHTML, ip, ip, resPort, ip, ip)
+		lip := rs.config.resolveLoginHTTPIP()
+		lport := rs.config.LoginPort
+		if lport <= 0 {
+			lport = 32401
+		}
+		tcpip := rs.config.resolveLoginTCPIP()
+		tcpport := rs.config.TCPLoginPort
+		if tcpport <= 0 {
+			tcpport = 1863
+		}
+		html := fmt.Sprintf(defaultHTML, gip, gport, rip, resPort, lip, lport, tcpip, tcpport)
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(html))
 		return
@@ -508,11 +564,12 @@ func (rs *ResourceServer) handleIPText(w http.ResponseWriter, r *http.Request) {
 
 	if rs.config.LocalServerMode {
 		// 本地模式：返回 TCP 登录服务器地址，客户端用此建连后发 104/105，再根据 105 里的游戏服连「频道服务器」
-		ip := rs.config.PublicIP
-		if ip == "" {
-			ip = "127.0.0.1"
+		ip := rs.config.resolveLoginTCPIP()
+		tcpPort := rs.config.TCPLoginPort
+		if tcpPort <= 0 {
+			tcpPort = 1863
 		}
-		resp = fmt.Sprintf("%s:1863", ip)
+		resp = fmt.Sprintf("%s:%d", ip, tcpPort)
 		logger.Info(fmt.Sprintf("[Local Mode] ✓ 返回登录服务器地址(TCP): %s", resp))
 	} else if rs.config.PureOfficialMode && rs.config.UseOfficialResources {
 		// 完全官服模式：返回官服的ip.txt
@@ -797,11 +854,11 @@ func (rs *ResourceServer) generateDefaultServerRXML(w http.ResponseWriter, r *ht
 	defaultConfig := `<?xml version="1.0" encoding="utf-8"?>
 <Servers>
   <ipConfig>
-    <Email ip="%s" port="32401" />
-    <DirSer ip="%s" port="32401" />
-    <Visitor ip="%s" port="32401" />
-    <SubServer ip="%s" port="32401" />
-    <RegistSer ip="%s" port="32401" />
+    <Email ip="%s" port="%d" />
+    <DirSer ip="%s" port="%d" />
+    <Visitor ip="%s" port="%d" />
+    <SubServer ip="%s" port="%d" />
+    <RegistSer ip="%s" port="%d" />
   </ipConfig>
   <version>1.0.0.0</version>
   <clientUrl>http://%s:%d/Client.swf</clientUrl>
@@ -819,30 +876,41 @@ func (rs *ResourceServer) generateDefaultServerRXML(w http.ResponseWriter, r *ht
   <gamepassUrl>http://%s:%d/gamepass</gamepassUrl>
   <activityUrl>http://%s:%d/activity</activityUrl>
   <serverList>
-    <server id="1" name="服务器1" ip="%s" port="5000" status="1" />
+    <server id="1" name="服务器1" ip="%s" port="%d" status="1" />
   </serverList>
 </Servers>`
 
-	// 替换配置参数
-	ip := rs.config.PublicIP
-	if ip == "" {
-		ip = "127.0.0.1"
+	lip := rs.config.resolveLoginHTTPIP()
+	lport := rs.config.LoginPort
+	if lport <= 0 {
+		lport = 32401
 	}
+	rip := rs.config.resolveResHTTPHostIP()
 	resPort := rs.config.ResPort
+	gip := rs.config.resolveGameServerIP()
+	gport := rs.config.GameServerPort
+	if gport <= 0 {
+		gport = 5000
+	}
+
 	modifiedData := fmt.Sprintf(
 		defaultConfig,
-		ip, ip, ip, ip, ip,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip, resPort,
-		ip,
+		lip, lport, lip, lport, lip, lport, lip, lport, lip, lport,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		rip, resPort,
+		gip, gport,
 	)
 
 	// 保存到本地
@@ -882,10 +950,7 @@ func (rs *ResourceServer) fetchAndModifyServerRXML(w http.ResponseWriter, r *htt
 	// 修改ipConfig，让所有Socket连接走本地代理
 	modifiedData := string(body)
 	proxyPort := fmt.Sprintf("%d", rs.config.LoginPort)
-	ip := rs.config.PublicIP
-	if ip == "" {
-		ip = "127.0.0.1"
-	}
+	ip := rs.config.resolveLoginHTTPIP()
 
 	// 替换IP地址
 	modifiedData = strings.ReplaceAll(modifiedData, "<Email ip=\"", "<Email ip=\""+ip+"\"")

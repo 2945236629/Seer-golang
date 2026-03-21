@@ -1,0 +1,20 @@
+SpeNameBonus依次为各称号的编号，分别代表''....
+	ID 子类成就ID
+	AchievementPoint 成就分数
+	Threshold  成就目标（进度条）
+	title 称号 fla格式 titleColor 称号颜色  如果称号颜色为0xFFFFFF 显示原本样式
+			 路径 resource\achieve\title
+			 其他颜色路径 resource\achieve\icon
+	AbilityTitle 0|1  是否是能力加成称号  将会在个人信息面板中出现。
+	titleColor="0xFFFFFF">
+	
+	icon表示奖励的成就点的图标，直接按照AchievementPoint自动匹配了
+	1 对应的资源是 10
+	2 对应的资源是 15
+	3 对应的资源是 30
+	4 对应的资源是 20 
+	5 对应的资源是 40 
+	6 对应的资源是 50
+	7 对应的资源是 25
+	8 对应的资源是 5
+	proicon表示单项前面的icon 路径resource\achi

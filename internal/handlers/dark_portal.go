@@ -17,6 +17,7 @@ type DarkPortalBossEntry struct {
 	EnemyLv    int    `json:"enemyLv"`    // 敌人等级（0=使用默认50级）
 	RewardItemID int  `json:"rewardItemId"` // 首次击败奖励物品ID（精元等，0表示无奖励）
 	RewardPetID int   `json:"rewardPetId"`  // 首次击败奖励精灵ID（0表示无奖励）
+	RewardTitleID int `json:"rewardTitleId"` // 首次击败授予的称号ID（AchieveXML SpeNameBonus），0=不发放
 	Remark     string `json:"remark,omitempty"` // 备注
 }
 
@@ -206,6 +207,18 @@ func GetDarkPortalBossReward(bossID uint32) (rewardItemID int, rewardPetID int, 
 		}
 	}
 	return 0, 0, false
+}
+
+// GetDarkPortalBossTitleID 暗黑武斗场配置中该 BOSS 的首次击败称号 ID（0=不发放）
+func GetDarkPortalBossTitleID(bossID uint32) int {
+	darkPortalMu.RLock()
+	defer darkPortalMu.RUnlock()
+	for _, entry := range darkPortalConfig {
+		if entry.BossID == int(bossID) {
+			return entry.RewardTitleID
+		}
+	}
+	return 0
 }
 
 // GetDarkPortalBossEntry 获取指定门和子关卡的配置

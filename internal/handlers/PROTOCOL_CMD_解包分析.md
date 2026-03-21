@@ -354,8 +354,8 @@
 | GETMYEXPERIENCE_COMPLETE | 3011 | 领取经验完成 (→ GetExperienceInfo) |
 | EGG_GAME_PLAY | 3201 | 蛋游戏 |
 | AWARD_CODE | 3301 | 奖励码 |
-| ACHIEVETITLELIST | 3403 | 成就称号列表 (→ AchieveTitleInfo) |
-| SETTITLE | 3404 | 设置称号 |
+| ACHIEVETITLELIST | 3403 | 成就称号列表 (→ AchieveTitleInfo：`count(4)` + `titleId(4)`×count；无 curTitle 前缀) |
+| SETTITLE | 3404 | 设置称号；响应 `userID(4)` + `titleID(4)`（SetTitleCmdListener） |
 | MONEY_CHECK_PSW | 1101 | 米币密码校验 |
 | MONEY_BUY_PRODUCT | 1102 | 米币购买 (→ MoneyBuyProductInfo) |
 | MONEY_CHECK_REMAIN | 1103 | 米币余额 |

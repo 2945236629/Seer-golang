@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/seer-game/golang-version/internal/core/logger"
@@ -19,6 +20,293 @@ import (
 	"github.com/seer-game/golang-version/internal/game/sptboss"
 	"github.com/seer-game/golang-version/internal/server/gameserver"
 )
+
+// GMAdminAccount GM 管理账号配置（JSON 存储）
+type GMAdminAccount struct {
+	Username    string   `json:"username"`
+	Password    string   `json:"password"`
+	Role        string   `json:"role"`        // super / admin
+	Permissions []string `json:"permissions"` // 权限组 key 列表（admin 才使用，super 永远拥有全部）
+}
+
+// gmAdminAccountsConfigPath JSON 存放路径（位于可执行文件所在目录）
+var (
+	gmAdminAccountsOnce sync.Once
+	gmAdminAccounts     []GMAdminAccount
+	gmAdminConfigPath   string
+)
+
+// loadGMAdminAccountsFromJSON 从 gm_admin_accounts.json 读取账号配置；不存在时写入一个默认超级管理员
+func loadGMAdminAccountsFromJSON() {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = "."
+	}
+	dir := filepath.Dir(exe)
+	gmAdminConfigPath = filepath.Join(dir, "gm_admin_accounts.json")
+
+	data, err := os.ReadFile(gmAdminConfigPath)
+	if err != nil || len(data) == 0 {
+		// 默认仅生成一个超级管理员：admin / admin
+		gmAdminAccounts = []GMAdminAccount{
+			{
+				Username:    "admin",
+				Password:    "admin",
+				Role:        "super",
+				Permissions: []string{},
+			},
+		}
+		_ = saveGMAdminAccountsJSON()
+		return
+	}
+	var list []GMAdminAccount
+	if err := json.Unmarshal(data, &list); err != nil || len(list) == 0 {
+		// 解析失败时也回退到默认账号
+		gmAdminAccounts = []GMAdminAccount{
+			{
+				Username:    "admin",
+				Password:    "admin",
+				Role:        "super",
+				Permissions: []string{},
+			},
+		}
+		_ = saveGMAdminAccountsJSON()
+		return
+	}
+	gmAdminAccounts = list
+}
+
+// saveGMAdminAccountsJSON 将当前 gmAdminAccounts 序列化到 JSON 文件
+func saveGMAdminAccountsJSON() error {
+	if gmAdminConfigPath == "" {
+		exe, err := os.Executable()
+		if err != nil || exe == "" {
+			exe = "."
+		}
+		gmAdminConfigPath = filepath.Join(filepath.Dir(exe), "gm_admin_accounts.json")
+	}
+	data, err := json.MarshalIndent(gmAdminAccounts, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(gmAdminConfigPath, data, 0644)
+}
+
+// getGMAdminAccounts 懒加载账号配置
+func getGMAdminAccounts() []GMAdminAccount {
+	gmAdminAccountsOnce.Do(loadGMAdminAccountsFromJSON)
+	return gmAdminAccounts
+}
+
+// gmSessionInfo GM 登录会话信息
+type gmSessionInfo struct {
+	Username    string   `json:"username"`
+	Role        string   `json:"role"`
+	Permissions []string `json:"permissions"`
+}
+
+// GM 登录 session（token -> info），仅在内存中维护
+var (
+	gmSessionMu sync.RWMutex
+	gmSessions  = make(map[string]gmSessionInfo)
+)
+
+// createGMSession 建立一个新的 GM session token 并记录
+func createGMSession(acc GMAdminAccount) string {
+	token := fmt.Sprintf("gm-%s-%d", acc.Username, time.Now().UnixNano())
+	gmSessionMu.Lock()
+	// 清理同一账号旧的 session，保证每次登录只保留最新一个
+	for t, u := range gmSessions {
+		if u.Username == acc.Username {
+			delete(gmSessions, t)
+		}
+	}
+	role := acc.Role
+	if role == "" {
+		role = "admin"
+	}
+	info := gmSessionInfo{
+		Username:    acc.Username,
+		Role:        role,
+		Permissions: acc.Permissions,
+	}
+	gmSessions[token] = info
+	gmSessionMu.Unlock()
+	return token
+}
+
+// getGMUserFromToken 依 token 取得登录的 GM 账号
+func getGMUserFromToken(token string) (gmSessionInfo, bool) {
+	if token == "" {
+		return gmSessionInfo{}, false
+	}
+	gmSessionMu.RLock()
+	defer gmSessionMu.RUnlock()
+	info, ok := gmSessions[token]
+	return info, ok
+}
+
+// extractGMToken 从 Header 或 Cookie 取得 GM token
+func extractGMToken(r *http.Request) string {
+	// 優先讀自訂 Header
+	if t := strings.TrimSpace(r.Header.Get("X-GM-Token")); t != "" {
+		return t
+	}
+	// 其次讀 cookie
+	if c, err := r.Cookie("gm_token"); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return ""
+}
+
+// getGMUserFromRequest 仅判断是否已登录，不做强制；供 /gm/auth/current 查询登录状态用
+func getGMUserFromRequest(r *http.Request) (gmSessionInfo, bool) {
+	token := extractGMToken(r)
+	return getGMUserFromToken(token)
+}
+
+// hasPermission 判断用户权限列表中是否包含指定权限 key
+func hasPermission(perms []string, key string) bool {
+	if len(perms) == 0 || key == "" {
+		return false
+	}
+	for _, p := range perms {
+		if p == key {
+			return true
+		}
+	}
+	return false
+}
+
+// requiredPermissionForPath 根据 GM API 路径返回所需的权限组 key
+// 若 second 返回值为 false，表示该路径不需要额外的功能权限（仅需登录）。
+func requiredPermissionForPath(path string) (string, bool) {
+	// 统一去掉查询参数部分
+	if i := strings.Index(path, "?"); i >= 0 {
+		path = path[:i]
+	}
+
+	// 玩家管理相关
+	if strings.HasPrefix(path, "/gm/users") ||
+		strings.HasPrefix(path, "/gm/user/") ||
+		strings.HasPrefix(path, "/gm/blacklist/") ||
+		strings.HasPrefix(path, "/gm/exp/") ||
+		strings.HasPrefix(path, "/gm/server/") ||
+		strings.HasPrefix(path, "/gm/broadcast/") ||
+		path == "/gm/logs" ||
+		path == "/gm/achieve-titles" {
+		return "users", true
+	}
+
+	// 精灵管理相关
+	if strings.HasPrefix(path, "/gm/pet/") ||
+		path == "/gm/pets" ||
+		strings.HasPrefix(path, "/gm/soulpearls") {
+		return "pets", true
+	}
+
+	// 扭蛋机
+	if strings.HasPrefix(path, "/gm/gacha/") {
+		return "gacha", true
+	}
+
+	// 权重 / 融合 / BOSS 效果
+	if path == "/gm/weights" ||
+		strings.HasPrefix(path, "/gm/fusion/rules") ||
+		strings.HasPrefix(path, "/gm/boss_effect/config") {
+		return "weights", true
+	}
+
+	// BUFF / 奖励 / 任务
+	if strings.HasPrefix(path, "/gm/buff-items") ||
+		strings.HasPrefix(path, "/gm/rewards") ||
+		strings.HasPrefix(path, "/gm/tasks/config") ||
+		strings.HasPrefix(path, "/gm/task/grant") {
+		return "buffs", true
+	}
+
+	// 地图怪物配置
+	if strings.HasPrefix(path, "/gm/maps/config") {
+		return "maps", true
+	}
+	if strings.HasPrefix(path, "/gm/maps/heal-fitments") {
+		return "maps", true
+	}
+
+	// 试炼之塔
+	if strings.HasPrefix(path, "/gm/freshfight/levels") {
+		return "freshfight", true
+	}
+
+	// 勇者之塔
+	if strings.HasPrefix(path, "/gm/fightlevel/levels") {
+		return "fightlevel", true
+	}
+
+	// 暗黑武斗场
+	if strings.HasPrefix(path, "/gm/darkportal/bosses") {
+		return "darkportal", true
+	}
+
+	// SPT BOSS
+	if strings.HasPrefix(path, "/gm/sptboss/config") {
+		return "sptboss", true
+	}
+
+	// GM 账号管理已经在对应 handler 内部单独校验 super，这里直接放行
+	if strings.HasPrefix(path, "/gm/admin/") {
+		return "", false
+	}
+
+	// 其它未显式指定权限的 GM API，仅要求登录
+	return "", false
+}
+
+// writeGMUnauthorized 返回未登录错误（401）
+func writeGMUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": false,
+		"message": "未登录 GM 账号，请先在 GM 登录页输入账号密码登录",
+	})
+}
+
+// GMAuthWrapper 将 /gm/* API 用简单 token 验证保护起来
+// - /gm/admin/login 与 /gm/auth/current 例外，不需已登录即可调用
+func GMAuthWrapper(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/gm/admin/login" || path == "/gm/auth/current" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		session, ok := getGMUserFromRequest(r)
+		if !ok {
+			writeGMUnauthorized(w)
+			return
+		}
+
+		// 超级管理员不做权限细分校验
+		if session.Role != "super" {
+			if perm, need := requiredPermissionForPath(path); need {
+				if !hasPermission(session.Permissions, perm) {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+					w.WriteHeader(http.StatusForbidden)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"message": fmt.Sprintf("当前账号缺少权限：%s，无法执行该操作", perm),
+					})
+					return
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 // RegisterGMHandlers 注册GM管理接口
 func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
@@ -30,7 +318,7 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 		}
 	}
 
-	// 本地模式认证：kyse_seer 风格前端用，返回 isLocal 以跳过登录
+	// 查询 GM 登录状态：kyse 前端用，已登录则 isLocal=true，否则为 false
 	mux.HandleFunc("/gm/auth/current", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -38,14 +326,167 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		session, ok := getGMUserFromRequest(r)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"data": map[string]interface{}{
-				"isLocal":     true,
+				"isLocal":     ok,
 				"userId":      0,
-				"email":       "",
-				"permissions": []string{},
+				"username":    session.Username,
+				"role":        session.Role,
+				"permissions": session.Permissions,
 			},
+		})
+	})
+
+	// GM 账号配置管理（仅超级管理员）；前端用于在仪表盘中编辑 gm_admin_accounts.json
+	mux.HandleFunc("/gm/admin/accounts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == http.MethodOptions {
+			return
+		}
+		session, ok := getGMUserFromRequest(r)
+		if !ok || session.Role != "super" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "仅超级管理员可以管理 GM 账号配置",
+			})
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			list := getGMAdminAccounts()
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data":    list,
+			})
+		case http.MethodPost:
+			var req struct {
+				Accounts []GMAdminAccount `json:"accounts"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "请求体无效",
+				})
+				return
+			}
+			if len(req.Accounts) == 0 {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "账号列表不能为空",
+				})
+				return
+			}
+			// 基础校验：至少保留一个超级管理员
+			hasSuper := false
+			for i := range req.Accounts {
+				acc := &req.Accounts[i]
+				acc.Username = strings.TrimSpace(acc.Username)
+				acc.Password = strings.TrimSpace(acc.Password)
+				if acc.Username == "" || acc.Password == "" {
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"message": "账号和密码不能为空",
+					})
+					return
+				}
+				if acc.Role == "" {
+					acc.Role = "admin"
+				}
+				if acc.Role == "super" {
+					hasSuper = true
+					acc.Permissions = nil // 超级管理员不需要单独的权限组
+				}
+			}
+			if !hasSuper {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "必须至少保留一个超级管理员（role=super）",
+				})
+				return
+			}
+
+			gmAdminAccounts = req.Accounts
+			if err := saveGMAdminAccountsJSON(); err != nil {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "保存失败：" + err.Error(),
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "保存成功",
+			})
+		default:
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// GM 登录：gm_login.html 负责登录，成功后才能操作其它 GM API
+	mux.HandleFunc("/gm/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+			"message": "请求体无效",
+			})
+			return
+		}
+		req.Username = strings.TrimSpace(req.Username)
+		req.Password = strings.TrimSpace(req.Password)
+		if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "请输入账号和密码",
+			})
+			return
+		}
+
+		accounts := getGMAdminAccounts()
+		var matched *GMAdminAccount
+		for i := range accounts {
+			if accounts[i].Username == req.Username && accounts[i].Password == req.Password {
+				matched = &accounts[i]
+				break
+			}
+		}
+		if matched == nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "账号或密码错误",
+			})
+			return
+		}
+
+		token := createGMSession(*matched)
+		http.SetCookie(w, &http.Cookie{
+			Name:     "gm_token",
+			Value:    token,
+			Path:     "/",
+			HttpOnly: true,
+		})
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"username": matched.Username,
+			"role":     matched.Role,
+			"token":    token,
 		})
 	})
 
@@ -65,6 +506,35 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 	// 获取所有用户列表（支持 keyword 查找账号）
 	mux.HandleFunc("/gm/users", func(w http.ResponseWriter, r *http.Request) {
 		handleGMGetUsers(w, r, gs)
+	})
+
+	// 称号列表（从 data/achieve.xml 读取，供 GM 下拉）
+	mux.HandleFunc("/gm/achieve-titles", func(w http.ResponseWriter, r *http.Request) {
+		handleGMAchieveTitles(w, r, gs)
+	})
+
+	// 保存玩家称号数据（已拥有称号列表 + 当前佩戴，与成就列表中非称号项合并）
+	mux.HandleFunc("/gm/user/save-titles", func(w http.ResponseWriter, r *http.Request) {
+		handleGMSaveTitles(w, r, gs)
+	})
+
+	// 发放称号（须注册在 /gm/user/ 通配之前，避免被详情路由吞掉）
+	mux.HandleFunc("/gm/user/grant-title", func(w http.ResponseWriter, r *http.Request) {
+		handleGMGrantTitle(w, r, gs)
+	})
+
+	// 全服 / 在线批量发放（道具、精灵、经验池、称号）
+	mux.HandleFunc("/gm/broadcast/items", func(w http.ResponseWriter, r *http.Request) {
+		handleGMBroadcastItems(w, r, gs)
+	})
+	mux.HandleFunc("/gm/broadcast/pets", func(w http.ResponseWriter, r *http.Request) {
+		handleGMBroadcastPets(w, r, gs)
+	})
+	mux.HandleFunc("/gm/broadcast/exp-pool", func(w http.ResponseWriter, r *http.Request) {
+		handleGMBroadcastExpPool(w, r, gs)
+	})
+	mux.HandleFunc("/gm/broadcast/titles", func(w http.ResponseWriter, r *http.Request) {
+		handleGMBroadcastTitles(w, r, gs)
 	})
 
 	// 获取单个用户详情
@@ -90,6 +560,18 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 	// 元神珠/精元转化设为1秒完成（元神赋形与精元孵化已拆分為獨立狀態）
 	mux.HandleFunc("/gm/user/transform-1sec", func(w http.ResponseWriter, r *http.Request) {
 		handleGMTransform1Sec(w, r, gs)
+	})
+	// 卡基地修复：重置玩家基地数据为初始状态
+	mux.HandleFunc("/gm/user/reset-base", func(w http.ResponseWriter, r *http.Request) {
+		handleGMResetBase(w, r, gs)
+	})
+	// 温和修复：仅重置基地摆放，不清空仓库
+	mux.HandleFunc("/gm/user/reset-base-placed", func(w http.ResponseWriter, r *http.Request) {
+		handleGMResetBasePlaced(w, r, gs)
+	})
+	// 查看玩家基地仓库（含已摆放计数）
+	mux.HandleFunc("/gm/user/base-fitments", func(w http.ResponseWriter, r *http.Request) {
+		handleGMGetBaseFitments(w, r, gs)
 	})
 
 	// 添加黑名单
@@ -160,6 +642,10 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 	// 修改精灵性格
 	mux.HandleFunc("/gm/pet/nature", func(w http.ResponseWriter, r *http.Request) {
 		handleGMUpdatePetNature(w, r, gs)
+	})
+	// 修改精灵异色开关
+	mux.HandleFunc("/gm/pet/shiny", func(w http.ResponseWriter, r *http.Request) {
+		handleGMUpdatePetShiny(w, r, gs)
 	})
 
 	// 删除用户精灵
@@ -317,6 +803,10 @@ func RegisterGMHandlers(mux *http.ServeMux, gs *gameserver.GameServer) {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	// 基地家具数据自愈：清理非法家具 ID/异常值，并补齐仓库数量关系
+	mux.HandleFunc("/gm/maps/heal-fitments", func(w http.ResponseWriter, r *http.Request) {
+		handleGMHealFitments(w, r, gs)
+	})
 
 	// 暗黑武斗场BOSS配置
 	mux.HandleFunc("/gm/darkportal/bosses", func(w http.ResponseWriter, r *http.Request) {
@@ -396,6 +886,188 @@ func handleGMBossEffectSave(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "保存成功",
+	})
+}
+
+type gmHealFitmentsRequest struct {
+	UserID int64 `json:"userId"`
+	DryRun bool  `json:"dryRun"`
+}
+
+type gmHealFitmentsStats struct {
+	UsersScanned int `json:"usersScanned"`
+	UsersChanged int `json:"usersChanged"`
+	RemovedItems int `json:"removedItems"`
+	ClampedItems int `json:"clampedItems"`
+	AppendedAll  int `json:"appendedAll"`
+}
+
+func normalizePlacedFitment(f userdb.Fitment) (userdb.Fitment, bool, bool) {
+	changed := false
+	if f.ID < 500001 {
+		return userdb.Fitment{}, true, false
+	}
+	if f.X < 0 {
+		f.X = 0
+		changed = true
+	}
+	if f.Y < 0 {
+		f.Y = 0
+		changed = true
+	}
+	if f.Dir < 0 {
+		f.Dir = 0
+		changed = true
+	}
+	if f.Status < 0 {
+		f.Status = 0
+		changed = true
+	}
+	return f, false, changed
+}
+
+func normalizeBagFitment(f userdb.Fitment) (userdb.Fitment, bool, bool) {
+	changed := false
+	if f.ID < 500001 {
+		return userdb.Fitment{}, true, false
+	}
+	// 仓库条目只需要 ID，其余值统一归零，避免脏值影响后续逻辑
+	if f.X != 0 || f.Y != 0 || f.Dir != 0 || f.Status != 0 {
+		f.X, f.Y, f.Dir, f.Status = 0, 0, 0, 0
+		changed = true
+	}
+	return f, false, changed
+}
+
+func healFitmentsForUser(data *userdb.GameData) (changed bool, removed int, clamped int, appendedAll int) {
+	cleanPlaced := func(src []userdb.Fitment) []userdb.Fitment {
+		dst := make([]userdb.Fitment, 0, len(src))
+		for _, f := range src {
+			nf, drop, c := normalizePlacedFitment(f)
+			if drop {
+				removed++
+				changed = true
+				continue
+			}
+			if c {
+				clamped++
+				changed = true
+			}
+			dst = append(dst, nf)
+		}
+		return dst
+	}
+	cleanBag := func(src []userdb.Fitment) []userdb.Fitment {
+		dst := make([]userdb.Fitment, 0, len(src))
+		for _, f := range src {
+			nf, drop, c := normalizeBagFitment(f)
+			if drop {
+				removed++
+				changed = true
+				continue
+			}
+			if c {
+				clamped++
+				changed = true
+			}
+			dst = append(dst, nf)
+		}
+		return dst
+	}
+
+	data.Fitments = cleanPlaced(data.Fitments)
+	data.HeadFitments = cleanPlaced(data.HeadFitments)
+	data.AllFitments = cleanBag(data.AllFitments)
+	data.HeadAllFitments = cleanBag(data.HeadAllFitments)
+
+	ensureAllNotLessThanUsed := func(used []userdb.Fitment, all *[]userdb.Fitment) {
+		allCount := map[int]int{}
+		for _, f := range *all {
+			allCount[f.ID]++
+		}
+		usedCount := map[int]int{}
+		for _, f := range used {
+			usedCount[f.ID]++
+		}
+		for id, need := range usedCount {
+			for allCount[id] < need {
+				*all = append(*all, userdb.Fitment{ID: id})
+				allCount[id]++
+				appendedAll++
+				changed = true
+			}
+		}
+	}
+	ensureAllNotLessThanUsed(data.Fitments, &data.AllFitments)
+	ensureAllNotLessThanUsed(data.HeadFitments, &data.HeadAllFitments)
+	return
+}
+
+// handleGMHealFitments GM 手动修复基地/总部家具脏数据。
+// POST body:
+// - {"userId":123} 仅修复指定用户
+// - {"userId":0} 或 {} 修复所有用户
+// - {"dryRun":true} 仅统计不落盘
+func handleGMHealFitments(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != http.MethodPost {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持POST请求"})
+		return
+	}
+	if gs == nil || gs.UserDB == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "服务未就绪"})
+		return
+	}
+	var req gmHealFitmentsRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	stats := gmHealFitmentsStats{}
+	if req.UserID > 0 {
+		stats.UsersScanned = 1
+		data := gs.UserDB.GetOrCreateGameData(req.UserID)
+		changed, removed, clamped, appended := healFitmentsForUser(data)
+		stats.RemovedItems += removed
+		stats.ClampedItems += clamped
+		stats.AppendedAll += appended
+		if changed {
+			stats.UsersChanged = 1
+			if !req.DryRun {
+				gs.UserDB.SaveGameData(req.UserID, data)
+			}
+		}
+	} else {
+		all := gs.UserDB.GetAllGameData()
+		stats.UsersScanned = len(all)
+		keys := make([]int64, 0, len(all))
+		for uid := range all {
+			keys = append(keys, uid)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, uid := range keys {
+			data := all[uid]
+			if data == nil {
+				continue
+			}
+			changed, removed, clamped, appended := healFitmentsForUser(data)
+			stats.RemovedItems += removed
+			stats.ClampedItems += clamped
+			stats.AppendedAll += appended
+			if changed {
+				stats.UsersChanged++
+				if !req.DryRun {
+					gs.UserDB.SaveGameData(uid, data)
+				}
+			}
+		}
+	}
+
+	logger.Info(fmt.Sprintf("[GM] 家具数据自愈完成: userID=%d dryRun=%v scanned=%d changed=%d removed=%d clamped=%d appendedAll=%d",
+		req.UserID, req.DryRun, stats.UsersScanned, stats.UsersChanged, stats.RemovedItems, stats.ClampedItems, stats.AppendedAll))
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "家具数据自愈完成",
+		"data":    stats,
 	})
 }
 
@@ -1120,12 +1792,18 @@ func handleGMGetUser(w http.ResponseWriter, r *http.Request, gs *gameserver.Game
 	}
 
 	// 创建带名称的游戏数据副本（含 mapId/posX/posY 供 kyse 风格 GM 面板显示）
-	gameDataWithNames := map[string]interface{}{
+		achList := gameData.Achievements.List
+		if achList == nil {
+			achList = []int{}
+		}
+		gameDataWithNames := map[string]interface{}{
 		"nick":          gameData.Nick,
 		"coins":         gameData.Coins,
 		"gold":          gameData.Gold,
 		"energy":        gameData.Energy,
 		"expPool":       gameData.ExpPool,
+		"curTitle":      gameData.CurTitle,
+		"achievements":  achList,
 		"pets":          petsForGM,
 		"storagePets":   storagePetsForGM,
 		"items":         itemsWithNames,
@@ -1169,6 +1847,7 @@ func handleGMUpdateUser(w http.ResponseWriter, r *http.Request, gs *gameserver.G
 		Coins    *int   `json:"coins"`
 		Gold     *int   `json:"gold"`
 		Energy   *int   `json:"energy"`
+		CurTitle *int   `json:"curTitle,omitempty"` // 当前佩戴称号ID，0=无；与 3404 一致
 		Nono     *struct {
 			Level      *int `json:"level"`
 			Exp        *int `json:"exp"`
@@ -1225,6 +1904,15 @@ func handleGMUpdateUser(w http.ResponseWriter, r *http.Request, gs *gameserver.G
 	if req.Energy != nil {
 		gameData.Energy = *req.Energy
 	}
+
+	// 当前佩戴称号（不改变已解锁列表）
+	if req.CurTitle != nil {
+		t := *req.CurTitle
+		if t < 0 {
+			t = 0
+		}
+		gameData.CurTitle = t
+	}
 	
 	// 更新NONO信息
 	if req.Nono != nil {
@@ -1261,6 +1949,123 @@ func handleGMUpdateUser(w http.ResponseWriter, r *http.Request, gs *gameserver.G
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "更新成功",
+	})
+}
+
+// handleGMGrantTitle POST /gm/user/grant-title
+// 将称号写入成就列表（与 3406 CONFERACHIEVEMENT 一致），可选立即佩戴（3404）。
+// body: {"userId":1,"titleId":123,"wearNow":true}
+func handleGMGrantTitle(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != http.MethodPost {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持POST请求"})
+		return
+	}
+	if gs == nil || gs.UserDB == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "服务未就绪"})
+		return
+	}
+	var req struct {
+		UserID  int64 `json:"userId"`
+		TitleID int   `json:"titleId"`
+		WearNow bool  `json:"wearNow"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "请求参数错误"})
+		return
+	}
+	if req.UserID <= 0 {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "无效的用户ID"})
+		return
+	}
+	if req.TitleID <= 0 {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "无效的称号ID"})
+		return
+	}
+	if gs.UserDB.FindByUserID(req.UserID) == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "用户不存在"})
+		return
+	}
+	gameData := gs.UserDB.GetOrCreateGameData(req.UserID)
+	if gameData.Achievements.List == nil {
+		gameData.Achievements.List = []int{}
+	}
+	exists := false
+	for _, id := range gameData.Achievements.List {
+		if id == req.TitleID {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		gameData.Achievements.List = append(gameData.Achievements.List, req.TitleID)
+	}
+	gameData.Achievements.Total = len(gameData.Achievements.List)
+	if req.WearNow {
+		gameData.CurTitle = req.TitleID
+	}
+	gs.UserDB.SaveGameData(req.UserID, gameData)
+	logger.Info(fmt.Sprintf("[GM] 发放称号: UserID=%d titleId=%d wearNow=%v", req.UserID, req.TitleID, req.WearNow))
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"message":   "发放成功",
+		"curTitle":  gameData.CurTitle,
+		"achievements": gameData.Achievements.List,
+	})
+}
+
+// handleGMSaveTitles POST /gm/user/save-titles
+// body: {"userId":1,"ownedTitleIds":[1,2,3],"curTitle":5}  curTitle 可省略表示不改佩戴
+func handleGMSaveTitles(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != http.MethodPost {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持POST请求"})
+		return
+	}
+	if gs == nil || gs.UserDB == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "服务未就绪"})
+		return
+	}
+	var req struct {
+		UserID        int64 `json:"userId"`
+		OwnedTitleIDs []int `json:"ownedTitleIds"`
+		CurTitle      *int  `json:"curTitle,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "请求参数错误"})
+		return
+	}
+	if req.UserID <= 0 {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "无效的用户ID"})
+		return
+	}
+	if gs.UserDB.FindByUserID(req.UserID) == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "用户不存在"})
+		return
+	}
+	gameData := gs.UserDB.GetOrCreateGameData(req.UserID)
+	if gameData.Achievements.List == nil {
+		gameData.Achievements.List = []int{}
+	}
+	catalog := TitleCatalogIDSet()
+	gameData.Achievements.List = MergeAchievementsPreservingNonTitles(gameData.Achievements.List, req.OwnedTitleIDs, catalog)
+	gameData.Achievements.Total = len(gameData.Achievements.List)
+	if req.CurTitle != nil {
+		t := *req.CurTitle
+		if t < 0 {
+			t = 0
+		}
+		gameData.CurTitle = t
+	}
+	gs.UserDB.SaveGameData(req.UserID, gameData)
+	logger.Info(fmt.Sprintf("[GM] 保存称号数据: UserID=%d titles=%d curTitle=%d", req.UserID, len(req.OwnedTitleIDs), gameData.CurTitle))
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"message":      "保存成功",
+		"curTitle":     gameData.CurTitle,
+		"achievements": gameData.Achievements.List,
 	})
 }
 
@@ -1535,14 +2340,7 @@ func handleGMAddPet(w http.ResponseWriter, r *http.Request, gs *gameserver.GameS
 	}
 
 	// GM 发放精灵时也遵循“背包最多 6 只”的规则，超出则存入仓库
-	if len(gameData.Pets) >= 6 {
-		if gameData.StoragePets == nil {
-			gameData.StoragePets = []userdb.Pet{}
-		}
-		gameData.StoragePets = append(gameData.StoragePets, newPet)
-	} else {
-		gameData.Pets = append(gameData.Pets, newPet)
-	}
+	addGrantedPetToBagOrStorage(gameData, newPet)
 	gs.UserDB.SaveGameData(req.UserID, gameData)
 	
 	logger.Info(fmt.Sprintf("[GM] 添加精灵: UserID=%d PetID=%d Level=%d", req.UserID, req.PetID, req.Level))
@@ -2111,6 +2909,55 @@ func handleGMUpdatePetNature(w http.ResponseWriter, r *http.Request, gs *gameser
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "修改成功"})
 }
 
+// handleGMUpdatePetShiny 修改精灵异色开关（背包/仓库通用）
+func handleGMUpdatePetShiny(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持POST请求"})
+		return
+	}
+	var req struct {
+		UserID    int64 `json:"userId"`
+		CatchTime int   `json:"catchTime"`
+		Shiny     bool  `json:"shiny"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "请求参数错误"})
+		return
+	}
+	if req.UserID == 0 || req.CatchTime == 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "userId 或 catchTime 无效"})
+		return
+	}
+
+	gameData := gs.UserDB.GetOrCreateGameData(req.UserID)
+	var picked *userdb.Pet
+	for i := range gameData.Pets {
+		if gameData.Pets[i].CatchTime == req.CatchTime {
+			picked = &gameData.Pets[i]
+			break
+		}
+	}
+	if picked == nil && gameData.StoragePets != nil {
+		for i := range gameData.StoragePets {
+			if gameData.StoragePets[i].CatchTime == req.CatchTime {
+				picked = &gameData.StoragePets[i]
+				break
+			}
+		}
+	}
+	if picked == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "未找到该精灵"})
+		return
+	}
+
+	picked.Shiny = req.Shiny
+	gs.UserDB.SaveGameData(req.UserID, gameData)
+	logger.Info(fmt.Sprintf("[GM] 修改精灵异色: UserID=%d CatchTime=%d PetID=%d Shiny=%v", req.UserID, req.CatchTime, picked.ID, picked.Shiny))
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "修改成功", "shiny": picked.Shiny})
+}
+
 // handleGMDeletePet 删除用户精灵（背包或仓库，按 catchTime 定位）
 func handleGMDeletePet(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
 	w.Header().Set("Content-Type", "application/json")
@@ -2244,6 +3091,160 @@ func handleGMTransform1Sec(w http.ResponseWriter, r *http.Request, gs *gameserve
 	gs.UserDB.SaveGameData(req.UserID, gameData)
 	logger.Info(fmt.Sprintf("[GM] 元神珠/精元 1秒完成: UserID=%d", req.UserID))
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "已设为1秒后完成"})
+}
+
+// handleGMResetBase 卡基地修复：将玩家基地重置到初始状态
+func handleGMResetBase(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持POST请求"})
+		return
+	}
+	var req struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID <= 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "请求参数错误"})
+		return
+	}
+
+	gameData := gs.UserDB.GetOrCreateGameData(req.UserID)
+	if gameData == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "玩家不存在"})
+		return
+	}
+	oldPlaced := len(gameData.Fitments)
+	oldAll := len(gameData.AllFitments)
+
+	// 重置到初始基地：清空基地已摆放与仓库家具，并将角色位置拉回默认地图安全点
+	gameData.Fitments = []userdb.Fitment{}
+	gameData.AllFitments = []userdb.Fitment{}
+	gameData.MapID = 1
+	gameData.PosX = 300
+	gameData.PosY = 270
+
+	gs.UserDB.SaveGameData(req.UserID, gameData)
+	logger.Warning(fmt.Sprintf("[GM] 卡基地修复: userId=%d placed=%d->0 all=%d->0 map=1 pos=(300,270)", req.UserID, oldPlaced, oldAll))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "已重置为初始基地",
+		"data": map[string]interface{}{
+			"oldPlacedCount": oldPlaced,
+			"oldAllCount":    oldAll,
+			"newPlacedCount": 0,
+			"newAllCount":    0,
+			"mapId":          1,
+			"posX":           300,
+			"posY":           270,
+		},
+	})
+}
+
+// handleGMResetBasePlaced 温和修复：仅清空基地摆放，不清空基地仓库
+func handleGMResetBasePlaced(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持POST请求"})
+		return
+	}
+	var req struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID <= 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "请求参数错误"})
+		return
+	}
+	gameData := gs.UserDB.GetOrCreateGameData(req.UserID)
+	if gameData == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "玩家不存在"})
+		return
+	}
+
+	oldPlaced := len(gameData.Fitments)
+	oldAll := len(gameData.AllFitments)
+	gameData.Fitments = []userdb.Fitment{}
+	gameData.MapID = 1
+	gameData.PosX = 300
+	gameData.PosY = 270
+
+	gs.UserDB.SaveGameData(req.UserID, gameData)
+	logger.Warning(fmt.Sprintf("[GM] 温和卡基地修复: userId=%d placed=%d->0 all=%d(保留) map=1 pos=(300,270)", req.UserID, oldPlaced, oldAll))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "已重置基地摆放（仓库保留）",
+		"data": map[string]interface{}{
+			"oldPlacedCount": oldPlaced,
+			"allCount":       oldAll,
+			"newPlacedCount": 0,
+			"mapId":          1,
+			"posX":           300,
+			"posY":           270,
+		},
+	})
+}
+
+// handleGMGetBaseFitments 查看玩家基地仓库（按家具ID汇总 total/used）
+func handleGMGetBaseFitments(w http.ResponseWriter, r *http.Request, gs *gameserver.GameServer) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != "GET" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "只支持GET请求"})
+		return
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("userId")), 10, 64)
+	if err != nil || userID <= 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "无效的用户ID"})
+		return
+	}
+	gameData := gs.UserDB.GetOrCreateGameData(userID)
+	if gameData == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "玩家不存在"})
+		return
+	}
+
+	totalByID := map[int]int{}
+	for _, f := range gameData.AllFitments {
+		if f.ID < 500001 {
+			continue
+		}
+		totalByID[f.ID]++
+	}
+	usedByID := map[int]int{}
+	for _, f := range gameData.Fitments {
+		if f.ID < 500001 {
+			continue
+		}
+		usedByID[f.ID]++
+	}
+	ids := make([]int, 0, len(totalByID))
+	for id := range totalByID {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	rows := make([]map[string]interface{}, 0, len(ids))
+	for _, id := range ids {
+		total := totalByID[id]
+		used := usedByID[id]
+		rows = append(rows, map[string]interface{}{
+			"id":        id,
+			"usedCount": used,
+			"allCount":  total,
+			"bagCount":  total - used,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"userId":      userID,
+			"placedCount": len(gameData.Fitments),
+			"allCount":    len(gameData.AllFitments),
+			"fitments":    rows,
+		},
+	})
 }
 
 // handleGMExpPoolAdd 发放经验到用户经验分配器（经验池）
@@ -2498,10 +3499,11 @@ func handleGMWeightsGet(w http.ResponseWriter, r *http.Request, gs *gameserver.G
 		})
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":            true,
-		"capsuleCatchRates":  capsules,
-		"fusionSuccessRates": fusionRates,
-		"chipMixtureRules":   cfg.ChipMixtureRules,
+		"success":                  true,
+		"capsuleCatchRates":        capsules,
+		"fusionSuccessRates":       fusionRates,
+		"chipMixtureRules":         cfg.ChipMixtureRules,
+		"nonCaptureShinyPercent":   cfg.NonCaptureShinyPercent,
 	})
 }
 
@@ -2520,6 +3522,7 @@ func handleGMWeightsUpdate(w http.ResponseWriter, r *http.Request, gs *gameserve
 		SoulPearlVipTransmuteTm  map[string]int                `json:"soulPearlVipTransmuteTm"` // 元神珠 ID -> VIP 转化时间(秒)
 		SoulPearlRewardPets      map[string][]WeightedPetEntry `json:"soulPearlRewardPets"`     // 元神珠 ID -> [{ petClass, weight }]，转化完成只给 1 只
 		ChipMixtureRules         []ChipMixtureRule             `json:"chipMixtureRules"`
+		NonCaptureShinyPercent   *float64                      `json:"nonCaptureShinyPercent"` // 非捕捉异色几率(%)，如 0.003；0 关闭
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "参数错误: " + err.Error()})
@@ -2579,6 +3582,9 @@ func handleGMWeightsUpdate(w http.ResponseWriter, r *http.Request, gs *gameserve
 	}
 	if req.ChipMixtureRules != nil {
 		cfg.ChipMixtureRules = req.ChipMixtureRules
+	}
+	if req.NonCaptureShinyPercent != nil {
+		cfg.NonCaptureShinyPercent = clampNonCaptureShinyPercent(*req.NonCaptureShinyPercent)
 	}
 	SetWeightsConfig(cfg)
 	if err := SaveWeightsConfig(); err != nil {

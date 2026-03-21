@@ -61,6 +61,8 @@ type GameData struct {
 	// TransformID 当前人物变身套装 ID（PEOPLE_TRANSFROM 2111 / suitID），0 表示未变身
 	TransformID int `json:"transformId,omitempty"`
 	Tasks           map[string]Task         `json:"tasks"`
+	// DailyCampTaskNoon 精靈訓練營等「每日任務」上次結算時所屬週期的正午 Unix（Asia/Shanghai）；跨過下一個 12:00 後會清除 type=daily 的任務進度
+	DailyCampTaskNoon int64 `json:"dailyCampTaskNoon,omitempty"`
 	PetBook         map[string]PetBookEntry `json:"petBook"`
 	Nono            NonoData                `json:"nono"`
 	MapID           int                     `json:"mapId"`
@@ -68,6 +70,8 @@ type GameData struct {
 	PosY            int                     `json:"posY"`
 	Fitments        []Fitment               `json:"fitments"`
 	AllFitments     []Fitment               `json:"allFitments"`
+	HeadFitments    []Fitment               `json:"headFitments,omitempty"`
+	HeadAllFitments []Fitment               `json:"headAllFitments,omitempty"`
 	Texture         int                     `json:"texture"`
 	DsFlag          int                     `json:"dsFlag"`
 	Badge           int                     `json:"badge"`
@@ -173,6 +177,7 @@ type SoulBeadBuf struct {
 type Pet struct {
 	ID        int    `json:"id"`
 	CatchTime int    `json:"catchTime"`
+	Shiny     bool   `json:"shiny,omitempty"`
 	Level     int    `json:"level"`
 	DV        int    `json:"dv"`
 	Nature    int    `json:"nature"`
@@ -666,6 +671,7 @@ func calculateSuperNonoTypeByLevel(level int) int {
 func (db *UserDB) GetOrCreateGameData(userID int64) *GameData {
 	db.mu.Lock()
 	if data, exists := db.gameData[userID]; exists {
+		needPersist := false
 		// 数据迁移：旧 Go 版默认给新用户塞了 1 只精灵 + 4 件服装，导致 CMD1001 长度不一致从而卡在宇宙界面。
 		// Lua 版默认是 pets/clothes 为空，这里做一次兼容迁移，保留真实玩家数据不动。
 		if len(data.Pets) == 1 && len(data.Clothes) == 4 &&
@@ -681,6 +687,12 @@ func (db *UserDB) GetOrCreateGameData(userID int64) *GameData {
 			data.Fitments[0].X == 0 && data.Fitments[0].Y == 0 && data.Fitments[0].Dir == 0 && data.Fitments[0].Status == 0 {
 			data.Fitments = []Fitment{}
 			data.AllFitments = []Fitment{}
+		}
+		if data.HeadFitments == nil {
+			data.HeadFitments = []Fitment{}
+		}
+		if data.HeadAllFitments == nil {
+			data.HeadAllFitments = []Fitment{}
 		}
 
 		// 数据迁移：修正NoNo HP值
@@ -699,17 +711,35 @@ func (db *UserDB) GetOrCreateGameData(userID int64) *GameData {
 		}
 
 		// 始终按超能等级同步形态（等级 1-12 → 形态 1-5），避免旧形态导致 12 级显示 1 级形态
+		// 兼容旧存档：若 SuperLevel/SuperEnergy 为空，则回填历史 VipLevel/VipValue
+		if data.Nono.SuperLevel <= 0 && data.Nono.VipLevel > 0 {
+			fmt.Printf("[UserDB] 迁移数据: 用户 %d 超能等级回填 SuperLevel=%d (from VipLevel)\n", userID, data.Nono.VipLevel)
+			data.Nono.SuperLevel = data.Nono.VipLevel
+			needPersist = true
+		}
+		if data.Nono.SuperEnergy <= 0 && data.Nono.VipValue > 0 {
+			fmt.Printf("[UserDB] 迁移数据: 用户 %d 超能能量回填 SuperEnergy=%d (from VipValue)\n", userID, data.Nono.VipValue)
+			data.Nono.SuperEnergy = data.Nono.VipValue
+			needPersist = true
+		}
 		if data.Nono.SuperLevel > 0 {
 			calculatedType := calculateSuperNonoTypeByLevel(data.Nono.SuperLevel)
 			if data.Nono.SuperNono != calculatedType {
 				fmt.Printf("[UserDB] 迁移数据: 用户 %d 超能NONO形态 按等级同步 (等级=%d, 旧形态=%d -> 形态=%d)\n",
 					userID, data.Nono.SuperLevel, data.Nono.SuperNono, calculatedType)
+				needPersist = true
 			}
 			data.Nono.SuperNono = calculatedType
 		}
 
 		// 注意：不再自动添加默认装扮，新手套装应该通过任务85获得
 		db.mu.Unlock()
+		if needPersist {
+			db.SaveGameData(userID, data)
+			if db.mysqlDB == nil {
+				db.SaveToFile()
+			}
+		}
 		return data
 	}
 	// 启用 MySQL 时尝试从库中加载
@@ -794,6 +824,8 @@ func (db *UserDB) GetOrCreateGameData(userID int64) *GameData {
 		PosY:            270,
 		Fitments:        []Fitment{},
 		AllFitments:     []Fitment{},
+		HeadFitments:    []Fitment{},
+		HeadAllFitments: []Fitment{},
 		Texture:         1,
 		DsFlag:          0,
 		Badge:           0,
@@ -1297,6 +1329,8 @@ func (db *UserDB) AddFriend(userID, friendID int64) (bool, string) {
 
 	data.Friends = append(data.Friends, friend)
 	db.SaveGameData(userID, data)
+	// 本地 JSON 模式下，立即持久化到文件，避免异常退出导致好友关系丢失
+	db.SaveToFile()
 
 	fmt.Printf("[UserDB] 添加好友: userId=%d, friendId=%d\n", userID, friendID)
 	return true, ""
@@ -1310,6 +1344,8 @@ func (db *UserDB) RemoveFriend(userID, friendID int64) bool {
 		if friend.UserID == friendID {
 			data.Friends = append(data.Friends[:i], data.Friends[i+1:]...)
 			db.SaveGameData(userID, data)
+			// 本地 JSON 模式下，立即持久化到文件
+			db.SaveToFile()
 			fmt.Printf("[UserDB] 删除好友: userId=%d, friendId=%d\n", userID, friendID)
 			return true
 		}
@@ -1342,6 +1378,8 @@ func (db *UserDB) UpdatePoke(userID, friendID int64) bool {
 		if friend.UserID == friendID {
 			data.Friends[i].TimePoke = time.Now().Unix()
 			db.SaveGameData(userID, data)
+			// 本地 JSON 模式下，立即持久化到文件
+			db.SaveToFile()
 			return true
 		}
 	}

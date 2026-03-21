@@ -53,6 +53,7 @@ type BattleState struct {
 	PlayerMaxHP uint32
 	EnemyID     int
 	EnemyLevel  int
+	EnemyShiny  bool
 	// ActivePetIndex 当前出战精灵在 user.Pets 切片中的下标（0 开始），用于 2405 伤害计算/经验结算等
 	// 默认 0；切换精灵(2407) 时更新，但不改变 user.Pets 本身的顺序，这样战斗结束后背包首发仍然与客户端一致。
 	ActivePetIndex int
@@ -62,6 +63,10 @@ type BattleState struct {
 	DeadPlayerPets int
 	IsActive       bool
 	OpponentUserID int64 // PvP 时对方 UID，0 表示 PvE
+	// PvP 行為同步：記錄本回合是否已選擇技能 / 切換精靈
+	PvPHasSelected         bool   // 本回合是否已選擇技能
+	PvPSelectedSkillID     uint32 // 本回合選擇的技能 ID
+	PvPChangedPetThisRound bool   // 本回合是否主動切換過精靈
 	// 技能效果：异常状态 status[0..19]，能力等级 battleLv[0..5]=攻击/防御/特攻/特防/速度/命中（-6~+6）
         AllowedPetIndexes []int
         PlayerStatus   [20]byte

@@ -57,6 +57,8 @@ package com.robot.core.manager
       
       private static var _isArrlowInMap:Boolean = true;
       
+      private static var _simpleProtocol:Boolean = false;
+      
       public function FitmentManager()
       {
          super();
@@ -104,6 +106,14 @@ package com.robot.core.manager
             return;
          }
          isChange = false;
+         if(_simpleProtocol)
+         {
+            for each(_loc1_ in usedList)
+            {
+               saveSingleInfo(_loc1_);
+            }
+            return;
+         }
          var _loc2_:int = int(usedList.length);
          var _loc3_:ByteArray = new ByteArray();
          _loc3_.writeUnsignedInt(roomID);
@@ -124,19 +134,41 @@ package com.robot.core.manager
          var info:FitmentInfo = param1;
          var event:Function = param2;
          var byData:ByteArray = new ByteArray();
-         byData.writeUnsignedInt(roomID);
-         byData.writeUnsignedInt(1);
-         byData.writeUnsignedInt(info.id);
-         byData.writeUnsignedInt(info.pos.x);
-         byData.writeUnsignedInt(info.pos.y);
-         byData.writeUnsignedInt(info.dir);
-         byData.writeUnsignedInt(info.status);
+         if(_simpleProtocol)
+         {
+            byData.writeUnsignedInt(info.id);
+            byData.writeUnsignedInt(info.pos.x);
+            byData.writeUnsignedInt(info.pos.y);
+            byData.writeUnsignedInt(info.dir);
+            byData.writeUnsignedInt(info.status);
+         }
+         else
+         {
+            byData.writeUnsignedInt(roomID);
+            byData.writeUnsignedInt(1);
+            byData.writeUnsignedInt(info.id);
+            byData.writeUnsignedInt(info.pos.x);
+            byData.writeUnsignedInt(info.pos.y);
+            byData.writeUnsignedInt(info.dir);
+            byData.writeUnsignedInt(info.status);
+         }
          SocketConnection.addCmdListener(CommandID.SET_FITMENT,function(param1:SocketEvent):void
          {
             SocketConnection.removeCmdListener(CommandID.SET_FITMENT,arguments.callee);
             event();
          });
          SocketConnection.send(CommandID.SET_FITMENT,byData);
+      }
+      
+      private static function saveSingleInfo(param1:FitmentInfo) : void
+      {
+         var _loc2_:ByteArray = new ByteArray();
+         _loc2_.writeUnsignedInt(param1.id);
+         _loc2_.writeUnsignedInt(param1.pos.x);
+         _loc2_.writeUnsignedInt(param1.pos.y);
+         _loc2_.writeUnsignedInt(param1.dir);
+         _loc2_.writeUnsignedInt(param1.status);
+         SocketConnection.send(CommandID.SET_FITMENT,_loc2_);
       }
       
       private static function onMove(param1:MouseEvent) : void
@@ -381,17 +413,53 @@ package com.robot.core.manager
          SocketConnection.addCmdListener(CommandID.FITMENT_ALL,function(param1:SocketEvent):void
          {
             var _loc3_:FitmentInfo = null;
+            var _loc4_:* = null;
+            var _loc5_:int = 0;
+            var _loc6_:int = 0;
+            var _loc7_:uint = 0;
+            var _loc8_:int = 0;
             SocketConnection.removeCmdListener(CommandID.FITMENT_ALL,arguments.callee);
             storageMap.clear();
-            var _loc4_:ByteArray = param1.data as ByteArray;
-            var _loc5_:int = int(_loc4_.readUnsignedInt());
-            var _loc6_:int = 0;
-            while(_loc6_ < _loc5_)
+            var _loc9_:ByteArray = param1.data as ByteArray;
+            _loc5_ = int(_loc9_.readUnsignedInt());
+            _loc6_ = int(_loc9_.bytesAvailable);
+            _simpleProtocol = _loc6_ == _loc5_ * 4;
+            if(_simpleProtocol)
             {
-               _loc3_ = new FitmentInfo();
-               FitmentInfo.setFor10007(_loc3_,_loc4_);
-               storageMap.add(_loc3_.id,_loc3_);
-               _loc6_++;
+               _loc4_ = {};
+               _loc8_ = 0;
+               while(_loc8_ < _loc5_)
+               {
+                  _loc7_ = _loc9_.readUnsignedInt();
+                  if(_loc4_[_loc7_] == null)
+                  {
+                     _loc4_[_loc7_] = 1;
+                  }
+                  else
+                  {
+                     _loc4_[_loc7_] = int(_loc4_[_loc7_]) + 1;
+                  }
+                  _loc8_++;
+               }
+               for(var _loc10:String in _loc4_)
+               {
+                  _loc3_ = new FitmentInfo();
+                  _loc3_.id = uint(_loc10);
+                  _loc3_.allCount = int(_loc4_[_loc10]);
+                  _loc3_.usedCount = 0;
+                  storageMap.add(_loc3_.id,_loc3_);
+               }
+            }
+            else
+            {
+               _loc8_ = 0;
+               while(_loc8_ < _loc5_)
+               {
+                  _loc3_ = new FitmentInfo();
+                  FitmentInfo.setFor10007(_loc3_,_loc9_);
+                  storageMap.add(_loc3_.id,_loc3_);
+                  _loc8_++;
+               }
             }
             dispatchEvent(new FitmentEvent(FitmentEvent.STORAGE_LIST,null));
          });

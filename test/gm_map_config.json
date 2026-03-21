@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "mapId": 10,
+    "slots": 4,
+    "refreshIntervalSeconds": 10,
+    "common": [
+      {
+        "petId": 10,
+        "name": "皮皮",
+        "levelMin": 1,
+        "levelMax": 2
+      }
+    ],
+    "rare": [
+      {
+        "name": "#闪光皮皮",
+        "levelMin": 1,
+        "levelMax": 2,
+        "rare": true
+      }
+    ],
+    "rarePercent": 5,
+    "shinyEnabled": true,
+    "shinyPercent": 100
+  }
+]
